@@ -11,7 +11,8 @@ import kotlin.math.roundToInt
 /**
  * MIXER: eight channel strips on the knobs.
  *  D1 GROUPS (the 8 groups) · D2 SOUNDS (the focused group's sounds, ◀ ▶: 1–8 / 9–16)
- *  D5 VOLUME / D6 PAN: what the knobs change · encoder: master volume
+ *  D5 VOLUME / D6 PAN / D7 SEND A / D8 SEND B (groups): what the knobs change · encoder: master volume
+ *  SHIFT + D7 / D8: the return's effects (PLUG-IN) · returns start as a reverb (A) and a delay (B)
  *  Pads: focus (and play) a sound · GROUP buttons: focus a group · MIXER: back
  */
 class MixerPage(ui: Ui) : Page(ui) {
@@ -21,6 +22,7 @@ class MixerPage(ui: Ui) : Page(ui) {
     private companion object {
         var groupsLevel = false
         var panMode = false
+        var sendMode = -1  // 0 / 1: knobs set the groups' send to return A / B
         var soundPage = 0
     }
 
@@ -58,8 +60,10 @@ class MixerPage(ui: Ui) : Page(ui) {
         l.set("MIXER", true)
         l.set("D1", groupsLevel)
         l.set("D2", !groupsLevel)
-        l.set("D5", !panMode)
-        l.set("D6", panMode)
+        l.set("D5", !panMode && sendMode < 0)
+        l.set("D6", panMode && sendMode < 0)
+        l.set("D7", sendMode == 0)
+        l.set("D8", sendMode == 1)
         if (!groupsLevel) { l.set("PAGE LEFT", soundPage == 1); l.set("PAGE RIGHT", soundPage == 0) }
         l.set("PLAY", ui.engine.playing)
         l.set("STOP")
@@ -73,8 +77,14 @@ class MixerPage(ui: Ui) : Page(ui) {
         when (name) {
             "D1" -> groupsLevel = true
             "D2" -> groupsLevel = false
-            "D5" -> panMode = false
-            "D6" -> panMode = true
+            "D5" -> { panMode = false; sendMode = -1 }
+            "D6" -> { panMode = true; sendMode = -1 }
+            "D7", "D8" -> {
+                val a = if (name == "D7") 0 else 1
+                if (shift) {
+                    if (org.openmk3.core.Edition.full) { SoundPageNav.openReturn = a; ui.show(SoundPage(ui)) }
+                } else { sendMode = a; groupsLevel = true }
+            }
             "PAGE LEFT" -> soundPage = 0
             "PAGE RIGHT" -> soundPage = 1
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
@@ -95,7 +105,9 @@ class MixerPage(ui: Ui) : Page(ui) {
     override fun onKnob(knob: Int, delta: Int) {
         val ch = channel(knob)
         val k = if (shift) 0.1f else 1f
-        if (groupsLevel) {
+        if (sendMode >= 0) {
+            if (groupsLevel) p.setGroupSend(ch, sendMode, p.groupSend(ch, sendMode) + delta * 0.002f * k)
+        } else if (groupsLevel) {
             if (panMode) p.setGroupPan(ch, p.groupPan(ch) + delta * 0.002f * k)
             else p.setGroupVolume(ch, p.groupVolume(ch) + delta * 0.05f * k)
         } else {
@@ -128,7 +140,9 @@ class MixerPage(ui: Ui) : Page(ui) {
         l.drawText("GROUPS", 60f, 24f, if (groupsLevel) dOn else dLabel)
         l.drawText("SOUNDS", 180f, 24f, if (!groupsLevel) dOn else dLabel)
         r.drawText("VOLUME", 60f, 24f, if (!panMode) dOn else dLabel)
-        r.drawText("PAN", 180f, 24f, if (panMode) dOn else dLabel)
+        r.drawText("PAN", 180f, 24f, if (panMode && sendMode < 0) dOn else dLabel)
+        r.drawText("SEND A", 300f, 24f, if (sendMode == 0) dOn else dLabel)
+        r.drawText("SEND B", 420f, 24f, if (sendMode == 1) dOn else dLabel)
         val master = "MASTER ${"%.0f".format(ui.engine.masterGain * 100)}% (encoder)"
         l.drawText(if (groupsLevel) "Groups · $master" else "Group ${ui.groupLetter} sounds ${soundPage * 8 + 1}–${soundPage * 8 + 8} · $master", 8f, 52f, title)
         for (i in 0 until 8) {
@@ -160,8 +174,13 @@ class MixerPage(ui: Ui) : Page(ui) {
             c.drawRect(x - 8f, bot - (bot - top) * frac, x + 8f, bot, Theme.fill(Mk3Colors.rgb(colour)))
             val px = x + pn * 40f
             c.drawRect(px - 2f, 226f, px + 2f, 234f, Theme.fill(Theme.FG))
-            c.drawText("${db(vol)} dB", x, 252f, if (!panMode) value else nameDim)
-            c.drawText(pan(pn), x, 268f, if (panMode) value else nameDim)
+            if (sendMode >= 0 && groupsLevel) {
+                c.drawText("SEND ${'A' + sendMode}", x, 252f, nameDim)
+                c.drawText("${(p.groupSend(ch, sendMode) * 100).roundToInt()}%", x, 268f, value)
+            } else {
+                c.drawText("${db(vol)} dB", x, 252f, if (!panMode) value else nameDim)
+                c.drawText(pan(pn), x, 268f, if (panMode) value else nameDim)
+            }
         }
     }
 }

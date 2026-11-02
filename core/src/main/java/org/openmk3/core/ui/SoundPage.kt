@@ -75,6 +75,11 @@ import kotlin.math.sqrt
  *  slot hold an effect (K1 on the first page chooses it).
  *  Encoder: zoom the waveform (or the scope's time) · tilt: scroll · PADS: focus and play
  */
+/** Opens the PLUG-IN page on return [a] (0 = A, 1 = B) next time it is shown. */
+object SoundPageNav {
+    @Volatile var openReturn = -1
+}
+
 class SoundPage(ui: Ui) : Page(ui) {
 
     override val playsPads = true
@@ -152,9 +157,9 @@ class SoundPage(ui: Ui) : Page(ui) {
         var scopeWindow = 1024
     }
 
-    private var level = lastLevel        // 0 master, 1 group, 2 sound
-    private var slotIdx = lastSlot       // sound: 0 = source, 1..3 = effects; group / master: 0..3
-    private var pageIdx = lastPage
+    private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
+    private var slotIdx = if (SoundPageNav.openReturn >= 0) 0 else lastSlot       // sound: 0 = source, 1..3 = effects; group / master: 0..3
+    private var pageIdx = if (SoundPageNav.openReturn >= 0) 0.also { SoundPageNav.openReturn = -1 } else lastPage
     private var shift = false
     private var dirtySince = 0L
     private var fxDirtySince = 0L
@@ -172,7 +177,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     private val source get() = params[slot, SRC].toInt()
     private val isSynth get() = params[slot, SRC] > 0.5f
     /** Effect chain index and slot for the current selection (not the sound source). */
-    private val chain get() = when (level) { 0 -> FxParams.MASTER; 1 -> FxParams.GROUP0 + ui.group; else -> slot }
+    private val chain get() = when (level) { 0 -> FxParams.MASTER; 1 -> FxParams.GROUP0 + ui.group; 3, 4 -> FxParams.RETURN0 + level - 3; else -> slot }
     private val fxSlot get() = if (level == 2) slotIdx - 1 else slotIdx
 
     private fun pages(): List<PageDef> {
@@ -241,7 +246,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     private fun updateScopeTap() = when (level) {
-        0 -> ui.engine.setScopeTap(0, 0)
+        0, 3, 4 -> ui.engine.setScopeTap(0, 0)
         1 -> ui.engine.setScopeTap(1, ui.group)
         else -> ui.engine.setScopeTap(2, slot)
     }
@@ -269,7 +274,8 @@ class SoundPage(ui: Ui) : Page(ui) {
         val e = ui.engine
         val n = pages().size
         when (name) {
-            "D1" -> { level = 0; slotIdx = 0; resetPage() }
+            // D1: MASTER, pressed again RETURN A, then RETURN B
+            "D1" -> { level = when (level) { 0 -> 3; 3 -> 4; else -> 0 }; slotIdx = 0; resetPage() }
             "D2" -> { level = 1; slotIdx = 0; resetPage() }
             "D3" -> { level = 2; slotIdx = 0; resetPage() }
             "D4" -> { slotIdx = (slotIdx + 1) % slotCount; resetPage() }
@@ -297,7 +303,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.set("PLAY", ui.engine.playing)
         l.set("SHIFT", shift)
         l.set("STOP", "RESTART", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
-        l.set("D1", level == 0)
+        l.set("D1", level == 0 || level >= 3)
         l.set("D2", level == 1)
         l.set("D3", level == 2)
         l.set("D4")
@@ -425,6 +431,8 @@ class SoundPage(ui: Ui) : Page(ui) {
     private fun levelName() = when (level) {
         0 -> "MASTER"
         1 -> "GROUP ${ui.groupLetter}"
+        3 -> "RETURN A"
+        4 -> "RETURN B"
         else -> "SOUND ${ui.padLabel()}"
     }
 
@@ -497,7 +505,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
         // D-button labels
-        l.drawText("MASTER", 60f, 24f, if (level == 0) tabOn else tab)
+        l.drawText(when (level) { 3 -> "RETURN A"; 4 -> "RETURN B"; else -> "MASTER" }, 60f, 24f, if (level == 0 || level >= 3) tabOn else tab)
         l.drawText("GROUP", 180f, 24f, if (level == 1) tabOn else tab)
         l.drawText("SOUND", 300f, 24f, if (level == 2) tabOn else tab)
         l.drawText("SLOT ${slotIdx + 1} ▸", 420f, 24f, tab)

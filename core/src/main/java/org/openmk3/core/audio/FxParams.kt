@@ -33,9 +33,11 @@ class FxParams {
     companion object {
         const val SLOTS = 4
         const val PER_SLOT = 16
-        const val CHAINS = Pattern.SOUNDS + Pattern.GROUPS + 1
+        const val CHAINS = Pattern.SOUNDS + Pattern.GROUPS + 3
         const val GROUP0 = Pattern.SOUNDS
         const val MASTER = Pattern.SOUNDS + Pattern.GROUPS
+        /** Return chains A and B (fed by the group sends). */
+        const val RETURN0 = MASTER + 1
         /** Sounds use slots 2..4 (slot 1 is the sound source, shown as the sampler / synth). */
         const val SOUND_FX_SLOTS = 3
 

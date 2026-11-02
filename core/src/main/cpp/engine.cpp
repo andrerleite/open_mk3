@@ -77,7 +77,8 @@ constexpr int OFF_GORIGIN = OFF_GSWING + kGroups;         // kGroups: global ste
 constexpr int OFF_SWITCHAT = OFF_GORIGIN + kGroups;       // global step where every queued pattern switches (-1 none)
 constexpr int OFF_NOW = OFF_SWITCHAT + 1;                 // engine: global step playing now
 constexpr int OFF_PFX = OFF_NOW + 1;                      // perform FX: type, engaged, amount, (spare)
-constexpr int OFF_BANKS = OFF_PFX + 4;
+constexpr int OFF_GSEND = OFF_PFX + 4;                    // kGroups x 2: send levels to returns A / B
+constexpr int OFF_BANKS = OFF_GSEND + kGroups * 2;
 // per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
 constexpr int B_VEL = 0;
 constexpr int B_NOTE = B_VEL + kPads * kSteps;
@@ -247,9 +248,10 @@ constexpr int kSynthVoices = 16;
 constexpr int kFmVoices = 16;
 constexpr int kPolyInst = 4;  // POLY (OB-Xf) instances: each plays one sound, polyphonically
 constexpr int kFxSlots = 4;
-constexpr int kChains = kSounds + kGroups + 1;   // per sound, per group, master
+constexpr int kChains = kSounds + kGroups + 3;   // per sound, per group, master, returns A / B
 constexpr int kChainGroup0 = kSounds;
 constexpr int kChainMaster = kSounds + kGroups;
+constexpr int kChainReturn0 = kChainMaster + 1;
 constexpr int kChunk = 256;                       // frames rendered per pass (bus sizes)
 constexpr int kSynthMaxBlockFrames = 16;
 
@@ -539,6 +541,7 @@ private:
     float gfIc1[kGroups][2] = {}, gfIc2[kGroups][2] = {};  // performance filter state
     bool soundUsed[kSounds];
     float groupBus[kGroups][kChunk * 2];
+    float sendBus[2][kChunk * 2];
     float synthOut[kSynthMaxBlockFrames];
     float synthAux[kSynthMaxBlockFrames];
 public:
@@ -1787,6 +1790,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
         }
     }
     float* pp2 = pattern.load(std::memory_order_acquire);
+    std::memset(sendBus, 0, sizeof(sendBus));
+    bool sendUsed[2] = {false, false};
     for (int g = 0; g < kGroups; g++) {
         if (fp) runChain(fp, kChainGroup0 + g, groupBus[g], frames, bpm);
         float* gb = groupBus[g];
@@ -1820,7 +1825,25 @@ void Engine::renderChunk(float* out, int32_t frames) {
             out[k * 2] += gb[k * 2] * gl;
             out[k * 2 + 1] += gb[k * 2 + 1] * gr;
         }
+        // sends (after the group fader) to the return chains
+        if (pp2)
+            for (int a = 0; a < 2; a++) {
+                const float sl = std::clamp(pp2[OFF_GSEND + g * 2 + a], 0.f, 1.f);
+                if (sl < 1e-4f) continue;
+                sendUsed[a] = true;
+                for (int k = 0; k < frames; k++) {
+                    sendBus[a][k * 2] += gb[k * 2] * gl * sl;
+                    sendBus[a][k * 2 + 1] += gb[k * 2 + 1] * gr * sl;
+                }
+            }
     }
+    // returns: their effects run even after the sends stop (tails)
+    if (fp)
+        for (int a = 0; a < 2; a++) {
+            if (!sendUsed[a] && !chainActive(fp, kChainReturn0 + a)) continue;
+            runChain(fp, kChainReturn0 + a, sendBus[a], frames, bpm);
+            for (int k = 0; k < frames * 2; k++) out[k] += sendBus[a][k];
+        }
     if (fp) runChain(fp, kChainMaster, out, frames, bpm);
     if (float* pp = pattern.load(std::memory_order_acquire)) runPerform(out, frames, pp, bpm);
     addClick(out, frames);

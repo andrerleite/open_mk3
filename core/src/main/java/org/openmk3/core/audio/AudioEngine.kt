@@ -199,6 +199,18 @@ class AudioEngine(private val ctx: Context) {
             val t = fx.type(c, k)
             if (t != FxParams.NONE) n.nativeSetFx(c, k, t)
         }
+        // the return chains start with a reverb (A) and a delay (B), fully wet
+        val prefs = ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("returnsInit", false)) {
+            for ((a, t) in listOf(FxParams.REVERB, FxParams.DELAY).withIndex()) {
+                val c = FxParams.RETURN0 + a
+                if (fx.type(c, 0) != FxParams.NONE) continue
+                setFx(c, 0, t)
+                FxParams.DEFS[t]?.firstOrNull { it.name == "MIX" }?.let { fx[c, 0, it.index] = 1f }
+            }
+            fx.save(ctx)
+            prefs.edit().putBoolean("returnsInit", true).apply()
+        }
         n.nativeSetMasterGain(masterGain)
         n.nativeTransport(0) // the native engine outlives sessions: start stopped
         // Samples are loaded before the stream starts, so the callback never sees a half-copied one.

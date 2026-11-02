@@ -92,9 +92,9 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | CHANNEL (MIDI) | Channel properties. D1 MASTER / D2 GROUP / D3 SOUND, ◀ ▶ OUTPUT / GROOVE. OUTPUT: K1 volume, K2 pan. GROOVE: K1 swing (master: the project swing; group: extra swing added for that group) | ✅ |
-| PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound | ✅ (full app) |
+| PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound (D1 again: RETURN A, RETURN B) | ✅ (full app) |
 | ARRANGER | Song view: a list of sections, each playing a scene. D1 song mode on / off, D2 loop, D3 jump to the selected section, D5 duplicate, D6 delete; encoder or ◀ ▶ select, K1 moves a section; scene pads add a section after the selected one (SHIFT + pad replaces it). A section lasts as long as its scene's longest pattern, and all groups start their patterns together at each section. In song mode, a scene pad in SCENE mode jumps to that scene's section | ✅ |
-| MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder | ✅ (sends ⬜) |
+| MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder. D7 / D8: the groups' sends to RETURN A / B (post-fader); SHIFT + D7 / D8 opens that return's effects. Returns start as a reverb (A) and a delay (B), fully wet | ✅ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Instrument browser: POLY factory patches by category, FM banks and patches, SYNTH models; loading switches the focused sound's source and plays a note | ✅ (full app) |
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice; SHIFT + SAMPLING: zones | ✅ |

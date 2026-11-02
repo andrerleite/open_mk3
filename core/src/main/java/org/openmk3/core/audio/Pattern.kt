@@ -142,7 +142,8 @@ class Pattern {
         private const val OFF_SWITCHAT = OFF_GORIGIN + GROUPS
         private const val OFF_NOW = OFF_SWITCHAT + 1
         private const val OFF_PFX = OFF_NOW + 1
-        private const val OFF_BANKS = OFF_PFX + 4
+        private const val OFF_GSEND = OFF_PFX + 4
+        private const val OFF_BANKS = OFF_GSEND + GROUPS * 2
         /** Perform FX types (SHIFT + PERFORM). */
         val PERFORM_FX = listOf("FILTER", "STUTTER", "TAPE STOP", "TRANCE GATE", "LO-FI")
         private const val B_VEL = 0
@@ -217,6 +218,10 @@ class Pattern {
         set(v) { f.put(OFF_PFX, v.coerceIn(0, PERFORM_FX.size - 1).toFloat()) }
     /** Touch strip held ([on]) at [amount] 0..1. */
     fun setPerform(on: Boolean, amount: Float) { f.put(OFF_PFX + 2, amount.coerceIn(0f, 1f)); f.put(OFF_PFX + 1, if (on) 1f else 0f) }
+
+    /** Send level (0..1) of group [g] to return A (0) or B (1). */
+    fun groupSend(g: Int, a: Int) = f.get(OFF_GSEND + g * 2 + a)
+    fun setGroupSend(g: Int, a: Int, v: Float) = f.put(OFF_GSEND + g * 2 + a, v.coerceIn(0f, 1f))
 
     fun setGroupFilter(g: Int, v: Float) = f.put(OFF_GFILT + g, v.coerceIn(-1f, 1f))
 
@@ -819,6 +824,7 @@ class Pattern {
         put("songMode", songMode)
         put("loop", loop)
         put("performType", performType)
+        put("groupSends", JSONArray().apply { for (g in 0 until GROUPS) for (a in 0..1) put(groupSend(g, a).toDouble()) })
     }
 
     fun loadJson(j: JSONObject) {
@@ -862,6 +868,8 @@ class Pattern {
             songMode = j.optBoolean("songMode", false)
             loop = j.optBoolean("loop", false)
             performType = j.optInt("performType", 0)
+            val sends = j.optJSONArray("groupSends")
+            for (g in 0 until GROUPS) for (a in 0..1) setGroupSend(g, a, sends?.optDouble(g * 2 + a, 0.0)?.toFloat() ?: 0f)
             songPos = 0; songJump = -1
         } else {
             // version 1 / 2: one 16-step pattern for each group (sound rows of 16 velocities)
