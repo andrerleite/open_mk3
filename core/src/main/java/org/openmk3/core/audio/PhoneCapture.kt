@@ -14,7 +14,11 @@ import org.openmk3.core.AppLog
  * native recorder. Needs a MediaProjection the user granted for this session. Apps that opt
  * out of capture, and protected content, are delivered as silence by Android.
  */
-class PhoneCapture(private val projection: MediaProjection) {
+class PhoneCapture(
+    private val projection: MediaProjection,
+    /** Called (from the capture thread) if capturing ends on its own. */
+    private val onEnded: (String) -> Unit = {},
+) {
     @Volatile private var running = false
     private var thread: Thread? = null
     private var record: AudioRecord? = null
@@ -25,6 +29,7 @@ class PhoneCapture(private val projection: MediaProjection) {
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
             .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            .excludeUid(Process.myUid()) // never our own output
             .build()
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
@@ -55,7 +60,10 @@ class PhoneCapture(private val projection: MediaProjection) {
             while (running) {
                 val n = r.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
                 if (n > 0) NativeEngine.nativeRecFeedPhone(buf, n / 2)
-                else if (n < 0) { AppLog.i("Phone capture: read error $n"); break }
+                else if (n < 0) {
+                    if (running) onEnded("read error $n")
+                    break
+                }
             }
         }, "phone-capture").apply { start() }
         AppLog.i("Phone capture: started")

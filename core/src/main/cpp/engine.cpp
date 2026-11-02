@@ -397,6 +397,8 @@ bool Engine::open() {
     AAudioStreamBuilder_setChannelCount(b, 2);
     AAudioStreamBuilder_setSampleRate(b, kSampleRate);
     AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_MEDIA);
+    // Keep our own output out of phone-audio capture: being captured moves it off the fast path.
+    AAudioStreamBuilder_setAllowedCapturePolicy(b, AAUDIO_ALLOW_CAPTURE_BY_NONE);
     AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
     if (deviceId > 0) AAudioStreamBuilder_setDeviceId(b, deviceId);
     AAudioStreamBuilder_setDataCallback(b, dataCallback, this);
@@ -1140,6 +1142,8 @@ bool UsbAudio::openDriver() {
     AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(b, 2);
     AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_MEDIA);
+    // Keep our own output out of phone-audio capture: being captured moves it off the fast path.
+    AAudioStreamBuilder_setAllowedCapturePolicy(b, AAUDIO_ALLOW_CAPTURE_BY_NONE);
     AAudioStreamBuilder_setDataCallback(b, usbDriverCallback, this);
     AAudioStreamBuilder_setErrorCallback(b, usbDriverError, this);
     aaudio_result_t r = AAudioStreamBuilder_openStream(b, &driver_);

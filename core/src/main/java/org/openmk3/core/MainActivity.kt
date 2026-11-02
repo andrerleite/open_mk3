@@ -218,6 +218,8 @@ class MainActivity : Activity() {
         row(btn("Allow phone audio (sampling)") {
             if (Mk3Service.instance?.ui == null) {
                 AppLog.i("Phone capture: connect the MK3 first")
+            } else if (Mk3Service.instance?.phoneCaptureActive == true) {
+                AppLog.i("Phone capture: already on")
             } else {
                 handleIntent(Intent(Mk3Service.ACTION_REQUEST_CAPTURE))
             }

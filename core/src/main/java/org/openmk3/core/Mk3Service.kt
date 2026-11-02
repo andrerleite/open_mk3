@@ -254,12 +254,18 @@ class Mk3Service : Service() {
     private var phoneCapture: org.openmk3.core.audio.PhoneCapture? = null
     val phoneCaptureActive get() = phoneCapture != null
 
+    /** uptimeMillis of the last capture request still waiting for the user (0 = none). */
+    private var captureRequestedAt = 0L
+
     /**
      * Android needs the user's confirmation on the phone screen once per session. The MK3
-     * can't show that dialog, so a notification opens it.
+     * can't show that dialog, so a notification (or the app's button) opens it.
      */
     fun requestPhoneCapture() = handler.post {
         if (phoneCapture != null) return@post
+        val now = android.os.SystemClock.uptimeMillis()
+        if (captureRequestedAt != 0L && now - captureRequestedAt < 60_000) return@post  // already asked
+        captureRequestedAt = now
         val pi = PendingIntent.getActivity(
             this, 2, Intent(this, MainActivity::class.java).setAction(ACTION_REQUEST_CAPTURE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -280,35 +286,61 @@ class Mk3Service : Service() {
 
     /** Called by MainActivity with the result of the system capture dialog. */
     fun onCaptureGranted(resultCode: Int, data: Intent) = handler.post {
+        captureRequestedAt = 0L
+        getSystemService(NotificationManager::class.java)!!.cancel(CAPTURE_NOTIF_ID)
+        if (phoneCapture != null) {
+            // A second confirmation would replace (and so stop) the running capture.
+            AppLog.i("Phone capture: already running, extra confirmation ignored")
+            return@post
+        }
         try {
             val mpm = getSystemService(android.media.projection.MediaProjectionManager::class.java)!!
             // Android 14+: the FGS must have the mediaProjection type before the projection is obtained.
             captureConsent = true
             startForeground(NOTIF_ID, notification("Running · phone audio sampling on"), fgsTypes())
-            projection = mpm.getMediaProjection(resultCode, data)
-            projection?.registerCallback(object : android.media.projection.MediaProjection.Callback() {
-                override fun onStop() { handler.post { stopPhoneCapture() } }
+            val proj = mpm.getMediaProjection(resultCode, data)
+                ?: throw IllegalStateException("no projection")
+            projection = proj
+            proj.registerCallback(object : android.media.projection.MediaProjection.Callback() {
+                // Only react to the end of *this* projection, never a newer one.
+                override fun onStop() {
+                    handler.post {
+                        if (projection === proj) {
+                            AppLog.i("Phone capture: stopped by Android")
+                            stopPhoneCapture()
+                        }
+                    }
+                }
             }, handler)
-            val pc = org.openmk3.core.audio.PhoneCapture(projection!!)
+            val pc = org.openmk3.core.audio.PhoneCapture(proj) { why ->
+                handler.post {
+                    if (phoneCapture != null && projection === proj) {
+                        AppLog.i("Phone capture: ended ($why)")
+                        stopPhoneCapture()
+                    }
+                }
+            }
             if (pc.start()) phoneCapture = pc else stopPhoneCapture()
         } catch (e: Exception) {
             AppLog.i("Phone capture: could not start: $e")
             stopPhoneCapture()
         }
-        getSystemService(NotificationManager::class.java)!!.cancel(CAPTURE_NOTIF_ID)
         ui?.invalidate()
     }
 
     private fun stopPhoneCapture() {
-        phoneCapture?.stop()
+        val pc = phoneCapture
         phoneCapture = null
-        try { projection?.stop() } catch (_: Exception) {}
-        val had = captureConsent
+        pc?.stop()
+        val proj = projection
         projection = null
+        try { proj?.stop() } catch (_: Exception) {}
+        val had = captureConsent
         captureConsent = false
         if (had && instance != null && ui != null) {
             try { startForeground(NOTIF_ID, notification("Running"), fgsTypes()) } catch (_: Exception) {}
         }
+        ui?.invalidate()
     }
 
     /** Called after the user grants RECORD_AUDIO while running: reopen audio with the input. */
