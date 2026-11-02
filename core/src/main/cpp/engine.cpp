@@ -76,7 +76,8 @@ constexpr int OFF_GSWING = OFF_GFILT + kGroups + 6;       // kGroups: extra swin
 constexpr int OFF_GORIGIN = OFF_GSWING + kGroups;         // kGroups: global step where the group's pattern started
 constexpr int OFF_SWITCHAT = OFF_GORIGIN + kGroups;       // global step where every queued pattern switches (-1 none)
 constexpr int OFF_NOW = OFF_SWITCHAT + 1;                 // engine: global step playing now
-constexpr int OFF_BANKS = OFF_NOW + 1;
+constexpr int OFF_PFX = OFF_NOW + 1;                      // perform FX: type, engaged, amount, (spare)
+constexpr int OFF_BANKS = OFF_PFX + 4;
 // per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
 constexpr int B_VEL = 0;
 constexpr int B_NOTE = B_VEL + kPads * kSteps;
@@ -274,6 +275,19 @@ class Engine {
 public:
     // ---- set from Kotlin ----
     std::atomic<float> masterGain{0.7f};
+    // ---- perform FX on the master (played with the touch strip) ----
+    static constexpr int kPfxRing = 1 << 17;   // ~2.7 s of the master output
+    float pfxRing[kPfxRing][2] = {};
+    int pfxW = 0;
+    bool pfxWas = false;
+    int pfxType = 0;
+    int pfxStart = 0, pfxLen = 0, pfxPos = 0;  // stutter: loop of the last pfxLen frames
+    double pfxRead = 0.0;                      // tape stop: read position
+    float pfxSpeed = 1.f;
+    float pfxMix = 0.f;                        // 0 dry .. 1 effect (smoothed in and out)
+    float pfxHold[2] = {0, 0};
+    float pfxHoldPh = 1.f;
+    void runPerform(float* out, int frames, const float* p, double bpm);
     std::atomic<float*> pattern{nullptr};
     std::atomic<int64_t*> lastTrigMs{nullptr};   // 16 x int64, CLOCK_MONOTONIC ms
     std::atomic<float*> params{nullptr};         // kSlots x kParams
@@ -1193,6 +1207,96 @@ void Engine::render(float* out, int32_t frames) {
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
 }
 
+/**
+ * Perform FX on the master: 1 STUTTER (repeats the last 1/4 .. 1/32 note, amount picks the
+ * length), 2 TAPE STOP (slows to a halt), 3 TRANCE GATE (1/16 chops, amount = depth),
+ * 4 LO-FI (sample rate and bit reduction). Type 0 (FILTER) works per group elsewhere.
+ */
+void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
+    const int type = std::clamp(int(p[OFF_PFX] + 0.5f), 0, 4);
+    const bool on = p[OFF_PFX + 1] > 0.5f && type != 0;
+    const float amt = std::clamp(p[OFF_PFX + 2], 0.f, 1.f);
+    if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
+    const double stepLen = kSampleRate * 60.0 / bpm / 4.0;
+    if (on && (!pfxWas || type != pfxType)) {  // engaged
+        pfxType = type;
+        pfxPos = 0;
+        pfxLen = 0;
+        pfxRead = double(pfxW);
+        pfxSpeed = 1.f;
+    }
+    pfxWas = on;
+    const float target = on ? 1.f : 0.f;
+    for (int i = 0; i < frames; i++) {
+        const float dry[2] = {out[i * 2], out[i * 2 + 1]};
+        pfxRing[pfxW][0] = dry[0];
+        pfxRing[pfxW][1] = dry[1];
+        pfxW = (pfxW + 1) & (kPfxRing - 1);
+        pfxMix += (target - pfxMix) * 0.004f;  // ~5 ms
+        if (pfxMix < 1e-4f && !on) { pfxMix = 0.f; continue; }
+        float wet[2] = {dry[0], dry[1]};
+        switch (pfxType) {
+            case 1: {  // stutter
+                static constexpr float kLens[] = {4.f, 2.f, 1.f, 0.5f};
+                const int len = std::max(64, int(stepLen * kLens[std::min(3, int(amt * 4.f))]));
+                if (len != pfxLen) {
+                    pfxLen = len;
+                    pfxStart = (pfxW - len - 1 + kPfxRing) & (kPfxRing - 1);
+                    pfxPos = 0;
+                }
+                const int r = (pfxStart + pfxPos) & (kPfxRing - 1);
+                // short fades at the loop seam
+                const int xf = std::min(96, pfxLen / 4);
+                float g = 1.f;
+                if (pfxPos < xf) g = float(pfxPos) / float(xf);
+                else if (pfxPos > pfxLen - xf) g = float(pfxLen - pfxPos) / float(xf);
+                wet[0] = pfxRing[r][0] * g;
+                wet[1] = pfxRing[r][1] * g;
+                if (++pfxPos >= pfxLen) pfxPos = 0;
+                break;
+            }
+            case 2: {  // tape stop: the strip sets how far it has slowed
+                const float want = 1.f - amt;
+                pfxSpeed += (want - pfxSpeed) * 0.0005f;
+                pfxRead += pfxSpeed;
+                const double lag = double(pfxW) - pfxRead;
+                if (lag < 0.0 || lag > kPfxRing - 4) pfxRead = double(pfxW) - 1.0;
+                const int ip = int(std::floor(pfxRead));
+                const float t = float(pfxRead - ip);
+                const int a = ip & (kPfxRing - 1), b = (ip + 1) & (kPfxRing - 1);
+                const float lvl = std::min(1.f, pfxSpeed * 4.f);  // fades as it stops
+                wet[0] = (pfxRing[a][0] * (1.f - t) + pfxRing[b][0] * t) * lvl;
+                wet[1] = (pfxRing[a][1] * (1.f - t) + pfxRing[b][1] * t) * lvl;
+                break;
+            }
+            case 3: {  // trance gate, locked to the 16ths
+                const double ph = std::fmod((wasPlaying ? seqPhase : double(framesDone) / stepLen) + double(i) / stepLen, 1.0);
+                const float open = ph < 0.5 ? 1.f : 1.f - amt;
+                pfxHold[0] += (open - pfxHold[0]) * 0.02f;
+                wet[0] = dry[0] * pfxHold[0];
+                wet[1] = dry[1] * pfxHold[0];
+                break;
+            }
+            case 4: {  // lo-fi
+                const float step = 1.f / (1.f + amt * 23.f);
+                pfxHoldPh += step;
+                if (pfxHoldPh >= 1.f) {
+                    pfxHoldPh -= 1.f;
+                    const float q = std::exp2(15.f - amt * 11.f);
+                    pfxHold[0] = std::round(dry[0] * q) / q;
+                    pfxHold[1] = std::round(dry[1] * q) / q;
+                }
+                wet[0] = pfxHold[0];
+                wet[1] = pfxHold[1];
+                break;
+            }
+            default: break;
+        }
+        out[i * 2] = dry[0] + (wet[0] - dry[0]) * pfxMix;
+        out[i * 2 + 1] = dry[1] + (wet[1] - dry[1]) * pfxMix;
+    }
+}
+
 void Engine::renderPoly(int frames, float* pb, const float* fp, float* out, float* scopeTap, int sk, int si, uint32_t* active) {
     float l[kChunk], r[kChunk];
     for (int k = 0; k < kPolyInst; k++) {
@@ -1673,6 +1777,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         }
     }
     if (fp) runChain(fp, kChainMaster, out, frames, bpm);
+    if (float* pp = pattern.load(std::memory_order_acquire)) runPerform(out, frames, pp, bpm);
     addClick(out, frames);
     // oscilloscope (before the master volume, so the shape is what the sound makes)
     {

@@ -141,7 +141,10 @@ class Pattern {
         private const val OFF_GORIGIN = OFF_GSWING + GROUPS
         private const val OFF_SWITCHAT = OFF_GORIGIN + GROUPS
         private const val OFF_NOW = OFF_SWITCHAT + 1
-        private const val OFF_BANKS = OFF_NOW + 1
+        private const val OFF_PFX = OFF_NOW + 1
+        private const val OFF_BANKS = OFF_PFX + 4
+        /** Perform FX types (SHIFT + PERFORM). */
+        val PERFORM_FX = listOf("FILTER", "STUTTER", "TAPE STOP", "TRANCE GATE", "LO-FI")
         private const val B_VEL = 0
         private const val B_NOTE = B_VEL + PADS * STEPS
         private const val B_XVEL = B_NOTE + PADS * STEPS
@@ -208,6 +211,13 @@ class Pattern {
     fun setGroupSwing(g: Int, v: Float) = f.put(OFF_GSWING + g, v.coerceIn(0f, 0.5f))
     fun setGroupPan(g: Int, v: Float) = f.put(OFF_GPAN + g, v.coerceIn(-1f, 1f))
     /** Performance filter of a group: -1 low-pass .. 0 off .. 1 high-pass. */
+    /** Perform FX chosen for the touch strip (index into PERFORM_FX). */
+    var performType: Int
+        get() = f.get(OFF_PFX).toInt()
+        set(v) { f.put(OFF_PFX, v.coerceIn(0, PERFORM_FX.size - 1).toFloat()) }
+    /** Touch strip held ([on]) at [amount] 0..1. */
+    fun setPerform(on: Boolean, amount: Float) { f.put(OFF_PFX + 2, amount.coerceIn(0f, 1f)); f.put(OFF_PFX + 1, if (on) 1f else 0f) }
+
     fun setGroupFilter(g: Int, v: Float) = f.put(OFF_GFILT + g, v.coerceIn(-1f, 1f))
 
     // ---- song model ----
@@ -808,6 +818,7 @@ class Pattern {
         put("song", JSONArray(song.toList()))
         put("songMode", songMode)
         put("loop", loop)
+        put("performType", performType)
     }
 
     fun loadJson(j: JSONObject) {
@@ -850,6 +861,7 @@ class Pattern {
             j.optJSONArray("song")?.let { a -> for (i in 0 until a.length()) a.getInt(i).takeIf { it in 0 until SLOTS }?.let { song.add(it) } }
             songMode = j.optBoolean("songMode", false)
             loop = j.optBoolean("loop", false)
+            performType = j.optInt("performType", 0)
             songPos = 0; songJump = -1
         } else {
             // version 1 / 2: one 16-step pattern for each group (sound rows of 16 velocities)

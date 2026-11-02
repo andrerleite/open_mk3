@@ -124,7 +124,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 |---|---|---|
 | PITCH | Strip bends the focused sound ±2 semitones (springs back) | ✅ |
 | MOD | Strip closes a low-pass filter on the focused sound (stays where left) | ✅ |
-| PERFORM (FX Select) | Strip sweeps a filter on the focused group: left low-pass, right high-pass (off when released) | ✅ (more effects ⬜) |
+| PERFORM (FX Select) | Strip plays the perform FX while touched (position = amount, off when released): FILTER on the focused group (left low-pass, right high-pass), or on the master STUTTER (repeats the last 1/4 · 1/8 · 1/16 · 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI | ✅ |
+| SHIFT + PERFORM | Choose the perform FX (pads 1–5) | ✅ |
 | NOTES | Strip plays the keyboard layout's notes on the focused sound as you slide | ✅ |
 
 ## Sampling sources

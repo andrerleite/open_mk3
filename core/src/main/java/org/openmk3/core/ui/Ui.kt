@@ -161,7 +161,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         when (stripMode) {
             StripMode.PITCH -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = (v - 0.5f) * 4f  // +-2 semitones
             StripMode.MOD -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.MODW] = v
-            StripMode.PERFORM -> engine.pattern.setGroupFilter(group, (v - 0.5f) * 2f)
+            StripMode.PERFORM -> if (engine.pattern.performType == 0) engine.pattern.setGroupFilter(group, (v - 0.5f) * 2f)
+                else engine.pattern.setPerform(true, v)
             StripMode.NOTES -> {
                 val i = (v * 15.99f).toInt()
                 val note = keys.noteFor(i)
@@ -182,7 +183,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         val sp = engine.params
         when (stripMode) {
             StripMode.PITCH -> { sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = 0f; stripValue = 0.5f }
-            StripMode.PERFORM -> { engine.pattern.setGroupFilter(group, 0f); stripValue = 0.5f }
+            StripMode.PERFORM -> { engine.pattern.setGroupFilter(group, 0f); engine.pattern.setPerform(false, 0f); stripValue = 0.5f }
             StripMode.NOTES -> { if (stripNote >= 0) engine.noteOff(stripNoteSound, stripNote); stripNote = -1 }
             else -> {}
         }
@@ -621,6 +622,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
                     return@post
                 }
+                "PERFORM" -> if (shiftHeld) {  // SHIFT + PERFORM: choose the perform FX
+                    if (page is PerformPage) showHome() else show(PerformPage(this))
+                    return@post
+                }
+                else -> {}
+            }
+            when (name) {
                 "PITCH", "MOD", "PERFORM", "NOTES" -> {
                     val m = StripMode.valueOf(name)
                     stripMode = if (stripMode == m) StripMode.OFF else m
