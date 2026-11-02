@@ -34,6 +34,7 @@
 
 #include "fx.h"
 #include "synth.h"
+#include "fm.h"
 #include <mutex>
 #include <vector>
 
@@ -159,6 +160,12 @@ enum {
     P_COLOUR = 48,  // pad colour (UI only)
     P_BEND = 49,    // live pitch bend, semitones (touch strip PITCH)
     P_MODW = 50,    // live modulation 0..1 (touch strip MOD): closes a low-pass filter
+    P_FMBANK = 51,  // FM source: bank (0-2 built-in, 3.. user cartridges)
+    P_FMPROG = 52,  // FM source: voice 0..31
+    P_FMBRIGHT = 53,  // FM: modulator levels -1..1
+    P_FMATT = 54,   // FM: attack -1..1
+    P_FMREL = 55,   // FM: release -1..1
+    P_FMFB = 56,    // FM: feedback 0..7, < 0 = the patch's
 };
 static float kDefaultParams[kParams];
 static bool initDefaults() {
@@ -167,7 +174,7 @@ static bool initDefaults() {
     d[P_SUS] = 0.7f; d[P_REL] = 0.2f; d[P_POLY] = 1; d[P_LEND] = 1; d[P_MATT] = 0.001f;
     d[P_MDEC] = 0.2f; d[P_LRATE] = 4; d[P_VVOL] = 1;
     d[P_SMODEL] = 8; d[P_SNOTE] = 48; d[P_SHARM] = 0.5f; d[P_STIMB] = 0.5f; d[P_SMORPH] = 0.5f;
-    d[P_SDEC] = 0.5f; d[P_SCOL] = 0.5f; d[P_SLPG] = 1;
+    d[P_SDEC] = 0.5f; d[P_SCOL] = 0.5f; d[P_SLPG] = 1; d[P_FMFB] = -1;
     return true;
 }
 static bool gDefaultsReady = initDefaults();
@@ -210,6 +217,8 @@ struct Voice {
     float gateLevel = 1.f;
     // synth source: index into the synth pool (-1 = sampler), silence counter
     int synth = -1;
+    int fm = -1;          // FM source: index into the FM pool
+    bool fmUp = false;    // note-off sent to the FM voice
     int quietBlocks = 0;
     int ageBlocks = 0;
 };
@@ -218,6 +227,7 @@ struct Voice {
 static SampleData gSynthDummy = [] { SampleData d; d.frames = 1; d.data.assign(1, 0.f); return d; }();
 
 constexpr int kSynthVoices = 16;
+constexpr int kFmVoices = 16;
 constexpr int kFxSlots = 4;
 constexpr int kChains = kSounds + kGroups + 1;   // per sound, per group, master
 constexpr int kChainGroup0 = kSounds;
@@ -327,9 +337,15 @@ public:
     float scopeRing[kScope] = {};
     std::atomic<int> scopeW{0};
 
+    openmk3::FmVoice* fmPool[kFmVoices] = {};
+    Voice* fmOwner[kFmVoices] = {};
+
     void ensureSynths() {
         for (auto& sv : synthPool)
             if (!sv) sv = openmk3::SynthVoice::create();
+        openmk3::FmVoice::initTables(kSampleRate);
+        for (auto& f : fmPool)
+            if (!f) f = openmk3::FmVoice::create();
     }
 
     // ---- stream management ----
@@ -384,6 +400,8 @@ private:
     void freeSynth(Voice& v) {
         if (v.synth >= 0 && synthOwner[v.synth] == &v) synthOwner[v.synth] = nullptr;
         v.synth = -1;
+        if (v.fm >= 0 && fmOwner[v.fm] == &v) fmOwner[v.fm] = nullptr;
+        v.fm = -1;
     }
     bool chainActive(const float* fp, int chain) const {
         if (!fp) return false;
@@ -643,7 +661,9 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     if (slot < 0 || slot >= kSlots) return;
     float* pb = params.load(std::memory_order_acquire);
     const float* P = pb ? pb + slot * kParams : kDefaultParams;
-    const bool isSynth = slot < kSounds && P[P_SRC] > 0.5f;
+    const int src = slot < kSounds ? int(P[P_SRC] + 0.5f) : 0;
+    const bool isFm = src == 2;
+    const bool isSynth = src == 1 || isFm;  // no sample: both use the dummy
     const SampleData* s = isSynth ? &gSynthDummy : current[slot].load(std::memory_order_acquire);
     if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
@@ -681,7 +701,20 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     if (!best) best = oldest;
     freeSynth(*best);
     int synthIdx = -1;
-    if (isSynth) {
+    int fmIdx = -1;
+    if (isFm) {
+        for (int k = 0; k < kFmVoices; k++)
+            if (fmPool[k] && !fmOwner[k]) { fmIdx = k; break; }
+        if (fmIdx < 0) {
+            Voice* o = nullptr;
+            for (auto& v : voices)
+                if (v.sample && v.fm >= 0 && (!o || v.age < o->age)) o = &v;
+            if (!o) return;
+            fmIdx = o->fm;
+            o->fm = -1;
+            o->sample = nullptr;
+        }
+    } else if (isSynth) {
         for (int k = 0; k < kSynthVoices; k++)
             if (synthPool[k] && !synthOwner[k]) { synthIdx = k; break; }
         if (synthIdx < 0) {
@@ -724,8 +757,20 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
         v.endF = 1;
         v.pos = 0.0;
         v.rev = false;
-        v.synth = synthIdx;
-        synthOwner[synthIdx] = &v;
+        if (isFm) {
+            v.fm = fmIdx;
+            fmOwner[fmIdx] = &v;
+            openmk3::FmEdit e;
+            e.brightness = std::clamp(P[P_FMBRIGHT], -1.f, 1.f);
+            e.attack = std::clamp(P[P_FMATT], -1.f, 1.f);
+            e.release = std::clamp(P[P_FMREL], -1.f, 1.f);
+            e.feedback = P[P_FMFB] < -0.5f ? -1 : std::clamp(int(P[P_FMFB] + 0.5f), 0, 7);
+            fmPool[fmIdx]->noteOn(int(P[P_FMBANK] + 0.5f), int(P[P_FMPROG] + 0.5f), e,
+                                  std::clamp(note, 0, 127), std::clamp(int(vel * 127.f), 1, 127));
+        } else {
+            v.synth = synthIdx;
+            synthOwner[synthIdx] = &v;
+        }
     }
     if (int64_t* lt = lastTrigMs.load(std::memory_order_acquire); lt && slot < kSounds) {
         lt[slot] = nowNanos() / 1000000LL + int64_t(offset) * 1000 / kSampleRate;
@@ -1102,7 +1147,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
         } else dst = groupBus[v.slot / kPads];
         float* tap = (sk == 2 && v.slot == si) ? scopeTap : nullptr;
         // synth source
-        const bool synth = v.synth >= 0 && synthPool[v.synth];
+        const bool fmv = v.fm >= 0 && fmPool[v.fm];
+        const bool synth = (v.synth >= 0 && synthPool[v.synth]) || fmv;
         openmk3::SynthPatch sp;
         if (synth) {
             sp.model = int(P[P_SMODEL] + 0.5f);
@@ -1121,7 +1167,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         // and without an envelope always behaves like this, or it would never stop)
         // synth notes always end on note-off (with RELEASE): a model's own gate can leave a
         // faint residual that never counts as silent, so the note would hang
-        const bool gateMode = P[P_GATE] > 0.5f || synth;
+        const bool gateMode = P[P_GATE] > 0.5f || (synth && !fmv);  // FM voices release with their own envelopes
         // loop (only with a releasing envelope, so a looped sound always ends)
         const int n = s->frames;
         const bool loop = !synth && v.envType != 0 && P[P_LOOP] > 0.5f;
@@ -1181,7 +1227,12 @@ void Engine::renderChunk(float* out, int32_t frames) {
 
             const int blockEnd = std::min(frames, i + kBlock);
             float blockPeak = 0.f;
-            if (synth) {
+            if (fmv) {
+                if (v.released && !v.fmUp) { fmPool[v.fm]->noteOff(); v.fmUp = true; }
+                fmPool[v.fm]->setBend(tune + bend + me * mPitch + lfo * lPitch);
+                fmPool[v.fm]->render(synthOut, blockEnd - i);
+                for (int k = 0; k < blockEnd - i; k++) synthAux[k] = synthOut[k];
+            } else if (synth) {
                 sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + bend + me * mPitch + lfo * lPitch;
                 synthPool[v.synth]->render(sp, !v.released, synthOut, synthAux, blockEnd - i);
             }
@@ -1295,7 +1346,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
             if (synth && !done) {
                 v.ageBlocks++;
                 if (blockPeak < 3e-4f) v.quietBlocks++; else v.quietBlocks = 0;
-                if (v.ageBlocks > 30 && v.quietBlocks > 40 && (sp.lpg || v.released)) done = true;
+                if (fmv) { if (v.fmUp && !fmPool[v.fm]->playing()) done = true; }
+                else if (v.ageBlocks > 30 && v.quietBlocks > 40 && (sp.lpg || v.released)) done = true;
             }
             // ---- advance control-rate modulators by the block just rendered ----
             const int adv = kBlock;
@@ -2039,6 +2091,18 @@ JNIEXPORT void JNICALL JNI_FN(nativeKill)(JNIEnv*, jobject, jint slot) {
     gEngine.pushTrigger(slot, 0.f, 2);
 }
 JNIEXPORT void JNICALL JNI_FN(nativeInitSynths)(JNIEnv*, jobject) { gEngine.ensureSynths(); }
+/** Installs a DX7 cartridge (.syx) as user FM bank [index]. */
+JNIEXPORT jboolean JNICALL JNI_FN(nativeFmLoadBank)(JNIEnv* env, jobject, jint index, jbyteArray data) {
+    jsize n = env->GetArrayLength(data);
+    std::vector<uint8_t> b(static_cast<size_t>(n));
+    env->GetByteArrayRegion(data, 0, n, reinterpret_cast<jbyte*>(b.data()));
+    return openmk3::FmVoice::setUserBank(index, b.data(), int(n)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jstring JNICALL JNI_FN(nativeFmPatchName)(JNIEnv* env, jobject, jint bank, jint program) {
+    char name[11];
+    openmk3::FmVoice::patchName(bank, program, name);
+    return env->NewStringUTF(name);
+}
 JNIEXPORT void JNICALL JNI_FN(nativeSetFxBuffer)(JNIEnv* env, jobject, jobject buf) {
     if (env->GetDirectBufferCapacity(buf) < jlong(kChains * kFxSlots * openmk3::kFxParams * sizeof(float))) return;
     gEngine.fxParams.store(static_cast<float*>(env->GetDirectBufferAddress(buf)), std::memory_order_release);

@@ -31,4 +31,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+## Dexed FM engine (Apache-2.0 / GPL-3.0)
+
+- Location: `core/src/main/cpp/third_party/dexed/`
+- Upstream: https://github.com/asb2m10/dexed
+- The msfa engine is Copyright 2012 Google Inc. (Apache License 2.0, "Music Synthesizer for
+  Android"), with changes Copyright Pascal Gauthier and the Dexed contributors (GPL-3.0).
+- Used for the FM sound source (6-operator FM, DX7-compatible voices and cartridges).
+- Changes are listed in `core/src/main/cpp/third_party/dexed/README.md`.
+
 The effects (compressor, chorus, delay, reverb) are original Open MK3 code (GPL-3.0).

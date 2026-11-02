@@ -59,6 +59,8 @@ object NativeEngine {
     external fun nativeSetRecording(on: Boolean)
     external fun nativeTakeRecorded(): Boolean
     external fun nativeInitSynths()
+    external fun nativeFmLoadBank(index: Int, data: ByteArray): Boolean
+    external fun nativeFmPatchName(bank: Int, program: Int): String
     external fun nativeSetFxBuffer(buf: ByteBuffer)
     external fun nativeSetFx(chain: Int, slot: Int, type: Int)
     external fun nativeFxMeter(chain: Int, slot: Int): Float
@@ -175,6 +177,8 @@ class AudioEngine(private val ctx: Context) {
         n.nativeSetParamBuffer(params.buffer)
         n.nativeSetFxBuffer(fx.buffer)
         n.nativeInitSynths()
+        params.fmPatchName = { b, p -> n.nativeFmPatchName(b, p) }
+        loadFmBanks()
         // re-create the saved effects (each allocates its buffers here, not on the audio thread)
         for (c in 0 until FxParams.CHAINS) for (k in 0 until FxParams.SLOTS) {
             val t = fx.type(c, k)
@@ -328,6 +332,27 @@ class AudioEngine(private val ctx: Context) {
     fun setRecording(on: Boolean) = n.nativeSetRecording(on)
     /** True once after the engine wrote repeat / arp hits into the pattern. */
     fun takeRecorded() = n.nativeTakeRecorded()
+
+    /** Names of the user FM cartridges (USER 1..16), loaded from Download/<app folder>/DX7. */
+    val fmUserBanks = mutableListOf<String>()
+
+    /** Loads up to 16 DX7 cartridges (.syx, 32 voices each) as the USER FM banks. */
+    fun loadFmBanks() {
+        try {
+            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                org.openmk3.core.Edition.storageFolder + "/DX7")
+            dir.mkdirs()
+            val files = dir.listFiles { f -> f.isFile && f.extension.equals("syx", true) }.orEmpty().sortedBy { it.name.lowercase() }.take(16)
+            fmUserBanks.clear()
+            for ((i, f) in files.withIndex()) {
+                if (n.nativeFmLoadBank(i, f.readBytes())) fmUserBanks.add(f.nameWithoutExtension)
+                else AppLog.i("FM: ${f.name} is not a 32-voice DX7 cartridge")
+            }
+            if (fmUserBanks.isNotEmpty()) AppLog.i("FM: ${fmUserBanks.size} cartridge(s) loaded")
+        } catch (e: Exception) {
+            AppLog.i("FM: cartridges not loaded: $e")
+        }
+    }
 
     /** Puts effect [type] in a chain slot, with its default settings. */
     fun setFx(chain: Int, slot: Int, type: Int) {

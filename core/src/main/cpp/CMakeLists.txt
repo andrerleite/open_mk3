@@ -17,6 +17,15 @@ target_include_directories(mutable PUBLIC ${MI})
 target_compile_definitions(mutable PUBLIC TEST)
 target_compile_options(mutable PRIVATE -O3 -ffast-math -w)
 
-add_library(openmk3 SHARED engine.cpp synth.cpp)
+# Dexed's FM engine (msfa: Apache-2.0; Dexed changes: GPL-3.0), see third_party/dexed/README.md.
+set(DX ${CMAKE_CURRENT_SOURCE_DIR}/third_party/dexed)
+add_library(dexed STATIC
+    ${DX}/msfa/dx7note.cc ${DX}/msfa/env.cc ${DX}/msfa/exp2.cc ${DX}/msfa/fm_core.cc
+    ${DX}/msfa/fm_op_kernel.cc ${DX}/msfa/freqlut.cc ${DX}/msfa/lfo.cc ${DX}/msfa/pitchenv.cc
+    ${DX}/msfa/porta.cpp ${DX}/msfa/sin.cc ${DX}/msfa/tuning_standard.cc)
+target_include_directories(dexed PUBLIC ${DX} ${DX}/msfa ${DX}/shim)
+target_compile_options(dexed PRIVATE -O3 -w)
+
+add_library(openmk3 SHARED engine.cpp synth.cpp fm.cpp)
 target_compile_options(openmk3 PRIVATE -O3 -ffast-math -Wall)
-target_link_libraries(openmk3 mutable aaudio log)
+target_link_libraries(openmk3 mutable dexed aaudio log)

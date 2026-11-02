@@ -110,6 +110,15 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
+        val FM = listOf(
+            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, -1, -1, SRC, -1), View.SCOPE),
+            PageDef("FM", snd(SoundParams.FMBANK, SoundParams.FMPROG, SoundParams.FMBRIGHT, SoundParams.FMATT, SoundParams.FMREL, SoundParams.FMFB, -1, -1), View.SCOPE),
+            PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
+            PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
+            PageDef("MOD ENV", snd(MATT, MDEC, MPITCH, MCUT, -1, -1, -1, -1), View.MOD),
+            PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
+            PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
+        )
         val MARKERS = setOf(START, END, LSTART, LEND)
         var lastLevel = 2
         var lastSlot = 0
@@ -135,13 +144,14 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private val slotCount get() = if (level == 2) 1 + FxParams.SOUND_FX_SLOTS else FxParams.SLOTS
     private val isSource get() = level == 2 && slotIdx == 0
+    private val source get() = params[slot, SRC].toInt()
     private val isSynth get() = params[slot, SRC] > 0.5f
     /** Effect chain index and slot for the current selection (not the sound source). */
     private val chain get() = when (level) { 0 -> FxParams.MASTER; 1 -> FxParams.GROUP0 + ui.group; else -> slot }
     private val fxSlot get() = if (level == 2) slotIdx - 1 else slotIdx
 
     private fun pages(): List<PageDef> {
-        if (isSource) return if (isSynth) SYNTH else SAMPLER
+        if (isSource) return when (source) { SoundParams.SRC_FM -> FM; SoundParams.SRC_SYNTH -> SYNTH; else -> SAMPLER }
         val type = fx.type(chain, fxSlot)
         val defs = FxParams.DEFS[type] ?: emptyList()
         val name = FxParams.TYPES[type]
@@ -266,10 +276,10 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         if (ui.padMode != Ui.PadMode.PAD) return  // KEYBOARD / CHORDS / 16 VEL: pads only play notes
-        val wasSynth = isSynth
+        val wasSource = source
         ui.selectedSound = slot
         rawMarker.clear()
-        if (isSource && wasSynth != isSynth) pageIdx = 0
+        if (isSource && wasSource != source) pageIdx = 0
     }
 
     override fun onKnob(knob: Int, delta: Int) {
@@ -309,9 +319,9 @@ class SoundPage(ui: Ui) : Page(ui) {
             focusFrame = (params[slot, p] * frames).toInt()
             waveView.follow(focusFrame)
         } else {
-            val before = isSynth
+            val before = source
             params.nudge(slot, p, delta, shift)
-            if (p == SRC && before != isSynth) pageIdx = 0
+            if (p == SRC && before != source) pageIdx = 0
         }
         changed()
     }
@@ -342,7 +352,11 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     private fun slotName(i: Int): String {
-        if (level == 2 && i == 0) return if (isSynth) "SYNTH · ${SoundParams.MODELS[params[slot, SMODEL].toInt().coerceIn(0, 23)]}" else "SAMPLER"
+        if (level == 2 && i == 0) return when (source) {
+            SoundParams.SRC_FM -> "FM · ${params.display(slot, SoundParams.FMPROG)} (${SoundParams.FM_BANKS[params[slot, SoundParams.FMBANK].toInt().coerceIn(0, 18)]})"
+            SoundParams.SRC_SYNTH -> "SYNTH · ${SoundParams.MODELS[params[slot, SMODEL].toInt().coerceIn(0, 23)]}"
+            else -> "SAMPLER"
+        }
         val fs = if (level == 2) i - 1 else i
         val t = fx.type(chain, fs)
         return if (t == FxParams.NONE) "—" else FxParams.TYPES[t] + if (fx.bypassed(chain, fs)) " (bypassed)" else ""

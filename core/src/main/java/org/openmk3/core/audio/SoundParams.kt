@@ -88,6 +88,18 @@ class SoundParams {
         const val COLOUR = 48
         const val BEND = 49     // live: touch strip pitch bend (semitones)
         const val MODW = 50     // live: touch strip modulation (0..1)
+        const val FMBANK = 51
+        const val FMPROG = 52
+        const val FMBRIGHT = 53
+        const val FMATT = 54
+        const val FMREL = 55
+        const val FMFB = 56
+
+        const val SRC_SAMPLER = 0
+        const val SRC_SYNTH = 1
+        const val SRC_FM = 2
+        /** FM banks: 3 built-in (96 voices), then the user's .syx cartridges. */
+        val FM_BANKS = listOf("ROM 1", "ROM 2", "ROM 3") + (1..16).map { "USER $it" }
 
         /** Synth models (Mutable Instruments Plaits engines), described in our own words. */
         val MODELS = listOf(
@@ -153,7 +165,14 @@ class SoundParams {
             Def(VCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
             // trigger mode and source
             Def(GATE, "TRIGGER", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "GATE")),
-            Def(SRC, "SOURCE", 0f, 1f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH")),
+            Def(SRC, "SOURCE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH", "FM")),
+            // FM (6-operator, Dexed engine)
+            Def(FMBANK, "BANK", 0f, 18f, 0f, 1f, { "" }, choices = FM_BANKS),
+            Def(FMPROG, "PATCH", 0f, 31f, 0f, 1f, { v -> "${v.roundToInt() + 1}" }, choices = (1..32).map { "$it" }),
+            Def(FMBRIGHT, "BRIGHTNESS", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(FMATT, "ATTACK", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(FMREL, "RELEASE", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(FMFB, "FEEDBACK", -1f, 7f, -1f, 0.02f, { v -> if (v < -0.5f) "PATCH" else "${v.roundToInt()}" }),
             // synth
             Def(SMODEL, "MODEL", 0f, 23f, 8f, 1f, { "" }, choices = MODELS),
             Def(SNOTE, "NOTE", 0f, 127f, 48f, 0.02f, { v -> noteName(v.roundToInt()) }),
@@ -191,6 +210,9 @@ class SoundParams {
             return p
         }
     }
+
+    /** Name of an FM voice (bank, program), from the engine. */
+    var fmPatchName: ((Int, Int) -> String)? = null
 
     val buffer: ByteBuffer = ByteBuffer.allocateDirect(SLOTS * COUNT * 4).order(ByteOrder.nativeOrder())
     private val f = buffer.asFloatBuffer()
@@ -243,6 +265,7 @@ class SoundParams {
     fun display(slot: Int, i: Int): String {
         val d = DEFS[i] ?: return ""
         val v = this[slot, i]
+        if (i == FMPROG) fmPatchName?.let { return "${v.roundToInt() + 1} " + it(this[slot, FMBANK].roundToInt(), v.roundToInt()).trim() }
         return d.choices?.getOrNull(v.roundToInt()) ?: d.format(v)
     }
 

@@ -186,6 +186,17 @@ additive, wavetable, chords, speech, swarm, noise, particles, string, modal, dru
 AMP ENV, FILTER, MOD ENV, LFO and VELOCITY work as for the sampler. With the synth gate off,
 the AMP ENV shapes the note (and the sound stops when the pad is released).
 
+**FM pages** (SOURCE = FM: 6-operator FM from the Dexed engine; DX7-compatible voices)
+
+| Page | K1 | K2 | K3 | K4 | K5 | K6 |
+|---|---|---|---|---|---|---|
+| VOICE | Tune | Volume | Pan | Polyphony | | |
+| FM | Bank (ROM 1–3 built-in, USER 1–16) | Patch (by name) | Brightness (modulator levels) | Attack | Release | Feedback (patch / 0–7) |
+
+The 96 built-in voices are the DX7-format banks that ship with Plaits. Put your own 32-voice
+DX7 cartridges (.syx) in `Download/<app folder>/DX7`; up to 16 load as USER 1–16 at start.
+FM notes keep playing their release after note-off, like the original instrument.
+
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
