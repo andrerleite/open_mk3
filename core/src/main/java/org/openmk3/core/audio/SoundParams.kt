@@ -86,6 +86,8 @@ class SoundParams {
         const val STMOD = 46
         const val SMMOD = 47
         const val COLOUR = 48
+        const val BEND = 49     // live: touch strip pitch bend (semitones)
+        const val MODW = 50     // live: touch strip modulation (0..1)
 
         /** Synth models (Mutable Instruments Plaits engines), described in our own words. */
         val MODELS = listOf(

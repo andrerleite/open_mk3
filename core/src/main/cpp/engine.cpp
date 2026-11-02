@@ -45,26 +45,44 @@ namespace {
 constexpr int kGroups = 8;
 constexpr int kPads = 16;
 constexpr int kSounds = kGroups * kPads;  // 8 groups x 16 sounds
-constexpr int kSteps = 16;
+constexpr int kSteps = 64;  // longest pattern: 4 bars of 16ths
 constexpr int kMaxVoices = 64;
 constexpr int kSampleRate = 48000;
 constexpr int kRing = 256;
 
 // Shared pattern buffer layout (floats); must match Pattern.kt.
-constexpr int OFF_VEL = 0;                                // kSounds x kSteps velocities
-constexpr int OFF_MUTE = OFF_VEL + kSounds * kSteps;      // kSounds flags
+// Globals, then two banks per group: the playing pattern and the one queued to play next.
+constexpr int kExtraNotes = 3;                            // a step can hold up to 4 notes (chords)
+constexpr int OFF_MUTE = 0;                               // kSounds flags
 constexpr int OFF_SOLO = OFF_MUTE + kSounds;              // kSounds flags
-constexpr int OFF_SKIP = OFF_SOLO + kSounds;              // kSounds x kSteps flags
-constexpr int OFF_BPM = OFF_SKIP + kSounds * kSteps;
+constexpr int OFF_BPM = OFF_SOLO + kSounds;
 constexpr int OFF_SWING = OFF_BPM + 1;
 constexpr int OFF_GMUTE = OFF_SWING + 1;                  // kGroups flags
 constexpr int OFF_GSOLO = OFF_GMUTE + kGroups;            // kGroups flags
-constexpr int kExtraNotes = 3;                            // a step can hold up to 4 notes (chords)
-constexpr int OFF_NOTE = OFF_GSOLO + kGroups;             // kSounds x kSteps: MIDI note of the main hit
-constexpr int OFF_XVEL = OFF_NOTE + kSounds * kSteps;     // kSounds x kSteps x 3: extra notes' velocity
-constexpr int OFF_XNOTE = OFF_XVEL + kSounds * kSteps * kExtraNotes;  // and their MIDI notes
-constexpr int PATTERN_FLOATS = OFF_XNOTE + kSounds * kSteps * kExtraNotes;
+constexpr int OFF_ACTIVE = OFF_GSOLO + kGroups;           // kGroups: bank playing (written by the engine)
+constexpr int OFF_PENDING = OFF_ACTIVE + kGroups;         // kGroups: bank to switch to at the loop end (-1 none)
+constexpr int OFF_GSTEP = OFF_PENDING + kGroups;          // kGroups: current step (engine), -1 stopped
+constexpr int OFF_METRO = OFF_GSTEP + kGroups;            // metronome on
+constexpr int OFF_COUNTIN = OFF_METRO + 1;                // 1 = count in one bar at the next start
+constexpr int OFF_COUNTING = OFF_COUNTIN + 1;             // engine: 1 while counting in
+constexpr int OFF_GVOL = OFF_COUNTING + 1;                // kGroups: group volume (dB)
+constexpr int OFF_GPAN = OFF_GVOL + kGroups;              // kGroups: group pan (-1..1)
+constexpr int OFF_GFILT = OFF_GPAN + kGroups;             // kGroups: performance filter (-1 LP .. 0 off .. 1 HP)
+constexpr int OFF_BANKS = OFF_GFILT + kGroups + 6;
+// per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
+constexpr int B_VEL = 0;
+constexpr int B_NOTE = B_VEL + kPads * kSteps;
+constexpr int B_XVEL = B_NOTE + kPads * kSteps;
+constexpr int B_XNOTE = B_XVEL + kPads * kSteps * kExtraNotes;
+constexpr int B_SKIP = B_XNOTE + kPads * kSteps * kExtraNotes;
+constexpr int B_LEN = B_SKIP + kPads * kSteps;            // pattern length in steps (1..64)
+constexpr int BANK_FLOATS = B_LEN + 1;
+constexpr int PATTERN_FLOATS = OFF_BANKS + kGroups * 2 * BANK_FLOATS;
 constexpr int kRootNote = 60;                             // C3: the note a pad plays in pad mode
+
+static inline float* bankOf(float* p, int g, int b) { return p + OFF_BANKS + (g * 2 + b) * BANK_FLOATS; }
+static inline int activeBank(const float* p, int g) { return p[OFF_ACTIVE + g] > 0.5f ? 1 : 0; }
+static inline int bankLen(const float* b) { int l = int(b[B_LEN] + 0.5f); return l <= 0 ? 16 : std::min(l, kSteps); }
 
 int64_t nowNanos() {
     timespec ts{};
@@ -139,6 +157,8 @@ enum {
     P_STMOD = 46,   // synth internal envelope -> timbre, -1..1
     P_SMMOD = 47,   // synth internal envelope -> morph, -1..1
     P_COLOUR = 48,  // pad colour (UI only)
+    P_BEND = 49,    // live pitch bend, semitones (touch strip PITCH)
+    P_MODW = 50,    // live modulation 0..1 (touch strip MOD): closes a low-pass filter
 };
 static float kDefaultParams[kParams];
 static bool initDefaults() {
@@ -331,6 +351,11 @@ private:
     void startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note = kRootNote, int chord = 1);
     void releaseSlot(int slot, int note = -1);
     void runRepeat(int frames);
+    // metronome click (a short sine burst, higher on the first beat of the bar)
+    int clickDelay = -1;    // frames into the chunk where a click starts
+    int clickPos = -1;      // frames rendered of the current click
+    float clickFreq = 1500.f;
+    void addClick(float* out, int frames);
     void recordEvent(float* p, int sound, double at, int note, float vel);
     Held held[kMaxHeld];
     uint64_t heldOrder = 0;
@@ -349,6 +374,7 @@ public:
     std::atomic<int> arpType{0};         // 0 up, 1 down, 2 up-down, 3 random, 4 as played, 5 chord
     std::atomic<int> arpOctaves{1};
     std::atomic<bool> recording{false};  // repeat / arp hits are written into the pattern
+    std::atomic<bool> recorded{false};   // set when the engine wrote into the pattern (Kotlin syncs)
 private:
     void killSlot(int slot);
     void renderChunk(float* out, int32_t frames);
@@ -372,6 +398,7 @@ private:
         }
     }
     float soundBus[kSounds][kChunk * 2];
+    float gfIc1[kGroups][2] = {}, gfIc2[kGroups][2] = {};  // performance filter state
     bool soundUsed[kSounds];
     float groupBus[kGroups][kChunk * 2];
     float synthOut[kSynthMaxBlockFrames];
@@ -701,19 +728,37 @@ void Engine::runSequencer(int frames) {
     // Always consume the restart flag: PLAY sets it too, and leaving it set made the
     // pattern restart (and step 1 sound twice) one callback after starting.
     bool restart = restartRequested.exchange(false);
+    if (p && !on) {
+        // stopped: queued patterns switch right away
+        for (int g = 0; g < kGroups; g++) {
+            int pend = int(p[OFF_PENDING + g]);
+            if (pend >= 0) { p[OFF_ACTIVE + g] = float(pend); p[OFF_PENDING + g] = -1.f; }
+        }
+    }
     if (on && (!wasPlaying || restart)) {
-        seqPhase = 0.0;
         nextStep = 0;
-        for (int i = 0; i < kSounds * kSteps; i++) p[OFF_SKIP + i] = 0.f;
+        if (p[OFF_COUNTIN] > 0.5f) {  // one bar of clicks first
+            nextStep = -16;
+            p[OFF_COUNTIN] = 0.f;
+            p[OFF_COUNTING] = 1.f;
+        }
+        seqPhase = double(nextStep);
+        for (int g = 0; g < kGroups; g++)
+            for (int b = 0; b < 2; b++) {
+                float* bk = bankOf(p, g, b);
+                for (int i = 0; i < kPads * kSteps; i++) bk[B_SKIP + i] = 0.f;
+            }
     }
     if (!on && wasPlaying) {
         // Stopping ends the notes the sequencer started (their release phase plays out).
         for (auto& v : voices)
             if (v.sample && v.fromSeq) v.gate = 0;
+        p[OFF_COUNTING] = 0.f;
     }
     wasPlaying = on;
     if (!on) {
         currentStep.store(-1, std::memory_order_relaxed);
+        if (p) for (int g = 0; g < kGroups; g++) p[OFF_GSTEP + g] = -1.f;
         return;
     }
     double bpm = p[OFF_BPM];
@@ -734,6 +779,7 @@ void Engine::runSequencer(int frames) {
     double stepLen = kSampleRate * 60.0 / bpm / 4.0;
     double start = seqPhase;
     double end = start + frames / stepLen;
+    const bool metro = p[OFF_METRO] > 0.5f;
     while (true) {
         int64_t n = nextStep;
         double t = double(n) + ((n & 1) ? swing : 0.0);
@@ -742,64 +788,109 @@ void Engine::runSequencer(int frames) {
         long off = std::lround((t - start) * stepLen);
         if (off >= frames) break;
         if (off < 0) off = 0;
-        int step = int(n % kSteps);
-        for (int s = 0; s < kSounds; s++) {
-            const int cell = s * kSteps + step;
-            float v = p[OFF_VEL + cell];
-            int extras = 0;
-            for (int x = 0; x < kExtraNotes; x++) extras += p[OFF_XVEL + cell * kExtraNotes + x] > 0.f;
-            if (v <= 0.f && extras == 0) continue;
-            float& skip = p[OFF_SKIP + cell];
-            if (skip > 0.5f) { skip = 0.f; continue; }
-            int g = s / kPads;
-            bool audible = groupOn[g] && (soloInGroup[g] ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f);
-            if (!audible) continue;
-            const int chord = (v > 0.f) + extras;
-            if (v > 0.f) {
-                int note = int(p[OFF_NOTE + cell] + 0.5f);
-                startVoice(s, v, int(off), int(stepLen), true, note > 0 ? note : kRootNote, chord);
+        // metronome: every beat (and through the count-in)
+        if ((metro || n < 0) && ((n % 4) + 4) % 4 == 0) {
+            clickDelay = int(off);
+            clickPos = 0;
+            clickFreq = (((n % 16) + 16) % 16 == 0) ? 2400.f : 1500.f;
+        }
+        if (n < 0) { nextStep = n + 1; continue; }  // counting in
+        if (n == 0) p[OFF_COUNTING] = 0.f;
+        for (int g = 0; g < kGroups; g++) {
+            // queued pattern: switch when this group's pattern starts over
+            int ab = activeBank(p, g);
+            float* bk = bankOf(p, g, ab);
+            int len = bankLen(bk);
+            if (n % len == 0) {
+                int pend = int(p[OFF_PENDING + g]);
+                if (pend >= 0) {
+                    p[OFF_ACTIVE + g] = float(pend);
+                    p[OFF_PENDING + g] = -1.f;
+                    ab = pend;
+                    bk = bankOf(p, g, ab);
+                    len = bankLen(bk);
+                }
             }
-            for (int x = 0; x < kExtraNotes; x++) {
-                float xv = p[OFF_XVEL + cell * kExtraNotes + x];
-                if (xv > 0.f) startVoice(s, xv, int(off), int(stepLen), true, int(p[OFF_XNOTE + cell * kExtraNotes + x] + 0.5f), chord);
+            const int step = int(n % len);
+            p[OFF_GSTEP + g] = float(step);
+            for (int pad = 0; pad < kPads; pad++) {
+                const int s = g * kPads + pad;
+                const int cell = pad * kSteps + step;
+                float v = bk[B_VEL + cell];
+                int extras = 0;
+                for (int x = 0; x < kExtraNotes; x++) extras += bk[B_XVEL + cell * kExtraNotes + x] > 0.f;
+                if (v <= 0.f && extras == 0) continue;
+                float& skip = bk[B_SKIP + cell];
+                if (skip > 0.5f) { skip = 0.f; continue; }
+                bool audible = groupOn[g] && (soloInGroup[g] ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f);
+                if (!audible) continue;
+                const int chord = (v > 0.f) + extras;
+                if (v > 0.f) {
+                    int note = int(bk[B_NOTE + cell] + 0.5f);
+                    startVoice(s, v, int(off), int(stepLen), true, note > 0 ? note : kRootNote, chord);
+                }
+                for (int x = 0; x < kExtraNotes; x++) {
+                    float xv = bk[B_XVEL + cell * kExtraNotes + x];
+                    if (xv > 0.f) startVoice(s, xv, int(off), int(stepLen), true, int(bk[B_XNOTE + cell * kExtraNotes + x] + 0.5f), chord);
+                }
             }
         }
-        currentStep.store(step, std::memory_order_relaxed);
+        currentStep.store(int(n % 16), std::memory_order_relaxed);
         nextStep = n + 1;
     }
     seqPhase = end;
     phase.store(end, std::memory_order_relaxed);
 }
 
+void Engine::addClick(float* out, int frames) {
+    if (clickPos < 0) return;
+    const int len = kSampleRate / 40;  // 25 ms
+    int i = std::max(0, clickDelay);
+    clickDelay = 0;
+    for (; i < frames && clickPos < len; i++, clickPos++) {
+        float t = float(clickPos) / kSampleRate;
+        float env = std::exp(-t * 180.f);
+        float x = 0.35f * env * std::sin(6.2831853f * clickFreq * t);
+        out[i * 2] += x;
+        out[i * 2 + 1] += x;
+    }
+    if (clickPos >= len) clickPos = -1;
+}
+
 /** Writes a live (repeat / arp) hit into the pattern at the nearest step. */
 void Engine::recordEvent(float* p, int sound, double at, int note, float vel) {
     if (!p || sound < 0 || sound >= kSounds) return;
     long long n = std::llround(at);
-    int step = int(((n % kSteps) + kSteps) % kSteps);
-    const int cell = sound * kSteps + step;
+    if (n < 0) return;  // count-in
+    const int g = sound / kPads, pad = sound % kPads;
+    float* bk = bankOf(p, g, activeBank(p, g));
+    const int len = bankLen(bk);
+    int step = int(n % len);
+    const int cell = pad * kSteps + step;
     // main hit, or the extra note slot holding this note, or a free one
-    float& mv = p[OFF_VEL + cell];
-    int mn = int(p[OFF_NOTE + cell] + 0.5f);
+    float& mv = bk[B_VEL + cell];
+    int mn = int(bk[B_NOTE + cell] + 0.5f);
     if (mn <= 0) mn = kRootNote;
     if (mv <= 0.f || mn == note) {
         mv = std::max(mv, vel);
-        p[OFF_NOTE + cell] = float(note);
+        bk[B_NOTE + cell] = float(note);
     } else {
         int free = -1;
         bool done = false;
         for (int x = 0; x < kExtraNotes && !done; x++) {
-            float& xv = p[OFF_XVEL + cell * kExtraNotes + x];
-            float& xn = p[OFF_XNOTE + cell * kExtraNotes + x];
+            float& xv = bk[B_XVEL + cell * kExtraNotes + x];
+            float& xn = bk[B_XNOTE + cell * kExtraNotes + x];
             if (xv > 0.f && int(xn + 0.5f) == note) { xv = std::max(xv, vel); done = true; }
             else if (xv <= 0.f && free < 0) free = x;
         }
         if (!done && free >= 0) {
-            p[OFF_XVEL + cell * kExtraNotes + free] = vel;
-            p[OFF_XNOTE + cell * kExtraNotes + free] = float(note);
+            bk[B_XVEL + cell * kExtraNotes + free] = vel;
+            bk[B_XNOTE + cell * kExtraNotes + free] = float(note);
         }
     }
     // already heard now: don't play it again when the playhead reaches that step this loop
-    if (double(n) >= seqPhase) p[OFF_SKIP + cell] = 1.f;
+    if (double(n) >= seqPhase) bk[B_SKIP + cell] = 1.f;
+    recorded.store(true, std::memory_order_release);
 }
 
 void Engine::runRepeat(int frames) {
@@ -825,7 +916,7 @@ void Engine::runRepeat(int frames) {
     const double startNow = playing ? seqPhase : rpPhase;
     const double end = startNow + frames / stepLen;
     const int gateFrames = std::max(32, int(rate * stepLen * std::clamp(double(repeatGate.load()), 0.05, 1.0)));
-    const bool rec = recording.load(std::memory_order_relaxed) && playing;
+    const bool rec = recording.load(std::memory_order_relaxed) && playing && rpNext >= 0.0;
     while (rpNext < end) {
         int off = std::clamp(int(std::lround((rpNext - startNow) * stepLen)), 0, frames - 1);
         if (mode == 1) {
@@ -963,7 +1054,10 @@ void Engine::renderChunk(float* out, int32_t frames) {
         const float tune = std::clamp(P[P_TUNE], -48.f, 48.f);
         int ftype = int(P[P_FTYPE] + 0.5f);
         if (ftype < 1 || ftype > 4) ftype = 0;
-        const float baseCut = std::clamp(P[P_CUT], 20.f, 20000.f);
+        const float modw = std::clamp(P[P_MODW], 0.f, 1.f);
+        if (ftype == 0 && modw > 0.01f) ftype = 1;  // MOD on a sound without a filter: add a low-pass
+        const float baseCut = std::clamp(P[P_CUT], 20.f, 20000.f) * std::exp2(-7.f * modw);
+        const float bend = std::clamp(P[P_BEND], -24.f, 24.f);
         const float fk = 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
         const float drive = std::clamp(P[P_DRIVE], 0.f, 1.f);
         const float dg = 1.f + drive * 15.f;
@@ -1051,7 +1145,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 default: lfo = std::sin(6.2831853f * v.lfoPhase); break;                   // sine
             }
             const float me = v.mLevel;
-            const double rate = std::pow(2.0, double(tune + float(v.note - kRootNote) + me * mPitch + lfo * lPitch) / 12.0);
+            const double rate = std::pow(2.0, double(tune + bend + float(v.note - kRootNote) + me * mPitch + lfo * lPitch) / 12.0);
             const double step = v.rev ? -rate : rate;
             float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f;
             if (ftype) {
@@ -1071,7 +1165,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
             const int blockEnd = std::min(frames, i + kBlock);
             float blockPeak = 0.f;
             if (synth) {
-                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + me * mPitch + lfo * lPitch;
+                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + bend + me * mPitch + lfo * lPitch;
                 synthPool[v.synth]->render(sp, !v.released, synthOut, synthAux, blockEnd - i);
             }
             const int blockStart = i;
@@ -1226,11 +1320,43 @@ void Engine::renderChunk(float* out, int32_t frames) {
             for (int k = 0; k < frames * 2; k++) gb[k] += soundBus[snd][k];
         }
     }
+    float* pp2 = pattern.load(std::memory_order_acquire);
     for (int g = 0; g < kGroups; g++) {
         if (fp) runChain(fp, kChainGroup0 + g, groupBus[g], frames, bpm);
-        for (int k = 0; k < frames * 2; k++) out[k] += groupBus[g][k];
+        float* gb = groupBus[g];
+        float gl = 1.f, gr = 1.f, filt = 0.f;
+        if (pp2) {
+            float db = std::clamp(pp2[OFF_GVOL + g], -60.f, 12.f);
+            float gain = db <= -59.9f ? 0.f : std::pow(10.f, db / 20.f);
+            float pan = std::clamp(pp2[OFF_GPAN + g], -1.f, 1.f);
+            gl = gain * (pan > 0.f ? 1.f - pan : 1.f);
+            gr = gain * (pan < 0.f ? 1.f + pan : 1.f);
+            filt = std::clamp(pp2[OFF_GFILT + g], -1.f, 1.f);
+        }
+        // performance filter (touch strip): low-pass to the left, high-pass to the right
+        if (std::fabs(filt) > 0.01f) {
+            float fc = filt < 0.f ? 20000.f * std::pow(0.005f, -filt) : 20.f * std::pow(400.f, filt);
+            float fg = std::tan(3.14159265f * std::clamp(fc, 20.f, 20000.f) / kSampleRate);
+            const float fk = 1.2f;
+            float a1 = 1.f / (1.f + fg * (fg + fk)), a2 = fg * a1, a3 = fg * a2;
+            for (int k = 0; k < frames; k++)
+                for (int c = 0; c < 2; c++) {
+                    float x = gb[k * 2 + c];
+                    float v3 = x - gfIc2[g][c];
+                    float v1 = a1 * gfIc1[g][c] + a2 * v3;
+                    float v2 = gfIc2[g][c] + a2 * gfIc1[g][c] + a3 * v3;
+                    gfIc1[g][c] = 2.f * v1 - gfIc1[g][c];
+                    gfIc2[g][c] = 2.f * v2 - gfIc2[g][c];
+                    gb[k * 2 + c] = filt < 0.f ? v2 : x - fk * v1 - v2;
+                }
+        }
+        for (int k = 0; k < frames; k++) {
+            out[k * 2] += gb[k * 2] * gl;
+            out[k * 2 + 1] += gb[k * 2 + 1] * gr;
+        }
     }
     if (fp) runChain(fp, kChainMaster, out, frames, bpm);
+    addClick(out, frames);
     // oscilloscope (before the master volume, so the shape is what the sound makes)
     {
         const float* src = sk == 2 ? scopeTap : sk == 1 ? groupBus[std::clamp(si, 0, kGroups - 1)] : out;
@@ -1886,6 +2012,10 @@ JNIEXPORT void JNICALL JNI_FN(nativeRepeatConfig)(JNIEnv*, jobject, jint mode, j
 }
 JNIEXPORT void JNICALL JNI_FN(nativeSetRecording)(JNIEnv*, jobject, jboolean on) {
     gEngine.recording.store(on == JNI_TRUE);
+}
+/** True (once) after the engine wrote repeat / arp hits into the pattern. */
+JNIEXPORT jboolean JNICALL JNI_FN(nativeTakeRecorded)(JNIEnv*, jobject) {
+    return gEngine.recorded.exchange(false) ? JNI_TRUE : JNI_FALSE;
 }
 /** Fades out every voice of [slot] (-1 = everything). */
 JNIEXPORT void JNICALL JNI_FN(nativeKill)(JNIEnv*, jobject, jint slot) {

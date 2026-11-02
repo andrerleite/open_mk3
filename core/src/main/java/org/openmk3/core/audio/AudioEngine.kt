@@ -57,6 +57,7 @@ object NativeEngine {
     external fun nativeRepeatHold(slot: Int, note: Int, vel: Float, chord: Int, type: Int)
     external fun nativeRepeatConfig(mode: Int, rate: Float, gate: Float, arpType: Int, octaves: Int)
     external fun nativeSetRecording(on: Boolean)
+    external fun nativeTakeRecorded(): Boolean
     external fun nativeInitSynths()
     external fun nativeSetFxBuffer(buf: ByteBuffer)
     external fun nativeSetFx(chain: Int, slot: Int, type: Int)
@@ -325,6 +326,8 @@ class AudioEngine(private val ctx: Context) {
         n.nativeRepeatConfig(mode, rate, gate, arpType, octaves)
     /** While on (and playing), repeat / arp hits are recorded into the pattern by the engine. */
     fun setRecording(on: Boolean) = n.nativeSetRecording(on)
+    /** True once after the engine wrote repeat / arp hits into the pattern. */
+    fun takeRecorded() = n.nativeTakeRecorded()
 
     /** Puts effect [type] in a chain slot, with its default settings. */
     fun setFx(chain: Int, slot: Int, type: Int) {

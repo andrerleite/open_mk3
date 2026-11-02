@@ -44,6 +44,18 @@ class HomePage(ui: Ui) : Page(ui) {
     private var power: PowerMonitor.Sample? = null
     private var powerAt = 0L
     private var lastStep = -2
+    /** Page of 16 steps shown on the pads (STEP) and the grid; follows the playhead with FOLLOW. */
+    private var stepPage = 0
+    private val pages get() = (pattern.length(ui.group) + 15) / 16
+    private val viewPage: Int get() {
+        val st = pattern.stepOf(ui.group)
+        return (if (ui.follow && st >= 0) st / 16 else stepPage).coerceIn(0, pages - 1)
+    }
+    /** Playhead step within the page shown (-1 when not on it or stopped). */
+    private val pageStep: Int get() {
+        val st = pattern.stepOf(ui.group)
+        return if (st >= 0 && st / 16 == viewPage) st % 16 else -1
+    }
     private var lastMeter = -1
     private val lastLed = IntArray(16) { -1 }
     private val pattern get() = ui.engine.pattern
@@ -62,7 +74,7 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     override val playsPads: Boolean
-        get() = mode == Mode.PAD && !erase && !select && !mute && !solo
+        get() = mode == Mode.PAD && !erase && !select && !mute && !solo && !shift && !duplicate
 
     // ---- look ----
     // Pads and rows use the focused group's colour.
@@ -113,6 +125,7 @@ class HomePage(ui: Ui) : Page(ui) {
 
     private fun save() {
         pattern.save(ui.ctx)
+        ui.checkpoint()  // the finished edit becomes undoable
         dirtySince = 0L
     }
 
@@ -129,7 +142,9 @@ class HomePage(ui: Ui) : Page(ui) {
             powerAt = now
             redraw = true
         }
-        val st = ui.engine.currentStep
+        pattern.poll()
+        if (ui.engine.takeRecorded()) { pattern.pullFromEngine(); changed() }
+        val st = pattern.stepOf(ui.group) + 1000 * viewPage
         if (st != lastStep) { lastStep = st; redraw = true }
         val m = (ui.engine.meter * 20).toInt()
         if (m != lastMeter) { lastMeter = m; redraw = true }
@@ -145,7 +160,7 @@ class HomePage(ui: Ui) : Page(ui) {
     private fun updateLeds(now: Long): Boolean {
         var any = false
         val p = pattern
-        val step = ui.engine.currentStep
+        val step = pageStep
         for (slot in 0 until 16) {
             val c = ui.soundColour(sd(slot))
             val v = when (mode) {
@@ -161,12 +176,13 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
-                    val on = p.hasStep(sd(selected), s)
+                    val abs = viewPage * 16 + s
+                    val on = abs < pattern.length(ui.group) && p.hasStep(sd(selected), abs)
                     val sc = ui.soundColour(sd(selected))
                     when {
                         flash && s == step && on -> Mk3Colors.value(sc, 3)
                         flash && s == step -> Mk3Colors.value(Mk3Colors.WHITE, 0)
-                        on -> Mk3Colors.value(sc, if (p.vel[sd(selected)][s] > 0.7f) 2 else 1)
+                        on -> Mk3Colors.value(sc, if (p.vel(sd(selected), abs) > 0.7f) 2 else 1)
                         else -> 0
                     }
                 }
@@ -194,6 +210,10 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("MUTE", mute)
         l.set("SOLO", solo)
         l.set("SHIFT", shift)
+        l.set("VOLUME", encMode == Enc.VOLUME)
+        l.set("SWING", encMode == Enc.SWING)
+        l.set("TEMPO", encMode == Enc.TEMPO || encMode == Enc.TUNE)
+        l.set("DUPLICATE", duplicate)
         if (Edition.full) l.set("PLUG-IN")
     }
 
@@ -207,6 +227,11 @@ class HomePage(ui: Ui) : Page(ui) {
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         val p = pattern
         when {
+            shift && mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD -> { shiftPad(slot) }
+            duplicate -> {
+                if (dupSource < 0) { dupSource = slot; message("Duplicate ${ui.padLabel(slot)} to… (hit the target pad)") }
+                else { duplicateSound(dupSource, slot); dupSource = -1 }
+            }
             select -> selected = slot
             mute -> { p.mute[sd(slot)] = !p.mute[sd(slot)]; changed() }
             solo -> { p.solo[sd(slot)] = !p.solo[sd(slot)]; changed() }
@@ -223,7 +248,8 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
             }
             else -> { // STEP mode
-                val s = stepForSlot(slot)
+                val s = viewPage * 16 + stepForSlot(slot)
+                if (s >= pattern.length(ui.group)) return
                 val sound = sd(selected)
                 if (erase || p.hasStep(sound, s)) p.clearStep(sound, s) else p.recordNote(sound, s, Pattern.ROOT, velocity)
                 changed()
@@ -236,11 +262,13 @@ class HomePage(ui: Ui) : Page(ui) {
         val e = ui.engine
         val heard = e.phase - e.outputLatencySteps()
         val n = heard.roundToLong()
-        val step = ((n % Pattern.STEPS + Pattern.STEPS) % Pattern.STEPS).toInt()
+        if (n < 0) return  // counting in
+        val len = pattern.length(slot / Pattern.PADS)
+        val step = ((n % len + len) % len).toInt()
         val p = pattern
         p.recordNote(slot, step, note, velocity)
         // Not yet played this loop: the live hit already sounded, don't play it twice.
-        if (n >= e.phase) p.skipOnce[slot][step] = true
+        if (n >= e.phase) p.skipOnce(slot, step)
         changed()
     }
 
@@ -256,6 +284,14 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
             }
             "SELECT" -> select = down
+            "DUPLICATE" -> {
+                duplicate = down
+                dupSource = -1
+                if (down && shift) {  // SHIFT + DUPLICATE: double the pattern
+                    message(if (pattern.double(ui.group)) "Pattern doubled: ${pattern.length(ui.group)} steps" else "Pattern is already 4 bars")
+                    changed()
+                }
+            }
             "MUTE" -> mute = down
             "SOLO" -> solo = down
         }
@@ -265,15 +301,23 @@ class HomePage(ui: Ui) : Page(ui) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> { e.stopPressed(); rec = false }
             "RESTART" -> e.transportRestart()
-            "REC" -> { rec = !rec; if (rec && !e.playing) e.transportPlay() }
+            "REC" -> if (shift) {
+                // SHIFT + REC: record after a one-bar count-in
+                pattern.requestCountIn()
+                rec = true
+                if (e.playing) e.transportRestart() else e.transportPlay()
+            } else { rec = !rec; if (rec && !e.playing) e.transportPlay() }
+            "VOLUME" -> encMode = if (encMode == Enc.VOLUME) Enc.TEMPO else Enc.VOLUME
+            "SWING" -> encMode = if (encMode == Enc.SWING) Enc.TEMPO else Enc.SWING
+            "TEMPO" -> encMode = if (shift) Enc.TUNE else Enc.TEMPO
             "STEP" -> mode = if (mode == Mode.STEP) Mode.PAD else Mode.STEP
             "KEYBOARD", "CHORDS" -> mode = Mode.PAD  // leave STEP: pads play notes / chords
             "PAD MODE" -> if (shift) {
                 flash = !flash
                 AppLog.i("Pad LED flashing ${if (flash) "on" else "OFF"}")
             } else mode = Mode.PAD
-            "PAGE LEFT" -> selected = (selected + 15) % 16
-            "PAGE RIGHT" -> selected = (selected + 1) % 16
+            "PAGE LEFT" -> if (mode == Mode.STEP) { stepPage = (viewPage - 1).coerceAtLeast(0); ui.follow = false } else selected = (selected + 15) % 16
+            "PAGE RIGHT" -> if (mode == Mode.STEP) { stepPage = (viewPage + 1).coerceAtMost(pages - 1); ui.follow = false } else selected = (selected + 1) % 16
             "SETTINGS" -> ui.show(PalettePage(ui))
             "BROWSER" -> ui.show(BrowserPage(ui))
             "SAMPLING" -> ui.show(SamplingPage(ui))
@@ -317,11 +361,75 @@ class HomePage(ui: Ui) : Page(ui) {
         }
     }
 
+    /** What the encoder adjusts (VOLUME / SWING / TEMPO buttons; SHIFT + TEMPO = tune). */
+    private enum class Enc { TEMPO, VOLUME, SWING, TUNE }
+    private var encMode = Enc.TEMPO
+
     override fun onEncoder(delta: Int) {
         val e = ui.engine
-        e.bpm = if (shift) (e.bpm + delta * 0.1).coerceIn(40.0, 240.0)
-        else (Math.round(e.bpm) + delta).toDouble().coerceIn(40.0, 240.0)
+        when (encMode) {
+            Enc.TEMPO -> e.bpm = if (shift) (e.bpm + delta * 0.1).coerceIn(40.0, 240.0)
+                else (Math.round(e.bpm) + delta).toDouble().coerceIn(40.0, 240.0)
+            Enc.VOLUME -> e.masterGain = (e.masterGain + delta * 0.02f).coerceIn(0f, 1.5f)
+            Enc.SWING -> pattern.swing = (pattern.swing + delta * 0.01f).coerceIn(0f, 0.5f)
+            Enc.TUNE -> {
+                val sp = e.params
+                val snd = sd(selected)
+                sp[snd, org.openmk3.core.audio.SoundParams.TUNE] =
+                    (sp[snd, org.openmk3.core.audio.SoundParams.TUNE] + delta * (if (shift) 0.1f else 1f)).coerceIn(-36f, 36f)
+                sp.save(ui.ctx)
+            }
+        }
         changed()
+    }
+
+    // ---- DUPLICATE in pad mode, SHIFT + pad edits ----
+    private var duplicate = false
+    private var dupSource = -1
+    private var msg = ""
+    private var msgAt = 0L
+
+    private fun message(t: String) {
+        msg = t
+        msgAt = android.os.SystemClock.uptimeMillis()
+        AppLog.i(t)
+    }
+
+    /** DUPLICATE + pad + pad: copies a sound (sample, settings, colour and its notes). */
+    private fun duplicateSound(from: Int, to: Int) {
+        val e = ui.engine
+        val a = sd(from)
+        val b = sd(to)
+        e.setSample(b, e.kit[a])
+        for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
+        pattern.copySound(a, b)
+        e.params.save(ui.ctx)
+        org.openmk3.core.audio.KitStore.save(ui.ctx, e.kit)
+        changed()
+        message("${ui.padLabel(from)} → ${ui.padLabel(to)}")
+    }
+
+    /** SHIFT + pads (labels printed on the pads). Returns true when handled. */
+    private fun shiftPad(slot: Int): Boolean {
+        val g = ui.group
+        val snd = sd(selected)
+        when (slot) {
+            0, 2 -> message(if (ui.undo()) "Undo" else "Nothing to undo")
+            1, 3 -> message(if (ui.redo()) "Redo" else "Nothing to redo")
+            4, 5 -> message("Quantise: notes are already on the step grid")
+            6 -> { pattern.nudge(snd, -1); changed(); message("${ui.padLabel()} nudged left") }
+            7 -> { pattern.nudge(snd, 1); changed(); message("${ui.padLabel()} nudged right") }
+            8 -> { pattern.clearGroup(g); changed(); message("Pattern cleared") }
+            9 -> message("No automation yet")
+            10 -> { ui.clipboard = pattern.copyOf(g); message(if (ui.clipboard != null) "Pattern copied" else "No pattern to copy") }
+            11 -> ui.clipboard?.let { pattern.paste(g, it); changed(); message("Pattern pasted") } ?: message("Clipboard is empty")
+            12 -> { pattern.transpose(snd, -1); changed(); message("${ui.padLabel()} notes −1 semitone") }
+            13 -> { pattern.transpose(snd, 1); changed(); message("${ui.padLabel()} notes +1 semitone") }
+            14 -> { pattern.transpose(snd, -12); changed(); message("${ui.padLabel()} notes −1 octave") }
+            15 -> { pattern.transpose(snd, 12); changed(); message("${ui.padLabel()} notes +1 octave") }
+            else -> return false
+        }
+        return true
     }
 
     // =====================================================================================
@@ -438,6 +546,13 @@ class HomePage(ui: Ui) : Page(ui) {
         if (flags.isNotEmpty()) l.drawText(flags, 200f, 142f, label)
 
         val h = when {
+            msg.isNotEmpty() && android.os.SystemClock.uptimeMillis() - msgAt < 2500 -> msg
+            pattern.countingIn -> "Count-in…"
+            duplicate -> "DUPLICATE: hit the source pad, then the target"
+            shift && mode == Mode.PAD -> "SHIFT + pad: 1 undo · 2 redo · 7/8 nudge · 9 clear · 11/12 copy/paste"
+            encMode == Enc.VOLUME -> "Encoder: master volume"
+            encMode == Enc.SWING -> "Encoder: swing"
+            encMode == Enc.TUNE -> "Encoder: tune ${ui.padLabel()}"
             shift && erase -> "Pattern cleared"
             erase -> if (mode == Mode.STEP) "ERASE: hit steps to clear them" else "ERASE: hit a pad to clear that sound"
             select -> "SELECT: hit a pad to choose a sound"
@@ -477,11 +592,16 @@ class HomePage(ui: Ui) : Page(ui) {
         val rowH = 16f
         val x0 = 80f
         val cw = 25f
-        val step = ui.engine.currentStep
-        for (t in 0 until Pattern.STEPS) {
+        val step = pageStep
+        val page = viewPage
+        val len = pattern.length(ui.group)
+        for (t in 0 until 16) {
             val x = x0 + t * cw
             c.drawRect(x + 1f, 6f, x + cw - 1f, 10f, if (t % 4 == 0) cellOffBeat else cellOff)
         }
+        // pattern / page indicator
+        val pi = pattern.current[ui.group]
+        c.drawText((if (pi >= 0) "P${pi + 1}" else "—") + if (pages > 1) " ${page + 1}/$pages" else "", 2f, 12f, rowLabelDim)
         if (step >= 0) {
             val x = x0 + step * cw
             c.drawRect(x + 1f, 3f, x + cw - 1f, 13f, playheadFill)
@@ -499,13 +619,15 @@ class HomePage(ui: Ui) : Page(ui) {
             val lp = if (audible) rowLabel else rowLabelDim
             c.drawText(fitEnd(ui.engine.kit[s].name.ifEmpty { "—" }, lp, x0 - 18f), 15f, y + 12f, lp)
             c.restore()
-            for (t in 0 until Pattern.STEPS) {
-                val x = x0 + t * cw
-                val v = p.vel[s][t]
+            for (tt in 0 until 16) {
+                val t = page * 16 + tt
+                val x = x0 + tt * cw
+                if (t >= len) { c.drawRect(x + 1f, y + 2f, x + cw - 1f, y + rowH - 1f, cellOff); continue }
+                val v = if (p.hasStep(s, t)) maxOf(p.vel(s, t), 0.4f) else 0f
                 val paint = when {
                     v > 0f && audible -> if (v > 0.5f) paintOf(s) else dimOf(s)
                     v > 0f -> cellOffBeat
-                    (t / 4) % 2 == 0 -> cellOffBeat
+                    (tt / 4) % 2 == 0 -> cellOffBeat
                     else -> cellOff
                 }
                 c.drawRect(x + 1f, y + 2f, x + cw - 1f, y + rowH - 1f, paint)

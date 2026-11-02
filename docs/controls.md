@@ -18,15 +18,15 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 |---|---|---|
 | PLAY | Start / stop playback | ✅ |
 | REC | Toggle recording while playing (starts playback if stopped) | ✅ |
-| SHIFT + REC (Count-in) | Record with a one-bar count-in | ⬜ |
+| SHIFT + REC (Count-in) | Record with a one-bar count-in (clicks) | ✅ |
 | STOP | Stop. Pressed again while stopped: every sound fades out (stops long samples and tails). | ✅ |
 | RESTART | Restart playback from the beginning of the loop | ✅ |
 | SHIFT + RESTART (Loop) | Loop on / off | ⬜ |
 | ERASE + pad | Erase that sound's events in the pattern | ✅ |
 | SHIFT + ERASE (Replace) | Recording replaces existing events instead of adding | ⬜ |
-| TAP | Tap tempo | ⬜ |
-| SHIFT + TAP (Metro) | Metronome on / off | ⬜ |
-| FOLLOW | Display follows the playhead | ⬜ |
+| TAP | Tap tempo | ✅ |
+| SHIFT + TAP (Metro) | Metronome on / off | ✅ |
+| FOLLOW | Step pages follow the playhead | ✅ |
 | SHIFT + FOLLOW (Grid) | Grid / quantise settings | ⬜ |
 
 ## Pad modes (buttons above the pads)
@@ -44,14 +44,14 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| SCENE | Select or create scenes on the pads | ⬜ |
+| SCENE | Scenes on the pads: select (launch), empty pad = new scene from the patterns playing. Hold for a quick look, press to stay. | ✅ |
 | SHIFT + SCENE (Section) | Arranger sections | ⬜ |
-| PATTERN | Select or create patterns of the focused group on the pads | ⬜ |
+| PATTERN | Patterns of the focused group on the pads: select (starts at the end of the playing one), empty pad = new. K1 length. Hold or press like SCENE. | ✅ |
 | EVENTS | Edit or select events: pads choose the sound, encoder and knobs edit | ⬜ |
 | VARIATION | Humanise / randomise the selected events | ⬜ |
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
-| DUPLICATE + pad | Duplicate a sound, pattern or scene onto another pad | ⬜ |
-| SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ⬜ |
+| DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
+| SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
 | SELECT + pad | Focus a sound without playing it | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons) | ✅ |
@@ -70,19 +70,19 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Pad | Function | Status |
 |---|---|---|
-| 1 | Undo | ⬜ |
-| 2 | Redo | ⬜ |
-| 3 | Step undo | ⬜ |
-| 4 | Step redo | ⬜ |
-| 5 | Quantise | ⬜ |
-| 6 | Quantise 50 % | ⬜ |
-| 7 | Nudge left | ⬜ |
-| 8 | Nudge right | ⬜ |
-| 9 | Clear (pattern / selection) | 🟡 (SHIFT + ERASE clears all today) |
+| 1 | Undo | ✅ |
+| 2 | Redo | ✅ |
+| 3 | Step undo (same as undo) | ✅ |
+| 4 | Step redo (same as redo) | ✅ |
+| 5 | Quantise (notes are already recorded on the step grid) | ✅ |
+| 6 | Quantise 50 % (as above) | ✅ |
+| 7 | Nudge the focused sound's notes one step left | ✅ |
+| 8 | Nudge right | ✅ |
+| 9 | Clear the focused group's pattern | ✅ |
 | 10 | Clear automation | ⬜ |
-| 11 | Copy | ⬜ |
-| 12 | Paste | ⬜ |
-| 13 | Semitone down (KEYBOARD / CHORDS) | ✅ |
+| 11 | Copy the pattern | ✅ |
+| 12 | Paste the pattern | ✅ |
+| 13 | Semitone down: KEYBOARD / CHORDS layout, or the focused sound's notes (pad mode) | ✅ |
 | 14 | Semitone up (KEYBOARD / CHORDS) | ✅ |
 | 15 | Octave down (KEYBOARD / CHORDS) | ✅ |
 | 16 | Octave up (KEYBOARD / CHORDS) | ✅ |
@@ -94,12 +94,12 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | CHANNEL (MIDI) | Channel / sound properties of the focused sound | ⬜ |
 | PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound | ✅ (full app) |
 | ARRANGER | Arranger view (scenes / sections / song) | ⬜ |
-| MIXER | Mixer: levels, pan, sends per sound or group | ⬜ |
+| MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder | ✅ (sends ⬜) |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, edit, slice; zones planned) |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
-| FILE (Save) | Project menu. SHIFT + FILE saves. | ⬜ (pattern and kit autosave today) |
+| FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
 | SETTINGS | Settings | 🟡 (LED palette page today) |
 | AUTO | Record knob automation while held / latched | ⬜ |
 | MACRO (Set) | Macro controls | ⬜ |
@@ -112,9 +112,9 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Knobs 1–8 | Parameters shown on the screen above each knob. Touching a knob shows its value. | 🟡 (fixed: volume, sensitivity, tempo, swing) |
 | 4D encoder turn | Context value: list scrolling, or the selected encoder mode | 🟡 (tempo on home, scroll in browser) |
 | 4D encoder push / tilt | Confirm / navigate | ✅ (browser) |
-| VOLUME (Velocity) | Encoder adjusts master or focused volume. SHIFT: note velocity. | ⬜ |
-| SWING (Position) | Encoder adjusts swing. SHIFT: event position. | ⬜ (knob 4 today) |
-| TEMPO (Tune) | Encoder adjusts tempo. SHIFT: tune. | ⬜ (encoder always tempo today) |
+| VOLUME (Velocity) | Encoder adjusts the master volume (press again: back to tempo) | 🟡 (velocity ⬜) |
+| SWING (Position) | Encoder adjusts swing | 🟡 (position ⬜) |
+| TEMPO (Tune) | Encoder adjusts tempo (SHIFT: fine). SHIFT + TEMPO: encoder tunes the focused sound. | ✅ |
 | NOTE REPEAT (Arp) | Hold (momentary) or quick press (latch): pads repeat at the chosen rate, velocity follows pressure. SHIFT: arpeggiator. | ✅ |
 | LOCK (Ext Lock) | Snapshot / lock parameter states | ⬜ |
 
@@ -122,10 +122,10 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| PITCH | Strip bends pitch of the focused sound | ⬜ |
-| MOD | Strip sends modulation | ⬜ |
-| PERFORM (FX Select) | Strip controls performance effects (e.g. filter sweep, stutter) | ⬜ |
-| NOTES | Strip plays notes or strums | ⬜ |
+| PITCH | Strip bends the focused sound ±2 semitones (springs back) | ✅ |
+| MOD | Strip closes a low-pass filter on the focused sound (stays where left) | ✅ |
+| PERFORM (FX Select) | Strip sweeps a filter on the focused group: left low-pass, right high-pass (off when released) | ✅ (more effects ⬜) |
+| NOTES | Strip plays the keyboard layout's notes on the focused sound as you slide | ✅ |
 
 ## Sampling sources
 
@@ -197,6 +197,20 @@ fades with RELEASE). Sequencer notes last one step.
 | Chorus | Rate, depth, mix, delay, feedback, width |
 | Delay | Time (ms, or note values when synced), sync, feedback, mix, ping-pong, low cut, high cut, modulation |
 | Reverb | Character (DENSE / LUSH / VAST), pre-delay, size, decay, high cut, low cut, diffusion, modulation, mix, freeze, width |
+
+## Patterns and scenes
+
+- Every group has 16 pattern slots; a pattern is 1 step to 4 bars of 16ths (K1 in PATTERN mode,
+  16 steps at a time; hold SHIFT for single steps).
+- Choosing a pattern while playing starts it when the playing one ends (its pad blinks until
+  then); stopped, it switches at once. All groups keep playing together.
+- 16 scenes: each remembers one pattern (or none) per group. Launching a scene switches every
+  group at the end of its pattern.
+- PATTERN mode: D5 duplicate (to the next free slot), D6 delete, D7 double, D8 clear notes.
+  SCENE mode: D5 duplicate, D6 delete, D8 update the scene with the patterns playing now.
+- STEP mode: ◀ ▶ move through the bars of longer patterns; FOLLOW makes the page follow the
+  playhead. Recording into a group without a pattern creates one.
+- Songs (patterns, scenes, mixer settings) are kept automatically and saved in projects (FILE).
 
 ## KEYBOARD, CHORDS and 16 VEL
 

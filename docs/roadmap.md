@@ -18,11 +18,11 @@ full app.
 4. **Groups** — done in 0.5.0 (patterns per group come with step 5)
    - 8 groups × 16 sounds.
    - Group buttons, group mute/solo, choke groups.
-5. **Patterns, scenes, arranger**
+5. **Patterns, scenes, arranger** — patterns, scenes, duplicate, double done in 0.8.0 (arranger next)
    - Multiple patterns per group, adjustable length.
    - Scenes, then the arranger / song.
    - DUPLICATE and Double.
-6. **Projects**
+6. **Projects** — FILE projects and undo / redo done in 0.8.0
    - Save and load projects (FILE).
    - Undo / redo (SHIFT + pads 1–4).
 7. **Event editing**
@@ -42,7 +42,7 @@ full app.
 10. **Effects** — compressor, chorus, delay, reverb done in 0.6.0 (EQ, filter, saturation next)
     - Insert and send effects: filter, EQ, compressor, saturation, delay, reverb.
     - Candidates: Airwindows (MIT), DaisySP, Surge XT.
-11. **Mixer and automation**
+11. **Mixer and automation** — mixer done in 0.8.0 (automation next)
     - MIXER view, AUTO recording, MACRO.
 
 Third-party DSP code keeps its original licence headers. It is listed in `THIRD_PARTY_NOTICES.md`

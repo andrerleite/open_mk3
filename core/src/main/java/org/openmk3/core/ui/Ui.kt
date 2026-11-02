@@ -62,6 +62,153 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         private set
     /** FIXED VEL: pads play at full velocity (global, like the hardware workflow). */
     @Volatile var fixedVel = false
+    // ---- undo history (song snapshots after each edit) and the pattern clipboard ----
+    private val undoStack = ArrayDeque<String>()
+    private val redoStack = ArrayDeque<String>()
+    private var lastState: String? = null
+    var clipboard: org.openmk3.core.audio.PatternData? = null
+
+    /** Call after a finished edit: the previous state becomes undoable. */
+    fun checkpoint() {
+        val now = engine.pattern.toJson().toString()
+        if (now == lastState) return
+        lastState?.let { undoStack.addLast(it); if (undoStack.size > 50) undoStack.removeFirst() }
+        redoStack.clear()
+        lastState = now
+    }
+
+    fun undo(): Boolean {
+        val prev = undoStack.removeLastOrNull() ?: return false
+        lastState?.let { redoStack.addLast(it) }
+        restore(prev)
+        AppLog.i("Undo")
+        return true
+    }
+
+    fun redo(): Boolean {
+        val next = redoStack.removeLastOrNull() ?: return false
+        lastState?.let { undoStack.addLast(it) }
+        restore(next)
+        AppLog.i("Redo")
+        return true
+    }
+
+    private fun restore(state: String) {
+        engine.pattern.loadJson(org.json.JSONObject(state))
+        engine.pattern.save(ctx)
+        lastState = state
+        dirty = true
+    }
+
+    // ---- TAP tempo ----
+    private val taps = ArrayDeque<Long>()
+
+    private fun tap() {
+        val now = SystemClock.uptimeMillis()
+        if (taps.isNotEmpty() && now - taps.last() > 2000) taps.clear()
+        taps.addLast(now)
+        if (taps.size > 5) taps.removeFirst()
+        if (taps.size >= 2) {
+            val avg = (taps.last() - taps.first()).toDouble() / (taps.size - 1)
+            engine.bpm = (60000.0 / avg).coerceIn(40.0, 240.0)
+            engine.pattern.save(ctx)
+            AppLog.i("Tap tempo ${"%.1f".format(engine.bpm)} BPM")
+        }
+    }
+
+    private var slotDownAt = 0L
+
+    /** SHIFT + FILE: save the current project (or a new one). */
+    private fun quickSave() {
+        try {
+            val name = org.openmk3.core.audio.Project.currentName(ctx) ?: org.openmk3.core.audio.Project.nextName()
+            org.openmk3.core.audio.Project.save(ctx, engine, Colours.group, keys, name)
+        } catch (e: Exception) {
+            AppLog.i("Quick save failed: $e")
+        }
+    }
+
+    // ---- touch strip: PITCH bend, MOD wheel, PERFORM (group filter), NOTES (strum) ----
+    enum class StripMode { OFF, PITCH, MOD, PERFORM, NOTES }
+    @Volatile var stripMode = StripMode.PITCH
+    private var stripMin = Int.MAX_VALUE
+    private var stripMax = Int.MIN_VALUE
+    private var stripLogged = 0
+    private var stripTouched = false
+    private var stripAt = 0L
+    private var stripValue = 0.5f
+    private var stripNote = -1
+    private var stripNoteSound = -1
+    private var stripLedsShown = -2
+
+    /** 0..1 from the raw position, calibrating to the range seen so far. */
+    private fun stripNorm(raw: Int): Float {
+        if (raw < stripMin) stripMin = raw
+        if (raw > stripMax) stripMax = raw
+        val span = (stripMax - stripMin).coerceAtLeast(200)
+        return ((raw - stripMin).toFloat() / span).coerceIn(0f, 1f)
+    }
+
+    private fun stripMove(raw: Int) {
+        if (stripLogged < 12) { stripLogged++; AppLog.i("Touch strip raw $raw") }
+        val v = stripNorm(raw)
+        stripTouched = true
+        stripAt = SystemClock.uptimeMillis()
+        stripValue = v
+        val sp = engine.params
+        when (stripMode) {
+            StripMode.PITCH -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = (v - 0.5f) * 4f  // +-2 semitones
+            StripMode.MOD -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.MODW] = v
+            StripMode.PERFORM -> engine.pattern.setGroupFilter(group, (v - 0.5f) * 2f)
+            StripMode.NOTES -> {
+                val i = (v * 15.99f).toInt()
+                val note = keys.noteFor(i)
+                if (note != stripNote) {
+                    if (stripNote >= 0) engine.noteOff(stripNoteSound, stripNote)
+                    stripNoteSound = selectedIndex
+                    engine.noteOn(stripNoteSound, note, 0.8f)
+                    stripNote = note
+                }
+            }
+            StripMode.OFF -> {}
+        }
+    }
+
+    /** No strip events for a moment = finger lifted: bend springs back, performance FX off. */
+    private fun stripRelease() {
+        stripTouched = false
+        val sp = engine.params
+        when (stripMode) {
+            StripMode.PITCH -> { sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = 0f; stripValue = 0.5f }
+            StripMode.PERFORM -> { engine.pattern.setGroupFilter(group, 0f); stripValue = 0.5f }
+            StripMode.NOTES -> { if (stripNote >= 0) engine.noteOff(stripNoteSound, stripNote); stripNote = -1 }
+            else -> {}
+        }
+    }
+
+    private fun stripLeds() {
+        val pos = (stripValue * 24.99f).toInt()
+        val key = stripMode.ordinal * 100 + pos + if (stripTouched) 1000 else 0
+        if (key == stripLedsShown) return
+        stripLedsShown = key
+        val c = soundColour(selectedIndex)
+        for (i in 0 until 25) {
+            val v = when (stripMode) {
+                StripMode.OFF -> 0
+                StripMode.MOD -> if (i <= pos) org.openmk3.core.mk3.Mk3Colors.value(c, 2) else 0
+                StripMode.PITCH, StripMode.PERFORM -> when {
+                    i == pos -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+                    i == 12 -> org.openmk3.core.mk3.Mk3Colors.value(org.openmk3.core.mk3.Mk3Colors.WHITE, 0)
+                    else -> 0
+                }
+                StripMode.NOTES -> if (stripTouched && i == pos) org.openmk3.core.mk3.Mk3Colors.value(c, 3) else if (i % 3 == 0) org.openmk3.core.mk3.Mk3Colors.value(c, 0) else 0
+            }
+            dev.setPadLed(i, v)
+        }
+    }
+
+    /** FOLLOW: step pages follow the playhead. */
+    @Volatile var follow = true
     /** Snap sample markers (start, end, loop, slices) to zero crossings. */
     @Volatile var zeroSnap = false
 
@@ -136,6 +283,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private val heldAsRepeat = BooleanArray(16)
 
     fun start() {
+        lastState = engine.pattern.toJson().toString()
         if (!map.padsMapped || !map.buttonsMapped) {
             AppLog.i("No complete control mapping yet: starting the mapping wizard")
             page = WizardPage(this, WizardPage.Mode.ALL)
@@ -187,6 +335,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (page.tick(now)) dirty = true
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
+            if (page !is WizardPage) {
+                if (stripTouched && now - stripAt > 350) stripRelease()
+                stripLeds()
+            }
             if (!dirty) return
             dirty = false
             page.draw(left.canvas, right.canvas, now)
@@ -287,6 +439,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             pushRepeat()
             return@post
         }
+        // PATTERN / SCENE held (not tapped): releasing returns to the previous page
+        if (!down && (name == "PATTERN" || name == "SCENE")) {
+            val cur = page
+            if (cur is SlotPage && SystemClock.uptimeMillis() - slotDownAt > 400) cur.back()
+            return@post
+        }
         // while NOTE REPEAT is held, D1-D8 choose the rate
         if (repeatHeld && down && name != null && name.length == 2 && name[0] == 'D' && name[1] in '1'..'8') {
             repeatRate = name[1] - '1'
@@ -312,6 +470,37 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 return@post
             }
             when (name) {
+                "TAP" -> {
+                    if (shiftHeld) {
+                        engine.pattern.metronome = !engine.pattern.metronome
+                        engine.pattern.save(ctx)
+                        AppLog.i("Metronome ${if (engine.pattern.metronome) "on" else "off"}")
+                    } else tap()
+                    dirty = true
+                    return@post
+                }
+                "FOLLOW" -> { follow = !follow; dirty = true; return@post }
+                "MIXER" -> { if (page is MixerPage) showHome() else show(MixerPage(this)); return@post }
+                "FILE" -> {
+                    if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
+                    return@post
+                }
+                "PITCH", "MOD", "PERFORM", "NOTES" -> {
+                    val m = StripMode.valueOf(name)
+                    stripMode = if (stripMode == m) StripMode.OFF else m
+                    stripLedsShown = -2
+                    AppLog.i("Touch strip: $stripMode")
+                    dirty = true
+                    return@post
+                }
+                "PATTERN", "SCENE" -> {
+                    val kind = if (name == "PATTERN") SlotPage.Kind.PATTERN else SlotPage.Kind.SCENE
+                    val cur = page
+                    if (cur is SlotPage && cur.kind == kind) cur.back()
+                    else show(SlotPage(this, if (cur is SlotPage) cur.let { org.openmk3.core.Edition.homePage(this) } else cur, kind))
+                    slotDownAt = SystemClock.uptimeMillis()
+                    return@post
+                }
                 "KEYBOARD" -> setPadMode(if (padMode == PadMode.KEYBOARD) PadMode.PAD else PadMode.KEYBOARD)
                 "CHORDS" -> setPadMode(if (padMode == PadMode.CHORDS) PadMode.PAD else PadMode.CHORDS)
                 "PAD MODE" -> if (!shiftHeld) setPadMode(PadMode.PAD)
@@ -356,7 +545,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
     override fun onKnobTouch(knob: Int, touched: Boolean) = post { page.onKnobTouch(knob, touched); dirty = true }
     override fun onEncoder(delta: Int) = post { page.onEncoder(delta); dirty = true }
-    override fun onTouchStrip(position: Int, counter: Int) = post { page.onTouchStrip(position); dirty = true }
+    override fun onTouchStrip(position: Int, counter: Int) = post {
+        if (page is WizardPage) page.onTouchStrip(position) else stripMove(position)
+        dirty = true
+    }
 
     // =====================================================================================
     // LED helpers (UI thread)
@@ -375,6 +567,16 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("KEYBOARD", padMode == PadMode.KEYBOARD)
         lights.set("CHORDS", padMode == PadMode.CHORDS)
         lights.set("NOTE REPEAT", repeatActive)
+        lights.set("TAP", engine.pattern.metronome)
+        lights.set("PITCH", stripMode == StripMode.PITCH)
+        lights.set("MOD", stripMode == StripMode.MOD)
+        lights.set("PERFORM", stripMode == StripMode.PERFORM)
+        lights.set("NOTES", stripMode == StripMode.NOTES)
+        lights.set("MIXER", page is MixerPage)
+        lights.set("FILE", page is FilePage)
+        lights.set("FOLLOW", follow)
+        lights.set("PATTERN", false)
+        lights.set("SCENE", false)
         page.lights(lights)
         lights.set("FIXED VEL", fixedVel || padMode == PadMode.VEL16)
         if (repeatHeld) for (i in 0 until 8) lights.set("D${i + 1}", i == repeatRate)
