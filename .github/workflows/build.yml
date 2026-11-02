@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# One build at a time per branch: two runs replacing the "latest" release at once can fail.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
