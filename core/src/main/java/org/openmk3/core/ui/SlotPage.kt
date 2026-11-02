@@ -15,6 +15,7 @@ import org.openmk3.core.mk3.Mk3Colors
  *  - empty pad: new empty pattern / new scene from the patterns playing now
  *  - ERASE + pad: delete · DUPLICATE + source pad + target pad: duplicate
  *  - GROUP buttons (PATTERN): another group
+ * D7 / D8: previous / next bank of 16 (4 banks).
  * PATTERN: K1 length (16 steps per turn notch; SHIFT: single steps), D5 duplicate to the next
  * free slot, D6 delete, D7 double, D8 clear notes.
  * SCENE: D5 duplicate, D6 delete, D8 update the scene with the patterns playing now.
@@ -43,6 +44,24 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     private val ring = Theme.stroke(Theme.FG, 3f)
     private val empty = Theme.fill(android.graphics.Color.rgb(32, 32, 40))
 
+    private companion object {
+        val patBank = IntArray(8)
+        var sceneBank = 0
+    }
+
+    private var bank: Int
+        get() = if (kind == Kind.PATTERN) patBank[g] else sceneBank
+        set(v) { if (kind == Kind.PATTERN) patBank[g] = v else sceneBank = v }
+    private val banks = Pattern.SLOTS / Pattern.BANK_SLOTS
+    /** Slot of pad [i] in the shown bank. */
+    private fun s(i: Int) = bank * Pattern.BANK_SLOTS + i
+
+    init {
+        // open on the bank of the playing pattern / scene
+        val cur = if (kind == Kind.PATTERN) p.current[ui.group] else p.currentScene
+        if (cur >= 0) bank = cur / Pattern.BANK_SLOTS
+    }
+
     private val playing get() = ui.engine.playing
     private val g get() = ui.group
 
@@ -63,6 +82,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         val c = if (kind == Kind.PATTERN) groupColour(g) else Mk3Colors.WHITE
         val blink = (now / 200) % 2 == 0L
         for (i in 0 until 16) {
+            val i = s(i)
             val v = when {
                 isQueued(i) -> if (blink) Mk3Colors.value(c, 3) else Mk3Colors.value(c, 0)
                 isCurrent(i) -> Mk3Colors.value(c, 3)
@@ -81,11 +101,12 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         l.set("PLAY", playing)
         l.set("STOP")
         l.set("D5", "D6")
+        l.set("D7", bank > 0); l.set("D8", bank < banks - 1)
         if (kind == Kind.SCENE) l.set("D2")
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
-        val i = slot
+        val i = s(slot)
         when {
             erase -> {
                 if (!has(i)) return
@@ -143,7 +164,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
             "STOP" -> e.stopPressed()
             "D5" -> createNext()
             "D6" -> deleteCurrent()
-            "D7", "D8" -> message = "One bank of 16 for now"
+            "D7" -> if (bank > 0) bank--
+            "D8" -> if (bank < banks - 1) bank++
             "D2" -> if (kind == Kind.SCENE && p.currentScene >= 0) { p.captureScene(p.currentScene); message = "Scene ${p.currentScene + 1} updated"; changed() }
             "BROWSER", "SAMPLING", "PLUG-IN", "SETTINGS", "MIXER", "FILE" -> back()
         }
@@ -152,7 +174,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     /** D5 CREATE: a new empty pattern / scene in the next free slot after the current one. */
     private fun createNext() {
         val cur = if (kind == Kind.PATTERN) p.current[g] else p.currentScene
-        val free = ((cur + 1 until 16) + (0..cur.coerceAtLeast(0))).firstOrNull { it in 0 until 16 && !has(it) }
+        val free = ((cur + 1 until Pattern.SLOTS) + (0..cur.coerceAtLeast(0))).firstOrNull { it in 0 until Pattern.SLOTS && !has(it) }
             ?: run { message = "No free slot"; return }
         if (kind == Kind.PATTERN) p.selectPattern(g, free, playing) else p.captureScene(free)
         message = "New ${name(free)}"
@@ -162,7 +184,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     private fun duplicateCurrent() {
         val cur = if (kind == Kind.PATTERN) p.current[g] else p.currentScene
         if (cur < 0) return
-        val free = (0 until 16).firstOrNull { !has(it) } ?: run { message = "No free slot"; return }
+        val free = (0 until Pattern.SLOTS).firstOrNull { !has(it) } ?: run { message = "No free slot"; return }
         if (kind == Kind.PATTERN) { p.duplicatePattern(g, cur, free); p.selectPattern(g, free, playing) }
         else { p.scenes[free] = p.scenes[cur]!!.copyOf(); p.currentScene = free }
         message = "${name(cur)} → ${name(free)}"
@@ -233,9 +255,11 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         val col = Mk3Colors.rgb(if (kind == Kind.PATTERN) groupColour(g) else Mk3Colors.WHITE)
         val fill = Theme.fill(col)
         val dim = Theme.fill(android.graphics.Color.rgb(android.graphics.Color.red(col) / 3 + 12, android.graphics.Color.green(col) / 3 + 12, android.graphics.Color.blue(col) / 3 + 16))
-        for (i in 0 until 16) {
-            val c = i % 4
-            val row = 3 - i / 4
+        r.drawText("BANK ${bank + 1}/$banks", 380f, 270f, cellDim)
+        for (pad in 0 until 16) {
+            val i = s(pad)
+            val c = pad % 4
+            val row = 3 - pad / 4
             val x = 8f + c * (w + 4f)
             val y = 38f + row * (h + 4f)
             val rect = RectF(x, y, x + w, y + h)

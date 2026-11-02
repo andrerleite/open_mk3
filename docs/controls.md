@@ -211,11 +211,11 @@ fades with RELEASE). Sequencer notes last one step.
 
 ## Patterns and scenes
 
-- Every group has 16 pattern slots; a pattern is 1 step to 4 bars of 16ths (K1 in PATTERN mode,
+- Every group has 64 pattern slots in 4 banks of 16 (D7 / D8 change bank in PATTERN and SCENE mode); a pattern is 1 step to 4 bars of 16ths (K1 in PATTERN mode,
   16 steps at a time; hold SHIFT for single steps).
 - Choosing a pattern while playing starts it when the playing one ends (its pad blinks until
   then); stopped, it switches at once. All groups keep playing together.
-- 16 scenes: each remembers one pattern (or none) per group. Launching a scene switches every
+- 64 scenes (4 banks): each remembers one pattern (or none) per group. Launching a scene switches every
   group at the end of its pattern.
 - PATTERN mode: D5 create (next free slot), D6 delete, K4 length. SCENE mode: D2 update the
   scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +

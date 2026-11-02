@@ -14,6 +14,7 @@ import kotlin.math.abs
  *  Encoder / ◀ ▶: select a section · K1: move it earlier / later
  *  Pads: the 16 scenes. Hit one to add it after the selected section (an empty pad first makes
  *  a scene from the patterns playing now); SHIFT + pad: the selected section plays that scene
+ *  D7 / D8: previous / next bank of 16 scenes
  */
 class ArrangerPage(ui: Ui) : Page(ui) {
 
@@ -21,7 +22,9 @@ class ArrangerPage(ui: Ui) : Page(ui) {
 
     private companion object {
         var cursor = 0
+        var bank = 0
     }
+    private val banks = org.openmk3.core.audio.Pattern.SLOTS / 16
 
     private val p = ui.engine.pattern
     private var shift = false
@@ -53,6 +56,7 @@ class ArrangerPage(ui: Ui) : Page(ui) {
         l.set("D2", p.loop)
         l.set("D3", p.songJump >= 0)
         l.set("D5", "D6")
+        l.set("D7", bank > 0); l.set("D8", bank < banks - 1)
         l.set("PAGE LEFT", "PAGE RIGHT")
         l.set("SHIFT", shift)
     }
@@ -87,6 +91,8 @@ class ArrangerPage(ui: Ui) : Page(ui) {
                 cursor = cursor.coerceIn(0, maxOf(0, p.song.size - 1))
                 changed("Section deleted")
             }
+            "D7" -> if (bank > 0) bank--
+            "D8" -> if (bank < banks - 1) bank++
             "PAGE LEFT" -> cursor = (cursor - 1).coerceAtLeast(0)
             "PAGE RIGHT" -> cursor = (cursor + 1).coerceAtMost(maxOf(0, p.song.size - 1))
         }
@@ -110,7 +116,8 @@ class ArrangerPage(ui: Ui) : Page(ui) {
         changed("Section moved to ${to + 1}")
     }
 
-    override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+    override fun onPadHit(pad: Int, hid: Int, velocity: Float, pressure: Int) {
+        val slot = bank * 16 + pad
         if (p.scenes[slot] == null) p.captureScene(slot)
         if (shift && cursor in p.song.indices) {
             p.song[cursor] = slot
@@ -128,8 +135,9 @@ class ArrangerPage(ui: Ui) : Page(ui) {
     override fun draw(l: Canvas, r: Canvas, now: Long) {
         val selScene = p.song.getOrNull(cursor) ?: -1
         val playScene = if (p.songMode) p.song.getOrNull(p.songPos) ?: -1 else p.currentScene
-        for (i in 0 until 16) {
-            ui.padLed(i, when {
+        for (pad in 0 until 16) {
+            val i = bank * 16 + pad
+            ui.padLed(pad, when {
                 p.scenes[i] == null -> 0
                 i == playScene && (now / 250) % 2 == 0L && ui.engine.playing -> Mk3Colors.value(Mk3Colors.WHITE, 3)
                 i == selScene -> Mk3Colors.value(Mk3Colors.WHITE, 3)
@@ -143,6 +151,9 @@ class ArrangerPage(ui: Ui) : Page(ui) {
         l.drawText("JUMP", 300f, 24f, if (p.songJump >= 0) dOn else dLabel)
         r.drawText("DUPL", 60f, 24f, dLabel)
         r.drawText("DELETE", 180f, 24f, dLabel)
+        r.drawText("◀ BANK", 300f, 24f, dLabel)
+        r.drawText("BANK ▶", 420f, 24f, dLabel)
+        r.drawText("scenes ${bank * 16 + 1}–${bank * 16 + 16}", 400f, 270f, small)
         l.drawText("ARRANGER", 16f, 60f, title)
         val totalBars = p.song.sumOf { p.sceneLength(it) } / 16f
         l.drawText(if (p.song.isEmpty()) "Hit scene pads to build the song" else "${p.song.size} sections · ${"%.1f".format(totalBars)} bars", 16f, 90f, label)

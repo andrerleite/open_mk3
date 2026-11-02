@@ -115,7 +115,8 @@ class Pattern {
         const val PADS = 16
         const val SOUNDS = GROUPS * PADS
         const val STEPS = 64           // longest pattern: 4 bars of 16ths
-        const val SLOTS = 16           // patterns per group, and scenes
+        const val SLOTS = 64           // patterns per group, and scenes (4 banks of 16)
+        const val BANK_SLOTS = 16
         const val EXTRA = 3            // extra notes per step (chords)
         const val ROOT = 60
 
