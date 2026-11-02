@@ -22,6 +22,8 @@ public:
     virtual ~Effect() {}
     /** [p] points at this slot's 16 parameters; [bpm] for tempo-synced effects. */
     virtual void process(float* io, int frames, const float* p, double bpm, float sr) = 0;
+    /** Silences tails (delay lines, reverb) on the audio thread: "all sounds off". */
+    virtual void reset() {}
     /** A level for the screen: gain reduction (dB) for the compressor, else 0. */
     float meter = 0.f;
 };
@@ -66,6 +68,7 @@ public:
         return ((c3 * t + c2) * t + c1) * t + y1;
     }
     int size() const { return mask_ + 1; }
+    void clear() { std::fill(buf_.begin(), buf_.end(), 0.f); }
 
 private:
     std::vector<float> buf_;
@@ -77,6 +80,7 @@ private:
 class Allpass {
 public:
     void init(int maxLen) { d_.init(maxLen + 64); }
+    void clear() { d_.clear(); }
     inline float process(float x, float len, float g) {
         float delayed = d_.read(len);
         float v = x + g * delayed;
@@ -170,6 +174,8 @@ public:
         }
     }
 
+    void reset() override { dl_.clear(); dr_.clear(); fbL_ = fbR_ = 0.f; }
+
 private:
     DelayLine dl_, dr_;
     float phase_ = 0.f, fbL_ = 0.f, fbR_ = 0.f;
@@ -227,6 +233,8 @@ public:
             io[i * 2 + 1] = r + yr * mix;
         }
     }
+
+    void reset() override { dl_.clear(); dr_.clear(); lpL_ = lpR_ = hpL_ = hpR_ = 0.f; }
 
 private:
     DelayLine dl_, dr_;
@@ -344,6 +352,13 @@ public:
             io[i * 2] = inL * (1.f - mix) + (m + s) * mix;
             io[i * 2 + 1] = inR * (1.f - mix) + (m - s) * mix;
         }
+    }
+
+    void reset() override {
+        pre_[0].clear(); pre_[1].clear();
+        for (int k = 0; k < N; k++) { line_[k].clear(); loopAp_[k].clear(); lp_[k] = 0.f; }
+        for (auto& side : inAp_) for (auto& a : side) a.clear();
+        hpS_[0] = hpS_[1] = 0.f;
     }
 
 private:

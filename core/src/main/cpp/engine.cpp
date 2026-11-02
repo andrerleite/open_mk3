@@ -184,6 +184,7 @@ struct Voice {
     int slot = -1;
     uint64_t age = 0;
     int note = kRootNote;
+    int64_t startAt = 0;
     bool fromSeq = false;
     int gate = -1;        // frames until note-off (sequencer), -1 = held until released
     bool released = false;
@@ -377,6 +378,8 @@ public:
     std::atomic<bool> recorded{false};   // set when the engine wrote into the pattern (Kotlin syncs)
 private:
     void killSlot(int slot);
+    int fxResetChunks = 0;
+    int64_t framesDone = 0;  // frames rendered so far (absolute time for duplicate checks)
     void renderChunk(float* out, int32_t frames);
     void freeSynth(Voice& v) {
         if (v.synth >= 0 && synthOwner[v.synth] == &v) synthOwner[v.synth] = nullptr;
@@ -633,6 +636,7 @@ void Engine::releaseSlot(int slot, int note) {
 void Engine::killSlot(int slot) {
     for (auto& v : voices)
         if (v.sample && (slot < 0 || v.slot == slot) && v.fadeOut < 0) v.fadeOut = kFadeOut;
+    if (slot < 0) fxResetChunks = 3;  // everything off: effect tails too (after the fade-outs)
 }
 
 void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note, int chord) {
@@ -644,6 +648,11 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
     // oldest voices of this sound beyond the limit instead of piling on their tails.
+    // The same note of the same sound starting at the same moment twice (a recorded note
+    // and the live repeat that recorded it) would only cut itself off: play it once.
+    const int64_t startAt = framesDone + offset;
+    for (auto& v : voices)
+        if (v.sample && v.slot == slot && v.note == std::clamp(note, 0, 127) && std::llabs(v.startAt - startAt) < 48) return;
     // A chord always gets enough voices for its own notes.
     int poly = std::max(std::clamp(int(P[P_POLY] + 0.5f), 1, 16), std::clamp(chord, 1, 8));
     while (true) {
@@ -705,6 +714,7 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     v.age = ++voiceAge;
     v.fromSeq = fromSeq;
     v.note = std::clamp(note, 0, 127);
+    v.startAt = startAt;
     v.gate = gate;
     v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
@@ -973,6 +983,7 @@ void Engine::render(float* out, int32_t frames) {
 }
 
 void Engine::renderChunk(float* out, int32_t frames) {
+    struct Advance { int64_t& f; int n; ~Advance() { f += n; } } advance{framesDone, frames};
     // effects swapped in by Java (allocation happens there; frees happen there too)
     if (fxDirty.exchange(0, std::memory_order_acq_rel)) {
         for (int c = 0; c < kChains; c++)
@@ -1025,6 +1036,10 @@ void Engine::renderChunk(float* out, int32_t frames) {
     runRepeat(frames);
     runSequencer(frames);
 
+    if (fxResetChunks > 0) {
+        fxResetChunks--;
+        for (auto& chain : fxCur) for (auto* e : chain) if (e) e->reset();
+    }
     // 3. voices -> sound buses (sounds with effects) or group buses
     std::memset(out, 0, sizeof(float) * frames * 2);
     for (auto& gb : groupBus) std::memset(gb, 0, sizeof(float) * frames * 2);
@@ -1104,7 +1119,9 @@ void Engine::renderChunk(float* out, int32_t frames) {
         const float auxMix = std::clamp(P[P_SAUX], 0.f, 1.f);
         // gate mode: note-off fades the sound with RELEASE (a synth without its own gate
         // and without an envelope always behaves like this, or it would never stop)
-        const bool gateMode = P[P_GATE] > 0.5f || (synth && !sp.lpg && v.envType == 0);
+        // synth notes always end on note-off (with RELEASE): a model's own gate can leave a
+        // faint residual that never counts as silent, so the note would hang
+        const bool gateMode = P[P_GATE] > 0.5f || synth;
         // loop (only with a releasing envelope, so a looped sound always ends)
         const int n = s->frames;
         const bool loop = !synth && v.envType != 0 && P[P_LOOP] > 0.5f;
@@ -1277,7 +1294,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
             // a synth whose own gate has closed: end the voice once it stays silent
             if (synth && !done) {
                 v.ageBlocks++;
-                if (blockPeak < 1e-4f) v.quietBlocks++; else v.quietBlocks = 0;
+                if (blockPeak < 3e-4f) v.quietBlocks++; else v.quietBlocks = 0;
                 if (v.ageBlocks > 30 && v.quietBlocks > 40 && (sp.lpg || v.released)) done = true;
             }
             // ---- advance control-rate modulators by the block just rendered ----

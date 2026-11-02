@@ -32,6 +32,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         return if (c in 1..16) c else groupColour(sound / 16)
     }
 
+    /** True if a sound makes sound: it has a sample, or its source is the synth. */
+    fun hasSound(sound: Int) = engine.kit[sound].frames > 0 || engine.params[sound, org.openmk3.core.audio.SoundParams.SRC] > 0.5f
+
     /** SHIFT, held on any page (for global SHIFT + group / SELECT shortcuts). */
     @Volatile var shiftHeld = false
         private set
@@ -610,7 +613,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 when {
                     hot -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
                     slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 2)
-                    engine.kit[sound].frames > 0 -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
+                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
                     else -> 0
                 }
             }

@@ -167,7 +167,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 Mode.PAD -> if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot) else {
                     val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
                     when {
-                        ui.engine.kit[sd(slot)].frames == 0 -> 0
+                        !ui.hasSound(sd(slot)) -> 0
                         !p.audible(sd(slot)) -> if (hot) Mk3Colors.value(c, 0) else 0
                         hot -> Mk3Colors.value(c, 2)
                         slot == selected -> Mk3Colors.value(c, 1)
