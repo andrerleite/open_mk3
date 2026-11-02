@@ -164,7 +164,15 @@ class HomePage(ui: Ui) : Page(ui) {
         for (slot in 0 until 16) {
             val c = ui.soundColour(sd(slot))
             val v = when (mode) {
-                Mode.PAD -> if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot) else {
+                Mode.PAD -> if (mute || solo) {
+                    // MUTE: audible pads fully lit, muted half lit · SOLO: soloed fully lit, the rest dim
+                    val snd = sd(slot)
+                    when {
+                        !ui.hasSound(snd) -> 0
+                        mute -> Mk3Colors.value(c, if (p.mute[snd]) 0 else 3)
+                        else -> Mk3Colors.value(c, if (p.solo[snd]) 3 else 0)
+                    }
+                } else if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot) else {
                     val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
                     when {
                         !ui.hasSound(sd(slot)) -> 0
@@ -310,15 +318,12 @@ class HomePage(ui: Ui) : Page(ui) {
             "VOLUME" -> encMode = if (encMode == Enc.VOLUME) Enc.TEMPO else Enc.VOLUME
             "SWING" -> encMode = if (encMode == Enc.SWING) Enc.TEMPO else Enc.SWING
             "TEMPO" -> encMode = if (shift) Enc.TUNE else Enc.TEMPO
-            "STEP" -> mode = if (mode == Mode.STEP) Mode.PAD else Mode.STEP
+            "STEP" -> mode = Mode.STEP  // PAD MODE / KEYBOARD / CHORDS leave it
             "KEYBOARD", "CHORDS" -> mode = Mode.PAD  // leave STEP: pads play notes / chords
-            "PAD MODE" -> if (shift) {
-                flash = !flash
-                AppLog.i("Pad LED flashing ${if (flash) "on" else "OFF"}")
-            } else mode = Mode.PAD
+            "PAD MODE" -> mode = Mode.PAD
             "PAGE LEFT" -> if (mode == Mode.STEP) { stepPage = (viewPage - 1).coerceAtLeast(0); ui.follow = false } else selected = (selected + 15) % 16
             "PAGE RIGHT" -> if (mode == Mode.STEP) { stepPage = (viewPage + 1).coerceAtMost(pages - 1); ui.follow = false } else selected = (selected + 1) % 16
-            "SETTINGS" -> ui.show(PalettePage(ui))
+            "SETTINGS" -> ui.show(SettingsPage(ui))
             "BROWSER" -> ui.show(BrowserPage(ui))
             "SAMPLING" -> ui.show(SamplingPage(ui))
             "PLUG-IN" -> if (Edition.full) ui.show(SoundPage(ui))
@@ -329,7 +334,7 @@ class HomePage(ui: Ui) : Page(ui) {
 
     /** KEYBOARD / CHORDS knobs: K1 root, K2 scale, K3 octave; CHORDS: K5 mode, K6 type / set. */
     private fun keysKnob(knob: Int, delta: Int): Boolean {
-        if (mode == Mode.STEP || (ui.padMode != Ui.PadMode.KEYBOARD && ui.padMode != Ui.PadMode.CHORDS)) return false
+        if (mode == Mode.STEP || !ui.padParams || (ui.padMode != Ui.PadMode.KEYBOARD && ui.padMode != Ui.PadMode.CHORDS)) return false
         keyAcc += delta
         if (kotlin.math.abs(keyAcc) < 25) return true
         val d = if (keyAcc > 0) 1 else -1
@@ -367,6 +372,24 @@ class HomePage(ui: Ui) : Page(ui) {
 
     override fun onEncoder(delta: Int) {
         val e = ui.engine
+        // hold a pad or a group button: VOLUME / TEMPO change that sound or group only
+        val heldPad = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
+        val sp = e.params
+        val k = if (shift) 0.1f else 1f
+        if (heldPad != null && (encMode == Enc.VOLUME || encMode == Enc.TEMPO || encMode == Enc.TUNE)) {
+            val snd = sd(heldPad)
+            if (encMode == Enc.VOLUME) sp[snd, org.openmk3.core.audio.SoundParams.VOL] = (sp[snd, org.openmk3.core.audio.SoundParams.VOL] + delta * 0.5f * k).coerceIn(-60f, 12f)
+            else sp[snd, org.openmk3.core.audio.SoundParams.TUNE] = (sp[snd, org.openmk3.core.audio.SoundParams.TUNE] + delta * k).coerceIn(-36f, 36f)
+            sp.save(ui.ctx)
+            return
+        }
+        if (ui.heldGroup >= 0 && (encMode == Enc.VOLUME || encMode == Enc.TEMPO || encMode == Enc.TUNE)) {
+            val g = ui.heldGroup
+            if (encMode == Enc.VOLUME) pattern.setGroupVolume(g, pattern.groupVolume(g) + delta * 0.5f * k)
+            else for (i in 0 until 16) sp[g * 16 + i, org.openmk3.core.audio.SoundParams.TUNE] = (sp[g * 16 + i, org.openmk3.core.audio.SoundParams.TUNE] + delta * k).coerceIn(-36f, 36f)
+            sp.save(ui.ctx); changed()
+            return
+        }
         when (encMode) {
             Enc.TEMPO -> e.bpm = if (shift) (e.bpm + delta * 0.1).coerceIn(40.0, 240.0)
                 else (Math.round(e.bpm) + delta).toDouble().coerceIn(40.0, 240.0)
@@ -513,7 +536,7 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
-        if (mode != Mode.STEP && ui.padMode != Ui.PadMode.PAD) { drawKeys(l, r); return }
+        if (mode != Mode.STEP && ui.padParams && ui.padMode != Ui.PadMode.PAD) { drawKeys(l, r); return }
         drawLeft(l)
         drawGrid(r)
     }

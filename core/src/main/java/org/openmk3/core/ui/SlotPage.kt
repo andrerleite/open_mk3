@@ -81,8 +81,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         l.set("PLAY", playing)
         l.set("STOP")
         l.set("D5", "D6")
-        if (kind == Kind.PATTERN) l.set("D7")
-        l.set("D8")
+        if (kind == Kind.SCENE) l.set("D2")
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
@@ -136,13 +135,22 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         when (name) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.stopPressed()
-            "D5" -> duplicateCurrent()
+            "D5" -> createNext()
             "D6" -> deleteCurrent()
-            "D7" -> if (kind == Kind.PATTERN) { message = if (p.double(g)) "Doubled: ${p.length(g)} steps" else "Already 4 bars"; changed() }
-            "D8" -> if (kind == Kind.PATTERN) { p.clearGroup(g); message = "Pattern cleared"; changed() }
-                    else if (p.currentScene >= 0) { p.captureScene(p.currentScene); message = "Scene ${p.currentScene + 1} updated"; changed() }
+            "D7", "D8" -> message = "One bank of 16 for now"
+            "D2" -> if (kind == Kind.SCENE && p.currentScene >= 0) { p.captureScene(p.currentScene); message = "Scene ${p.currentScene + 1} updated"; changed() }
             "BROWSER", "SAMPLING", "PLUG-IN", "SETTINGS", "MIXER", "FILE" -> back()
         }
+    }
+
+    /** D5 CREATE: a new empty pattern / scene in the next free slot after the current one. */
+    private fun createNext() {
+        val cur = if (kind == Kind.PATTERN) p.current[g] else p.currentScene
+        val free = ((cur + 1 until 16) + (0..cur.coerceAtLeast(0))).firstOrNull { it in 0 until 16 && !has(it) }
+            ?: run { message = "No free slot"; return }
+        if (kind == Kind.PATTERN) p.selectPattern(g, free, playing) else p.captureScene(free)
+        message = "New ${name(free)}"
+        changed()
     }
 
     private fun duplicateCurrent() {
@@ -164,7 +172,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     }
 
     override fun onKnob(knob: Int, delta: Int) {
-        if (kind != Kind.PATTERN || knob != 0) return
+        if (kind != Kind.PATTERN || knob != 3) return  // K4 LENGTH
         lenAcc += delta
         if (kotlin.math.abs(lenAcc) < 25) return
         val d = if (lenAcc > 0) 1 else -1
@@ -177,7 +185,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         ui.checkpoint()
     }
 
-    override fun onEncoder(delta: Int) = onKnob(0, delta * 25)
+    override fun onEncoder(delta: Int) = onKnob(3, delta * 25)
 
     private fun lengthText(steps: Int) = if (steps % 16 == 0) "${steps / 16} bar${if (steps > 16) "s" else ""}" else "$steps steps"
 
@@ -185,24 +193,25 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         updatePads(now)
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
-        r.drawText("DUPLICATE", 60f, 24f, dLabel)
+        val pinName = if (kind == Kind.PATTERN) "PATTERN" else "SCENE"
+        l.drawText("PIN", 60f, 24f, if (pinName in ui.pinned) cellName else dLabel)
+        if (kind == Kind.SCENE) l.drawText("UPDATE", 180f, 24f, dLabel)
+        r.drawText("CREATE", 60f, 24f, dLabel)
         r.drawText("DELETE", 180f, 24f, dLabel)
+        r.drawText("◀ BANK", 300f, 24f, dLabel)
+        r.drawText("BANK ▶", 420f, 24f, dLabel)
         if (kind == Kind.PATTERN) {
-            r.drawText("DOUBLE", 300f, 24f, dLabel)
-            r.drawText("CLEAR", 420f, 24f, dLabel)
-        } else r.drawText("UPDATE", 420f, 24f, dLabel)
-        if (kind == Kind.PATTERN) {
-            l.drawText("PATTERN · GROUP ${ui.groupLetter}", 16f, 30f, title)
+            l.drawText("PATTERN · GROUP ${ui.groupLetter}", 16f, 52f, title)
             val cur = p.current[g]
-            l.drawText(if (cur >= 0) "${ui.groupLetter}${cur + 1}" else "No pattern", 16f, 70f, big)
+            l.drawText(if (cur >= 0) "${ui.groupLetter}${cur + 1}" else "No pattern", 16f, 82f, big)
             l.drawText("Length ${lengthText(p.length(g))}", 16f, 100f, label)
             if (p.queued[g] >= 0) l.drawText("Next: ${ui.groupLetter}${p.queued[g] + 1} (at the end of this one)", 16f, 124f, ok)
-            l.drawText("K1 length (SHIFT: steps) · ERASE + pad delete", 16f, 196f, label)
+            l.drawText("K4 length (SHIFT: steps) · ERASE + pad delete", 16f, 196f, label)
             l.drawText("DUPLICATE + pad + pad · GROUP: other group", 16f, 216f, label)
         } else {
-            l.drawText("SCENE", 16f, 30f, title)
+            l.drawText("SCENE", 16f, 52f, title)
             val cur = p.currentScene
-            l.drawText(if (cur >= 0) "Scene ${cur + 1}" else "No scene", 16f, 70f, big)
+            l.drawText(if (cur >= 0) "Scene ${cur + 1}" else "No scene", 16f, 82f, big)
             p.scenes.getOrNull(cur)?.let { sc ->
                 val txt = (0 until 8).joinToString("  ") { gi -> "${'A' + gi}:${if (sc[gi] >= 0) "${sc[gi] + 1}" else "–"}" }
                 l.drawText(txt, 16f, 100f, label)

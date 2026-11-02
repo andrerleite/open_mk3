@@ -69,6 +69,8 @@ constexpr int OFF_COUNTING = OFF_COUNTIN + 1;             // engine: 1 while cou
 constexpr int OFF_GVOL = OFF_COUNTING + 1;                // kGroups: group volume (dB)
 constexpr int OFF_GPAN = OFF_GVOL + kGroups;              // kGroups: group pan (-1..1)
 constexpr int OFF_GFILT = OFF_GPAN + kGroups;             // kGroups: performance filter (-1 LP .. 0 off .. 1 HP)
+constexpr int OFF_METROVOL = OFF_GFILT + kGroups;        // metronome level 0..1
+constexpr int OFF_COUNTBARS = OFF_METROVOL + 1;           // count-in length in bars (1, 2, 4)
 constexpr int OFF_BANKS = OFF_GFILT + kGroups + 6;
 // per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
 constexpr int B_VEL = 0;
@@ -372,6 +374,7 @@ private:
     int clickDelay = -1;    // frames into the chunk where a click starts
     int clickPos = -1;      // frames rendered of the current click
     float clickFreq = 1500.f;
+    float clickLevel = 0.7f;
     void addClick(float* out, int frames);
     void recordEvent(float* p, int sound, double at, int note, float vel);
     Held held[kMaxHeld];
@@ -792,8 +795,8 @@ void Engine::runSequencer(int frames) {
     }
     if (on && (!wasPlaying || restart)) {
         nextStep = 0;
-        if (p[OFF_COUNTIN] > 0.5f) {  // one bar of clicks first
-            nextStep = -16;
+        if (p[OFF_COUNTIN] > 0.5f) {  // clicks first (1, 2 or 4 bars)
+            nextStep = -16 * std::clamp(int(p[OFF_COUNTBARS] + 0.5f), 1, 4);
             p[OFF_COUNTIN] = 0.f;
             p[OFF_COUNTING] = 1.f;
         }
@@ -848,6 +851,7 @@ void Engine::runSequencer(int frames) {
             clickDelay = int(off);
             clickPos = 0;
             clickFreq = (((n % 16) + 16) % 16 == 0) ? 2400.f : 1500.f;
+            clickLevel = std::clamp(p[OFF_METROVOL], 0.f, 1.f);
         }
         if (n < 0) { nextStep = n + 1; continue; }  // counting in
         if (n == 0) p[OFF_COUNTING] = 0.f;
@@ -905,7 +909,7 @@ void Engine::addClick(float* out, int frames) {
     for (; i < frames && clickPos < len; i++, clickPos++) {
         float t = float(clickPos) / kSampleRate;
         float env = std::exp(-t * 180.f);
-        float x = 0.35f * env * std::sin(6.2831853f * clickFreq * t);
+        float x = 0.5f * clickLevel * env * std::sin(6.2831853f * clickFreq * t);
         out[i * 2] += x;
         out[i * 2 + 1] += x;
     }

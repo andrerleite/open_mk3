@@ -119,7 +119,6 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
     }
 
-    private var slotDownAt = 0L
 
     /** SHIFT + FILE: save the current project (or a new one). */
     private fun quickSave() {
@@ -258,15 +257,27 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var repeatKind = RepeatKind.REPEAT
     @Volatile var repeatLatched = false
     @Volatile var repeatHeld = false
-    private var repeatDownAt = 0L
-    private var repeatWasLatched = false
-    private var repeatUsed = false
     val repeatActive get() = repeatHeld || repeatLatched
-    var repeatRate = 4          // index into REPEAT_RATES (1/16)
-    var repeatGate = 0.5f
+    /** Four rate presets on D5-D8 (indices into REPEAT_RATES); K3 changes the selected one. */
+    val repeatPresets = intArrayOf(2, 4, 6, 5)
+    var repeatPreset = 1
+    val repeatRate get() = repeatPresets[repeatPreset]
+    var repeatGate = 1f
     var arpType = 0
     var arpOctaves = 1
+    /** Arp HOLD: notes keep playing after the pads are released. */
+    var arpHold = false
+    private val arpHeldNotes = mutableListOf<Pair<Int, Int>>()
     private var repeatAcc = 0
+
+    /** Modes that stay on after their button is released (held mode button + D1). */
+    val pinned = mutableSetOf<String>()
+    /** The left-column mode button being held (PATTERN / SCENE / NOTE REPEAT), for D1 pinning. */
+    private var modeHeld: String? = null
+    /** Pad-mode settings (KEYBOARD / CHORDS / 16 VEL) shown on the screens. */
+    @Volatile var padParams = false
+    /** GROUP button held (for VOLUME / TEMPO + encoder on that group), -1 = none. */
+    @Volatile var heldGroup = -1
 
     companion object {
         val REPEAT_RATES = listOf("1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T")
@@ -276,9 +287,20 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
 
     private fun pushRepeat() {
+        // in KEYBOARD / CHORDS the repeat engine is the arpeggiator
+        repeatKind = if (padMode == PadMode.KEYBOARD || padMode == PadMode.CHORDS) RepeatKind.ARP else RepeatKind.REPEAT
+        if (!repeatActive && arpHold) applyArpHold(false)
         val mode = if (!repeatActive) 0 else if (repeatKind == RepeatKind.ARP) 2 else 1
         engine.repeatConfig(mode, REPEAT_STEPS[repeatRate], repeatGate, arpType, arpOctaves)
         dirty = true
+    }
+
+    private fun applyArpHold(on: Boolean) {
+        arpHold = on
+        if (!on) {  // let go of the notes HOLD was keeping
+            for ((snd, note) in arpHeldNotes) engine.repeatHold(snd, note, 0f, 1, 4)
+            arpHeldNotes.clear()
+        }
     }
 
     /** The notes each physical pad started (and whether as repeat holds), for its note-off. */
@@ -415,7 +437,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         heldNotes[slot] = null
         if (notes == null) engine.release(snd(slot))
         else for ((snd, note) in notes) {
-            if (heldAsRepeat[slot]) engine.repeatHold(snd, note, 0f, 1, 4) else engine.noteOff(snd, note)
+            if (heldAsRepeat[slot] && arpHold) arpHeldNotes.add(snd to note)  // HOLD keeps them
+            else if (heldAsRepeat[slot]) engine.repeatHold(snd, note, 0f, 1, 4) else engine.noteOff(snd, note)
         }
         post { padPressure[slot] = 0; page.onPadRelease(slot, pad); dirty = true }
     }
@@ -425,33 +448,45 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         if (bit in map.touchBits && page !is WizardPage) return@post
         val name = map.nameForBit(bit)
         if (name == "SHIFT") shiftHeld = down
-        // NOTE REPEAT: hold = momentary, quick press = latch on / off; SHIFT + it = arpeggiator
+        if (name != null && name.startsWith("GROUP ") && name.length == 7) heldGroup = if (down) name[6] - 'A' else -1
+        // Mode buttons are momentary; holding one and pressing D1 pins it (and it stays
+        // pinned on later presses until unpinned the same way).
+        if (down && name == "D1" && modeHeld != null && !page.customLeds) {
+            val m = modeHeld!!
+            if (!pinned.remove(m)) pinned.add(m)
+            if (m == "NOTE REPEAT") repeatLatched = m in pinned
+            AppLog.i("$m ${if (m in pinned) "pinned" else "unpinned"}")
+            pushRepeat()
+            return@post
+        }
+        // NOTE REPEAT (arp in KEYBOARD / CHORDS); SHIFT + NOTE REPEAT: keyboard + arp
         if (name == "NOTE REPEAT" && !page.customLeds) {
-            val now = SystemClock.uptimeMillis()
             if (down) {
+                modeHeld = name
+                if (shiftHeld && padMode == PadMode.PAD) setPadMode(PadMode.KEYBOARD)
+                if ("NOTE REPEAT" in pinned) repeatLatched = !repeatLatched
                 repeatHeld = true
-                repeatDownAt = now
-                repeatWasLatched = repeatLatched
-                repeatUsed = false
-                repeatKind = if (shiftHeld) RepeatKind.ARP else RepeatKind.REPEAT
             } else {
+                if (modeHeld == name) modeHeld = null
                 repeatHeld = false
-                val tap = now - repeatDownAt < 350 && !repeatUsed
-                repeatLatched = if (tap) !repeatWasLatched else repeatWasLatched
             }
             pushRepeat()
             return@post
         }
-        // PATTERN / SCENE held (not tapped): releasing returns to the previous page
+        // PATTERN / SCENE released: back, unless pinned
         if (!down && (name == "PATTERN" || name == "SCENE")) {
+            if (modeHeld == name) modeHeld = null
             val cur = page
-            if (cur is SlotPage && SystemClock.uptimeMillis() - slotDownAt > 400) cur.back()
+            if (cur is SlotPage && name !in pinned) cur.back()
             return@post
         }
-        // while NOTE REPEAT is held, D1-D8 choose the rate
-        if (repeatHeld && down && name != null && name.length == 2 && name[0] == 'D' && name[1] in '1'..'8') {
-            repeatRate = name[1] - '1'
-            repeatUsed = true
+        // while NOTE REPEAT is held: D3 arp hold, D4 gate reset, D5-D8 rate presets
+        if (repeatHeld && down && name != null && name.length == 2 && name[0] == 'D' && name[1] in '2'..'8') {
+            when (name[1]) {
+                '3' -> if (repeatKind == RepeatKind.ARP) applyArpHold(!arpHold)
+                '4' -> repeatGate = 1f
+                in '5'..'8' -> repeatPreset = name[1] - '5'
+            }
             pushRepeat()
             return@post
         }
@@ -468,8 +503,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
         if (!page.customLeds && down && name != null) {
             // Global buttons, the same on every page.
-            if (name == "FIXED VEL" && shiftHeld) {  // SHIFT + FIXED VEL = 16 velocities
-                setPadMode(if (padMode == PadMode.VEL16) PadMode.PAD else PadMode.VEL16)
+            if (name == "FIXED VEL" && shiftHeld) {  // SHIFT + FIXED VEL = 16 velocities (group mode only)
+                if (padMode == PadMode.PAD || padMode == PadMode.VEL16)
+                    setPadMode(if (padMode == PadMode.VEL16) PadMode.PAD else PadMode.VEL16)
+                padParams = padMode == PadMode.VEL16
                 return@post
             }
             when (name) {
@@ -497,16 +534,23 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "PATTERN", "SCENE" -> {
+                    modeHeld = name
                     val kind = if (name == "PATTERN") SlotPage.Kind.PATTERN else SlotPage.Kind.SCENE
                     val cur = page
-                    if (cur is SlotPage && cur.kind == kind) cur.back()
-                    else show(SlotPage(this, if (cur is SlotPage) cur.let { org.openmk3.core.Edition.homePage(this) } else cur, kind))
-                    slotDownAt = SystemClock.uptimeMillis()
+                    if (cur is SlotPage && cur.kind == kind) cur.back()  // pinned: press again to leave
+                    else show(SlotPage(this, if (cur is SlotPage) org.openmk3.core.Edition.homePage(this) else cur, kind))
                     return@post
                 }
-                "KEYBOARD" -> setPadMode(if (padMode == PadMode.KEYBOARD) PadMode.PAD else PadMode.KEYBOARD)
-                "CHORDS" -> setPadMode(if (padMode == PadMode.CHORDS) PadMode.PAD else PadMode.CHORDS)
-                "PAD MODE" -> if (!shiftHeld) setPadMode(PadMode.PAD)
+                // Pad input modes: switch the pads and show the mode's settings; pressing the
+                // lit button again hides the settings (the pads stay in that mode); SHIFT +
+                // button switches without showing them.
+                "KEYBOARD", "CHORDS" -> {
+                    val m = if (name == "KEYBOARD") PadMode.KEYBOARD else PadMode.CHORDS
+                    padParams = if (shiftHeld) false else if (padMode == m) !padParams else true
+                    setPadMode(m)
+                    pushRepeat()
+                }
+                "PAD MODE" -> { setPadMode(PadMode.PAD); padParams = false; pushRepeat() }
             }
             if (name == "FIXED VEL" && !page.handlesFixedVel) {
                 fixedVel = !fixedVel
@@ -531,7 +575,6 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     /** Knobs while NOTE REPEAT is held: K1 gate, K2 arp type, K3 arp octaves. */
     private fun repeatKnob(knob: Int, delta: Int) {
-        repeatUsed = true
         fun step(): Int {
             repeatAcc += delta
             if (kotlin.math.abs(repeatAcc) < 25) return 0
@@ -539,10 +582,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             repeatAcc = 0
             return d
         }
+        val arp = repeatKind == RepeatKind.ARP
         when (knob) {
-            0 -> repeatGate = (repeatGate + delta / 500f).coerceIn(0.05f, 1f)
-            1 -> arpType = (arpType + step()).coerceIn(0, ARP_TYPES.size - 1)
-            2 -> arpOctaves = (arpOctaves + step()).coerceIn(1, 4)
+            1 -> if (arp) arpType = (arpType + step()).coerceIn(0, ARP_TYPES.size - 1)
+            2 -> repeatPresets[repeatPreset] = (repeatPresets[repeatPreset] + step()).coerceIn(0, REPEAT_RATES.size - 1)
+            5 -> if (arp) arpOctaves = (arpOctaves + step()).coerceIn(1, 4)
+            7 -> repeatGate = (repeatGate + delta / 500f).coerceIn(0.05f, 2f)
         }
         pushRepeat()
     }
@@ -582,13 +627,21 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("SCENE", false)
         page.lights(lights)
         lights.set("FIXED VEL", fixedVel || padMode == PadMode.VEL16)
-        if (repeatHeld) for (i in 0 until 8) lights.set("D${i + 1}", i == repeatRate)
+        if (repeatHeld) {
+            for (i in 0 until 4) lights.set("D${i + 5}", i == repeatPreset)
+            lights.set("D1", "NOTE REPEAT" in pinned)
+            if (repeatKind == RepeatKind.ARP) lights.set("D3", arpHold)
+            lights.set("D4")
+        }
+        if (modeHeld == "PATTERN" || modeHeld == "SCENE") lights.set("D1", modeHeld in pinned)
         val p = engine.pattern
         for (g in 0 until 8) {
             val c = groupColour(g)
+            // selected: bright; groups with content: dim; muted: off; empty: off
+            val used = g == group || (0 until 16).any { hasSound(g * 16 + it) } || p.patterns[g].any { it != null }
             val v = when {
                 g == group -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
-                !p.groupAudible(g) -> 0
+                !used || !p.groupAudible(g) -> 0
                 else -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
             }
             lights.raw("GROUP ${'A' + g}", v)
@@ -640,26 +693,30 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private val ovVal = Theme.text(16f, Theme.FG, bold = true, align = android.graphics.Paint.Align.CENTER)
     private val ovTitle = Theme.text(14f, Theme.ACCENT, bold = true)
 
-    /** While NOTE REPEAT is held: rates on D1-D8 and the knob settings. */
+    /** While NOTE REPEAT is held: pin, (arp) hold, gate reset, rate presets, knob settings. */
     private fun drawRepeatOverlay(l: Canvas, r: Canvas) {
         for (c in arrayOf(l, r)) {
             c.drawRect(0f, 0f, 480f, 36f, ovBg)
             c.drawRect(0f, 214f, 480f, 272f, ovBg)
         }
-        for (i in 0 until 8) {
-            val c = if (i < 4) l else r
-            c.drawText(REPEAT_RATES[i], 60f + (i % 4) * 120f, 24f, if (i == repeatRate) ovOn else ovTab)
-        }
         val arp = repeatKind == RepeatKind.ARP
+        l.drawText("PIN", 60f, 24f, if ("NOTE REPEAT" in pinned) ovOn else ovTab)
+        if (arp) l.drawText("HOLD", 300f, 24f, if (arpHold) ovOn else ovTab)
+        l.drawText("GATE RESET", 420f, 24f, ovTab)
+        for (i in 0 until 4) r.drawText(REPEAT_RATES[repeatPresets[i]], 60f + i * 120f, 24f, if (i == repeatPreset) ovOn else ovTab)
         l.drawText(if (arp) "ARPEGGIATOR" else "NOTE REPEAT", 8f, 212f, ovTitle)
-        l.drawText("GATE", 60f, 232f, ovName)
-        l.drawText("${(repeatGate * 100).toInt()}%", 60f, 254f, ovVal)
         if (arp) {
             l.drawText("TYPE", 180f, 232f, ovName)
             l.drawText(ARP_TYPES[arpType], 180f, 254f, ovVal)
-            l.drawText("OCTAVES", 300f, 232f, ovName)
-            l.drawText("$arpOctaves", 300f, 254f, ovVal)
         }
+        l.drawText("RATE", 300f, 232f, ovName)
+        l.drawText(REPEAT_RATES[repeatRate], 300f, 254f, ovVal)
+        if (arp) {
+            r.drawText("OCTAVES", 180f, 232f, ovName)
+            r.drawText("$arpOctaves", 180f, 254f, ovVal)
+        }
+        r.drawText("GATE", 420f, 232f, ovName)
+        r.drawText("${(repeatGate * 100).toInt()}%", 420f, 254f, ovVal)
     }
 
     fun buttonLed(name: String, value: Int) {

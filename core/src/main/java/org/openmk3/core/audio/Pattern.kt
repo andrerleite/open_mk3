@@ -95,6 +95,8 @@ class Pattern {
         private const val OFF_GVOL = OFF_COUNTING + 1
         private const val OFF_GPAN = OFF_GVOL + GROUPS
         private const val OFF_GFILT = OFF_GPAN + GROUPS
+        private const val OFF_METROVOL = OFF_GFILT + GROUPS
+        private const val OFF_COUNTBARS = OFF_METROVOL + 1
         private const val OFF_BANKS = OFF_GFILT + GROUPS + 6
         private const val B_VEL = 0
         private const val B_NOTE = B_VEL + PADS * STEPS
@@ -137,7 +139,15 @@ class Pattern {
         get() = f.get(OFF_METRO) > 0.5f
         set(v) { f.put(OFF_METRO, if (v) 1f else 0f) }
 
-    /** Ask the engine to count in one bar at the next start. */
+    var metronomeLevel: Float
+        get() = f.get(OFF_METROVOL)
+        set(v) { f.put(OFF_METROVOL, v.coerceIn(0f, 1f)) }
+    /** Count-in length in bars (1, 2 or 4). */
+    var countInBars: Int
+        get() = f.get(OFF_COUNTBARS).toInt().coerceIn(1, 4)
+        set(v) { f.put(OFF_COUNTBARS, v.coerceIn(1, 4).toFloat()) }
+
+    /** Ask the engine to count in at the next start. */
     fun requestCountIn() = f.put(OFF_COUNTIN, 1f)
     val countingIn get() = f.get(OFF_COUNTING) > 0.5f
 
@@ -171,6 +181,8 @@ class Pattern {
 
     init {
         bpm = 120.0
+        metronomeLevel = 0.7f
+        countInBars = 1
         for (g in 0 until GROUPS) {
             f.put(OFF_PENDING + g, -1f)
             for (b in 0..1) { f.put(bankBase(g, b) + B_LEN, 16f); clearBank(g, b) }
@@ -445,6 +457,8 @@ class Pattern {
         put("bpm", bpm)
         put("swing", swing.toDouble())
         put("metronome", metronome)
+        put("metronomeLevel", metronomeLevel.toDouble())
+        put("countInBars", countInBars)
         put("mute", JSONArray(mute.toList()))
         put("solo", JSONArray(solo.toList()))
         put("groupMute", JSONArray(groupMute.toList()))
@@ -469,6 +483,8 @@ class Pattern {
         bpm = j.optDouble("bpm", 120.0).coerceIn(40.0, 240.0)
         swing = j.optDouble("swing", 0.0).toFloat().coerceIn(0f, 0.5f)
         metronome = j.optBoolean("metronome", false)
+        metronomeLevel = j.optDouble("metronomeLevel", 0.7).toFloat()
+        countInBars = j.optInt("countInBars", 1)
         j.optJSONArray("mute")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) mute[s] = a.getBoolean(s) }
         j.optJSONArray("solo")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) solo[s] = a.getBoolean(s) }
         j.optJSONArray("groupMute")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) groupMute[g] = a.getBoolean(g) }

@@ -34,19 +34,19 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | PAD MODE | Pads play the 16 sounds of the focused group | ✅ |
-| KEYBOARD | Pads play the focused sound as notes: chromatic or in a scale, from a root note. Press again for pad mode. | ✅ |
+| KEYBOARD | Pads play the focused sound as notes. Press: switch and show the settings; press again: hide them (pads stay); SHIFT + KEYBOARD: switch without settings. PAD MODE returns to sounds. | ✅ |
 | CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
 | FIXED VEL | Pads ignore pressure (full velocity), on every page | ✅ |
-| SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities | ✅ |
+| SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities (from pad mode) | ✅ |
 
 ## Pattern and arrangement buttons (left of the pads)
 
 | Control | Function | Status |
 |---|---|---|
-| SCENE | Scenes on the pads: select (launch), empty pad = new scene from the patterns playing. Hold for a quick look, press to stay. | ✅ |
+| SCENE | Hold: scenes on the pads (select / launch; empty pad = new scene from the patterns playing). Hold + D1 pins the mode. | ✅ |
 | SHIFT + SCENE (Section) | Arranger sections | ⬜ |
-| PATTERN | Patterns of the focused group on the pads: select (starts at the end of the playing one), empty pad = new. K1 length. Hold or press like SCENE. | ✅ |
+| PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Edit or select events: pads choose the sound, encoder and knobs edit | ⬜ |
 | VARIATION | Humanise / randomise the selected events | ⬜ |
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
@@ -54,7 +54,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
 | SELECT + pad | Focus a sound without playing it | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
-| MUTE + pad | Mute a sound (or a group with group buttons) | ✅ |
+| MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
 | SHIFT + MUTE (Choke) | Choke groups setup | ⬜ (fixed hat choke today) |
 
 ## Groups
@@ -100,7 +100,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, edit, slice; zones planned) |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
-| SETTINGS | Settings | 🟡 (LED palette page today) |
+| SETTINGS | Metronome on / level, count-in length (D8: LED check) | ✅ |
 | AUTO | Record knob automation while held / latched | ⬜ |
 | MACRO (Set) | Macro controls | ⬜ |
 
@@ -112,10 +112,10 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Knobs 1–8 | Parameters shown on the screen above each knob. Touching a knob shows its value. | 🟡 (fixed: volume, sensitivity, tempo, swing) |
 | 4D encoder turn | Context value: list scrolling, or the selected encoder mode | 🟡 (tempo on home, scroll in browser) |
 | 4D encoder push / tilt | Confirm / navigate | ✅ (browser) |
-| VOLUME (Velocity) | Encoder adjusts the master volume (press again: back to tempo) | 🟡 (velocity ⬜) |
+| VOLUME (Velocity) | Encoder adjusts the master volume; hold a pad or group button for just that one | 🟡 (event velocity ⬜) |
 | SWING (Position) | Encoder adjusts swing | 🟡 (position ⬜) |
 | TEMPO (Tune) | Encoder adjusts tempo (SHIFT: fine). SHIFT + TEMPO: encoder tunes the focused sound. | ✅ |
-| NOTE REPEAT (Arp) | Hold (momentary) or quick press (latch): pads repeat at the chosen rate, velocity follows pressure. SHIFT: arpeggiator. | ✅ |
+| NOTE REPEAT (Arp) | Hold: pads repeat (arpeggiator in KEYBOARD / CHORDS). Hold + D1 pins it. SHIFT + NOTE REPEAT: KEYBOARD with the arpeggiator. | ✅ |
 | LOCK (Ext Lock) | Snapshot / lock parameter states | ⬜ |
 
 ## Touch strip
@@ -217,8 +217,9 @@ fades with RELEASE). Sequencer notes last one step.
   then); stopped, it switches at once. All groups keep playing together.
 - 16 scenes: each remembers one pattern (or none) per group. Launching a scene switches every
   group at the end of its pattern.
-- PATTERN mode: D5 duplicate (to the next free slot), D6 delete, D7 double, D8 clear notes.
-  SCENE mode: D5 duplicate, D6 delete, D8 update the scene with the patterns playing now.
+- PATTERN mode: D5 create (next free slot), D6 delete, K4 length. SCENE mode: D2 update the
+  scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +
+  D1 pins them. Double: SHIFT + DUPLICATE; clear: SHIFT + pad 9.
 - STEP mode: ◀ ▶ move through the bars of longer patterns; FOLLOW makes the page follow the
   playhead. Recording into a group without a pattern creates one.
 - Songs (patterns, scenes, mixer settings) are kept automatically and saved in projects (FILE).
@@ -242,11 +243,12 @@ plays.
 
 | Control | Function |
 |---|---|
-| NOTE REPEAT (hold) | Momentary: held pads repeat |
-| NOTE REPEAT (quick press) | Latch on / off |
-| SHIFT + NOTE REPEAT | Arpeggiator instead of repeat (hold or latch the same way) |
-| While NOTE REPEAT is held: D1–D8 | Rate: 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/32T |
-| While held: K1 / K2 / K3 | Gate (note length) / arp type (up, down, up-down, random, as played, chord) / arp octaves (1–4) |
+| NOTE REPEAT (hold) | Held pads repeat; in KEYBOARD / CHORDS: the arpeggiator |
+| SHIFT + NOTE REPEAT | From pad mode: KEYBOARD with the arpeggiator |
+| While NOTE REPEAT is held: D1 | Pin (stays on after release; press NOTE REPEAT again to stop) |
+| While held: D5–D8 | Four rate presets; K3 changes the selected one (1/4 … 1/32T) |
+| While held (arp): D3 / D4 | Hold (notes keep playing after release) / gate back to 100 % |
+| While held: K2 / K6 / K8 | Arp type (up, down, up-down, random, as played, chord) / arp octaves (1–4) / gate (5–200 %) |
 
 Repeats follow the transport grid while playing (free-running when stopped) and the pad's
 pressure sets their velocity. While recording, repeat and arp notes at 1/16 or slower are
