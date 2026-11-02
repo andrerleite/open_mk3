@@ -23,7 +23,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | RESTART | Restart playback from the beginning of the loop (song mode: from section 1) | ✅ |
 | SHIFT + RESTART (Loop) | Loop the playing song section on / off | ✅ |
 | ERASE + pad | Erase that sound's events in the pattern | ✅ |
-| SHIFT + ERASE (Replace) | Recording replaces existing events instead of adding | ⬜ |
+| SHIFT + ERASE (Replace) | Replace on / off (ERASE blinks): while recording, the first hit of a sound in each pass of the loop clears that sound's old notes | ✅ |
 | TAP | Tap tempo | ✅ |
 | SHIFT + TAP (Metro) | Metronome on / off | ✅ |
 | FOLLOW | Step pages follow the playhead | ✅ |
@@ -96,7 +96,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | ARRANGER | Song view: a list of sections, each playing a scene. D1 song mode on / off, D2 loop, D3 jump to the selected section, D5 duplicate, D6 delete; encoder or ◀ ▶ select, K1 moves a section; scene pads add a section after the selected one (SHIFT + pad replaces it). A section lasts as long as its scene's longest pattern, and all groups start their patterns together at each section. In song mode, a scene pad in SCENE mode jumps to that scene's section | ✅ |
 | MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder | ✅ (sends ⬜) |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
-| SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
+| SHIFT + BROWSER (+Plug-in) | Instrument browser: POLY factory patches by category, FM banks and patches, SYNTH models; loading switches the focused sound's source and plays a note | ✅ (full app) |
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice; SHIFT + SAMPLING: zones | ✅ |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |

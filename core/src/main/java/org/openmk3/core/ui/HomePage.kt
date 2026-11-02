@@ -18,7 +18,9 @@ import kotlin.math.roundToLong
  *  STEP       pads are the 16 steps of the selected sound (step 1 = top-left)
  *  PLAY / STOP / RESTART / REC transport, FIXED VEL toggles full-velocity entry
  *  hold SELECT + pad = select sound, MUTE / SOLO + pad = mute / solo,
- *  ERASE + pad = clear that sound (pad mode) or that step (step mode), SHIFT + ERASE = clear all
+ *  ERASE + pad = clear that sound (pad mode) or that step (step mode)
+ *  SHIFT + ERASE = REPLACE on / off: while recording, the first hit of a sound in each pass of
+ *  the loop clears that sound's old notes
  *  PAGE ◀ ▶ = previous / next sound, ENCODER = tempo, K1 volume, K2 pad sensitivity,
  *  K3 tempo, K4 swing, SETTINGS = LED palette
  */
@@ -28,6 +30,7 @@ class HomePage(ui: Ui) : Page(ui) {
 
     @Volatile private var mode = Mode.PAD
     @Volatile private var shift = false
+    private companion object { var replace = false }
     @Volatile private var erase = false
     @Volatile private var select = false
     @Volatile private var mute = false
@@ -238,7 +241,7 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("PAD MODE", mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD)
         l.set("KEYBOARD", mode == Mode.PAD && ui.padMode == Ui.PadMode.KEYBOARD)
         l.set("CHORDS", mode == Mode.PAD && ui.padMode == Ui.PadMode.CHORDS)
-        l.set("ERASE", erase)
+        l.set("ERASE", erase || (replace && (System.currentTimeMillis() / 500) % 2 == 0L))
         l.set("SELECT", select)
         l.set("MUTE", mute)
         l.set("SOLO", solo)
@@ -314,12 +317,22 @@ class HomePage(ui: Ui) : Page(ui) {
         val whole = kotlin.math.floor(heard)
         val step = ((whole.toLong() % len + len) % len).toInt()
         val p = pattern
+        if (replace) {
+            // the first hit of this sound in this pass of the loop clears its old notes
+            val pass = kotlin.math.floor(heard / len).toLong()
+            if (replacePass[slot] != pass) {
+                replacePass[slot] = pass
+                p.clear(slot)
+                for (r in recHeld) r.removeAll { it.first == slot }
+            }
+        }
         p.recordNote(slot, step, note, velocity, (heard - whole).toFloat(), 1f)
         if (pad >= 0) recHeld[pad].add(Triple(slot, step, heard))
         changed()
     }
 
     private val stepRemove = IntArray(16) { -1 }
+    private val replacePass = HashMap<Int, Long>()
 
     override fun onPadRelease(slot: Int, hid: Int) {
         val rm = stepRemove[slot]
@@ -343,9 +356,9 @@ class HomePage(ui: Ui) : Page(ui) {
             "ERASE" -> {
                 erase = down
                 if (down && shift) {
-                    for (k in 0 until Pattern.PADS) pattern.clear(sd(k))
-                    changed()
-                    AppLog.i("Pattern cleared")
+                    replace = !replace
+                    replacePass.clear()
+                    message(if (replace) "Replace on: new takes replace a sound's notes" else "Replace off")
                 }
             }
             "SELECT" -> select = down

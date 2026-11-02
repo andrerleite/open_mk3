@@ -622,6 +622,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
                     return@post
                 }
+                "BROWSER" -> if (shiftHeld && org.openmk3.core.Edition.full) {  // SHIFT + BROWSER: instruments
+                    if (page is InstrumentPage) showHome() else show(InstrumentPage(this))
+                    return@post
+                }
                 "SAMPLING" -> if (shiftHeld) {  // SHIFT + SAMPLING: the focused sound's zones
                     if (page is ZonePage) showHome() else show(ZonePage(this))
                     return@post
