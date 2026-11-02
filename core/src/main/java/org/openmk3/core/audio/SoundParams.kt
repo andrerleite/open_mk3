@@ -100,6 +100,7 @@ class SoundParams {
         const val SRC_SAMPLER = 0
         const val SRC_SYNTH = 1
         const val SRC_FM = 2
+        const val SRC_POLY = 3
         /** FM banks: 3 built-in (96 voices), then the user's .syx cartridges. */
         val FM_BANKS = listOf("ROM 1", "ROM 2", "ROM 3") + (1..16).map { "USER $it" }
 
@@ -167,7 +168,7 @@ class SoundParams {
             Def(VCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
             // trigger mode and source
             Def(GATE, "TRIGGER", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "GATE")),
-            Def(SRC, "SOURCE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH", "FM")),
+            Def(SRC, "SOURCE", 0f, 3f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH", "FM", "POLY")),
             // FM (6-operator, Dexed engine)
             Def(FMBANK, "BANK", 0f, 18f, 0f, 1f, { "" }, choices = FM_BANKS),
             Def(FMPROG, "PATCH", 0f, 31f, 0f, 1f, { v -> "${v.roundToInt() + 1}" }, choices = (1..32).map { "$it" }),

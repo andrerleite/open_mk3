@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.os.SystemClock
+import org.openmk3.core.audio.PolyPresets
 import org.openmk3.core.audio.Sample
 import org.openmk3.core.audio.SoundParams
 import org.openmk3.core.mk3.Mk3Colors
@@ -85,6 +86,10 @@ class SoundPage(ui: Ui) : Page(ui) {
         class Snd(val p: Int) : Knob()
         class Fx(val d: FxParams.Def) : Knob()
         object Type : Knob()
+        /** POLY source parameter (OB-Xf index). */
+        class Poly(val i: Int) : Knob()
+        object PolyCategory : Knob()
+        object PolyPreset : Knob()
     }
 
     private class PageDef(val name: String, val knobs: List<Knob?>, val view: View)
@@ -119,6 +124,26 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
+        fun ob(vararg i: Int) = i.map { if (it < 0) null else Knob.Poly(it) }
+        /** POLY (OB-Xf): OB-Xf's parameter indices, grouped like its panel. */
+        val POLY_PAGES = listOf(
+            PageDef("VOICE", listOf(Knob.PolyCategory, Knob.PolyPreset, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(TUNE), null, Knob.Snd(SRC), null), View.SCOPE),
+            PageDef("OSC", ob(12, 14, 13, 20, 16, 17, 18, 19), View.SCOPE),
+            PageDef("OSC MOD", ob(29, 28, 30, 21, 22, 25, 15, 23), View.SCOPE),
+            PageDef("MIXER", ob(31, 32, 33, 34, 35, 0, 1, 2), View.SCOPE),
+            PageDef("FILTER", ob(41, 42, 43, 44, 45, 48, 49, 50), View.SCOPE),
+            PageDef("FILTER ENV", ob(79, 80, 81, 82, 83, 84, 85, 46), View.SCOPE),
+            PageDef("AMP ENV", ob(86, 87, 88, 89, 90, 91, 6, 47), View.SCOPE),
+            PageDef("LFO 1", ob(52, 55, 56, 57, 53, 54, 59, 61), View.SCOPE),
+            PageDef("LFO 1 MORE", ob(51, 58, 60, 62, 63, 64, -1, -1), View.SCOPE),
+            PageDef("LFO 2", ob(66, 69, 70, 71, 67, 68, 73, 75), View.SCOPE),
+            PageDef("LFO 2 MORE", ob(65, 72, 74, 76, 77, 78, -1, -1), View.SCOPE),
+            PageDef("VOICING", ob(3, 7, 5, 8, 9, 10, 11, 4), View.SCOPE),
+            PageDef("CONTROL", ob(36, 37, 38, 39, 40, 24, 26, 27), View.SCOPE),
+            PageDef("SLOP", ob(92, 93, 94, 95, -1, -1, -1, -1), View.SCOPE),
+            PageDef("VOICE PAN", ob(96, 97, 98, 99, 100, 101, 102, 103), View.SCOPE),
+        )
+        var polyCat = 0
         val MARKERS = setOf(START, END, LSTART, LEND)
         var lastLevel = 2
         var lastSlot = 0
@@ -151,7 +176,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     private val fxSlot get() = if (level == 2) slotIdx - 1 else slotIdx
 
     private fun pages(): List<PageDef> {
-        if (isSource) return when (source) { SoundParams.SRC_FM -> FM; SoundParams.SRC_SYNTH -> SYNTH; else -> SAMPLER }
+        if (isSource) return when (source) { SoundParams.SRC_POLY -> POLY_PAGES; SoundParams.SRC_FM -> FM; SoundParams.SRC_SYNTH -> SYNTH; else -> SAMPLER }
         val type = fx.type(chain, fxSlot)
         val defs = FxParams.DEFS[type] ?: emptyList()
         val name = FxParams.TYPES[type]
@@ -198,6 +223,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         lastLevel = level; lastSlot = slotIdx; lastPage = pageIdx
         if (dirtySince != 0L) save()
         if (fxDirtySince != 0L) { fx.save(ui.ctx); fxDirtySince = 0L }
+        if (polyDirtySince != 0L) savePoly()
         ui.engine.setScopeTap(0, 0)
     }
 
@@ -207,6 +233,11 @@ class SoundPage(ui: Ui) : Page(ui) {
     private fun save() {
         params.save(ui.ctx)
         dirtySince = 0L
+    }
+
+    private fun savePoly() {
+        poly.save(ui.ctx)
+        polyDirtySince = 0L
     }
 
     private fun updateScopeTap() = when (level) {
@@ -222,6 +253,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     override fun tick(now: Long): Boolean {
         if (dirtySince != 0L && now - dirtySince > 1500) save()
         if (fxDirtySince != 0L && now - fxDirtySince > 1500) { fx.save(ui.ctx); fxDirtySince = 0L }
+        if (polyDirtySince != 0L && now - polyDirtySince > 1500) savePoly()
         updateScopeTap()
         if (showScope()) return true  // live view
         val h = if (page.view == View.WAVE) ui.engine.playPos(slot) else -1f
@@ -287,8 +319,51 @@ class SoundPage(ui: Ui) : Page(ui) {
             is Knob.Snd -> soundKnob(k.p, delta)
             is Knob.Fx -> { fx.nudge(chain, fxSlot, k.d, delta, shift); fxChanged() }
             Knob.Type -> typeKnob(delta)
+            is Knob.Poly -> { poly.nudge(slot, k.i, delta, shift); polyChanged() }
+            Knob.PolyCategory -> presetStep(delta) { d ->
+                val cats = PolyPresets.categories(ui.ctx)
+                if (cats.isNotEmpty()) { polyCat = (polyCat + d).coerceIn(0, cats.size - 1); presetIdx = 0; loadPreset() }
+            }
+            Knob.PolyPreset -> presetStep(delta) { d ->
+                presetIdx = (presetIdx + d).coerceIn(0, maxOf(0, catPresets().size - 1)); loadPreset()
+            }
             null -> {}
         }
+    }
+
+    // ---- POLY presets ----
+    private val poly get() = ui.engine.poly
+    private var presetIdx = 0
+    private var presetAcc = 0
+    private var polyDirtySince = 0L
+    private fun polyChanged() { if (polyDirtySince == 0L) polyDirtySince = SystemClock.uptimeMillis() }
+    private fun catPresets(): List<PolyPresets.Preset> {
+        val cats = PolyPresets.categories(ui.ctx)
+        val c = cats.getOrNull(polyCat) ?: return emptyList()
+        return PolyPresets.list(ui.ctx).filter { it.category == c }
+    }
+    private inline fun presetStep(delta: Int, f: (Int) -> Unit) {
+        presetAcc += delta
+        if (kotlin.math.abs(presetAcc) < 25) return
+        val d = if (presetAcc > 0) 1 else -1
+        presetAcc = 0
+        f(d)
+    }
+    /** OB-Xf parameter names, shortened to fit a knob cell. */
+    private fun polyShort(n: String): String {
+        var t = n.replace("Filter Env", "F.Env").replace("Amp Env", "A.Env").replace("Filter ", "Flt ")
+            .replace("Osc 1 ", "O1 ").replace("Osc 2 ", "O2 ").replace("Osc ", "").replace("LFO 1 ", "").replace("LFO 2 ", "")
+            .replace("Pulsewidth", "PW").replace("Volume", "Vol").replace("Amount", "Amt").replace("Velocity", "Vel")
+            .replace("Modulation", "Mod").replace("Invert", "Inv").replace("Resonance", "Reso")
+        if (t.length > 14) t = t.take(14)
+        return t
+    }
+
+    private fun loadPreset() {
+        val p = catPresets().getOrNull(presetIdx) ?: return
+        poly.apply(slot, p)
+        polyChanged()
+        org.openmk3.core.AppLog.i("POLY ${ui.padLabel()}: ${p.category} / ${p.name}")
     }
 
     private var typeAcc = 0
@@ -332,6 +407,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         when (val k = page.knobs.getOrNull(knob)) {
             is Knob.Snd -> { SoundParams.DEFS[k.p]?.let { params[slot, k.p] = it.default }; changed() }
             is Knob.Fx -> { fx[chain, fxSlot, k.d.index] = k.d.default; fxChanged() }
+            is Knob.Poly -> { poly[slot, k.i] = poly.defaults[k.i]; polyChanged() }
             else -> {}
         }
     }
@@ -354,6 +430,7 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private fun slotName(i: Int): String {
         if (level == 2 && i == 0) return when (source) {
+            SoundParams.SRC_POLY -> "POLY · ${poly.patchName[slot]}"
             SoundParams.SRC_FM -> "FM · ${params.display(slot, SoundParams.FMPROG)} (${SoundParams.FM_BANKS[params[slot, SoundParams.FMBANK].toInt().coerceIn(0, 18)]})"
             SoundParams.SRC_SYNTH -> "SYNTH · ${SoundParams.MODELS[params[slot, SMODEL].toInt().coerceIn(0, 23)]}"
             else -> "SAMPLER"
@@ -385,6 +462,23 @@ class SoundPage(ui: Ui) : Page(ui) {
                 value = fx.display(chain, fxSlot, d)
                 val v = fx[chain, fxSlot, d.index]
                 frac = if (d.log) ln(v / d.min) / ln(d.max / d.min) else (v - d.min) / (d.max - d.min)
+            }
+            is Knob.Poly -> {
+                name = polyShort(poly.names[k.i]).uppercase()
+                value = poly.display(slot, k.i)
+                frac = poly[slot, k.i]
+            }
+            Knob.PolyCategory -> {
+                name = "CATEGORY"
+                val cats = PolyPresets.categories(ui.ctx)
+                value = cats.getOrNull(polyCat) ?: "—"
+                frac = if (cats.size > 1) polyCat / (cats.size - 1f) else 0f
+            }
+            Knob.PolyPreset -> {
+                name = "PRESET"
+                val ps = catPresets()
+                value = ps.getOrNull(presetIdx)?.name ?: "—"
+                frac = if (ps.size > 1) presetIdx / (ps.size - 1f) else 0f
             }
             Knob.Type -> {
                 name = "TYPE"

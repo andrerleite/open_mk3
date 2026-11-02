@@ -26,6 +26,16 @@ add_library(dexed STATIC
 target_include_directories(dexed PUBLIC ${DX} ${DX}/msfa ${DX}/shim)
 target_compile_options(dexed PRIVATE -O3 -w)
 
+# OB-Xf's synth engine (GPL-3.0; with sst-basic-blocks GPL-3.0, simde MIT, fmt MIT), see
+# third_party/obxf/README.md. C++20; only obxf.cpp sees its headers.
+set(OBX ${CMAKE_CURRENT_SOURCE_DIR}/third_party/obxf)
+add_library(obxf STATIC obxf.cpp)
+set_target_properties(obxf PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_include_directories(obxf PRIVATE ${OBX} ${OBX}/engine ${OBX}/shim ${OBX}/libs/simde
+    ${OBX}/libs/sst-basic-blocks/include ${OBX}/libs/fmt/include)
+target_compile_definitions(obxf PRIVATE FMT_HEADER_ONLY)
+target_compile_options(obxf PRIVATE -O3 -w)
+
 add_library(openmk3 SHARED engine.cpp synth.cpp fm.cpp)
 target_compile_options(openmk3 PRIVATE -O3 -ffast-math -Wall)
-target_link_libraries(openmk3 mutable dexed aaudio log)
+target_link_libraries(openmk3 mutable dexed obxf aaudio log)

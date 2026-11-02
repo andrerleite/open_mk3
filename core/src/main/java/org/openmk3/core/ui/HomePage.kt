@@ -549,6 +549,8 @@ class HomePage(ui: Ui) : Page(ui) {
         val b = sd(to)
         e.setSample(b, e.kit[a])
         for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
+        e.poly.copy(a, b)
+        e.poly.save(ui.ctx)
         pattern.copySound(a, b)
         e.params.save(ui.ctx)
         org.openmk3.core.audio.KitStore.save(ui.ctx, e.kit)

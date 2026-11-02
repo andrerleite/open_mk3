@@ -1,0 +1,2383 @@
+/*
+ * sst-basic-blocks - an open source library of core audio utilities
+ * built by Surge Synth Team.
+ *
+ * Provides a collection of tools useful on the audio thread for blocks,
+ * modulation, etc... or useful for adapting code to multiple environments.
+ *
+ * Copyright 2023, various authors, as described in the GitHub
+ * transaction log. Parts of this code are derived from similar
+ * functions original in Surge or ShortCircuit.
+ *
+ * sst-basic-blocks is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html.
+ *
+ * A very small number of explicitly chosen header files can also be
+ * used in an MIT/BSD context. Please see the README.md file in this
+ * repo or the comments in the individual files. Only headers with an
+ * explicit mention that they are dual licensed may be copied and reused
+ * outside the GPL3 terms.
+ *
+ * All source in sst-basic-blocks available at
+ * https://github.com/surge-synthesizer/sst-basic-blocks
+ */
+
+#ifndef INCLUDE_SST_BASIC_BLOCKS_PARAMS_PARAMMETADATA_H
+#define INCLUDE_SST_BASIC_BLOCKS_PARAMS_PARAMMETADATA_H
+
+/*
+ * ParamMetaData is exactly that; a way to encode the metadata (range, scale, string
+ * formtting, string parsing, etc...) for a parameter without specifying how to store
+ * an actual runtime value. It is a configuration- and ui- time object mostly which
+ * lets you advertise things like natural mins and maxes.
+ *
+ * Critically it does *not* store the data for a parameter. All the APIs assume the
+ * actual value and configuration come from an external source, so multiple clients
+ * can adapt to objects which advertise lists of these, like the sst- effects currently
+ * do.
+ *
+ * The coding structure is basically a bunch of bool and value and enum members
+ * and then a bunch of modifiers to set them (.withRange(min,max)) or to set clusters
+ * of them (.asPercentBipolar()). We can add and expand these methods as we see fit.
+ *
+ * Please note this class is still a work in active development. There's an lot
+ * to do including
+ *
+ * - string conversion for absolute, extend, etc...
+ * - custom string functions
+ * - midi notes get note name typeins
+ * - alternate displays
+ * - and much much more
+ *
+ * Right now it just has the features paul needed to port flanger and reverb1 to sst-effects
+ * so still expect change to be coming.
+ */
+
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+#include <optional>
+#include <unordered_map>
+#include <initializer_list>
+#include <tuple>
+#include <utility>
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+
+#include <fmt/core.h>
+#include <array>
+
+#include <stdexcept>
+
+#include "sst/basic-blocks/tables/TemposyncSupport.h"
+#include "sst/basic-blocks/mechanics/string-ops.h"
+
+namespace sst::basic_blocks::params
+{
+
+namespace detail
+{
+/*
+ * Type-ins used to go through std::stof, which follows LC_NUMERIC, so in a
+ * comma-decimal locale "0.5" stopped at the dot and silently became 0 - and the
+ * other way around in a dot-decimal one. mechanics::parseNumber takes either
+ * separator instead.
+ *
+ * Every caller below already sits inside a try/catch that turns a parse failure
+ * into an error message and nullopt, so keeping std::stof's throwing shape makes
+ * this a one-for-one swap rather than a rewrite of that error handling. It also
+ * drops the std::string round trip those call sites were making to satisfy stof.
+ */
+inline float toFloat(std::string_view v)
+{
+    auto r = mechanics::parseNumber(v);
+    if (!r)
+        throw std::invalid_argument("value is not a number");
+    return (float)*r;
+}
+} // namespace detail
+
+struct ParamMetaData
+{
+    ParamMetaData() = default;
+
+    /*
+     * "Quanta" construction mode. While the ambient thread-local below is set, the string / map /
+     * vector setters skip their heap-touching stores, so a ParamMetaData constructed under it
+     * carries only its numeric range and type (min/max/kind) with no allocation. The audio thread
+     * uses this to read a morphing param's range inside process(); the same paramAt() body serves
+     * both the full (display) and quanta (range) builds. See .claude/pmd-non-allocating.md.
+     *
+     * The flag is thread-local so the main thread can build full metadata while the audio thread
+     * builds quanta concurrently. It seeds each default-constructed instance and rides the fluent
+     * chain by copy; only the root pmd() reads it.
+     */
+    static inline thread_local bool sConstructQuantaOnly{false};
+    bool quantaOnly{sConstructQuantaOnly};
+
+    // RAII: construct every ParamMetaData on this thread quanta-only for the scope's lifetime.
+    // Nestable and restoring. Warm the thread-local once on the audio thread before real time
+    // (a dlopen'd plugin's first thread-local access can allocate its TLS block).
+    struct QuantaScope
+    {
+        bool prev{sConstructQuantaOnly};
+        QuantaScope() { sConstructQuantaOnly = true; }
+        ~QuantaScope() { sConstructQuantaOnly = prev; }
+    };
+
+    enum Type
+    {
+        FLOAT, // min/max/default value are in natural units
+        INT,   // min/max/default value are in natural units, stored as a float. (int)round(val)
+        BOOL,  // min/max 0/1. `val > 0.5` is true false test
+        NONE   // special signifier that this param has no value. Used for structural things like
+               // unused slots
+    } type{FLOAT};
+
+    std::string name;
+    std::string
+        shortName{}; // a short (typically <= 12 char) display label; mirrors name unless set
+    std::string groupName{}; // optional one level grouping, like VST3, AU and CLAP.
+
+    uint32_t id{0};    // optional cache of an integer ID for plugin projection.
+    uint32_t flags{0}; // optional flags to pass to a subsequent interpreter. Used by CLAP
+
+    float minVal{0.f}, maxVal{1.f}, defaultVal{0.f};
+    bool canExtend{false}, canDeform{false}, canAbsolute{false}, canTemposync{false},
+        canDeactivate{false};
+    bool deactivateByDefault{false}; // a deactivatable param whose reset/init state is deactivated
+    float temposyncMultiplier{1.f};
+    tables::temposync::Flavor temposyncFlavor{tables::temposync::Flavor::TWO_TO_THE};
+    bool temposyncZeroStage{false}; // ZERO_ONE only: index 0 means a true 0 s
+
+    int deformationCount{0};
+
+    bool supportsStringConversion{false};
+
+    // Polarity can either be explicit set or inferred from the underling min max
+    enum struct Polarity
+    {
+        INFERRED,          // figure out from min-max
+        UNIPOLAR_POSITIVE, // 0 .. x
+        UNIPOLAR_NEGATIVE, // -x .. 0
+        BIPOLAR,           // -x .. x
+        NO_POLARITY        // x .. y not meeting above conditions
+    } polarity{Polarity::INFERRED};
+
+    Polarity getPolarity() const
+    {
+        if (polarity != Polarity::INFERRED)
+            return polarity;
+        if (minVal == 0 && maxVal > 0)
+            return Polarity::UNIPOLAR_POSITIVE;
+        if (minVal < 0 && maxVal == 0)
+            return Polarity::UNIPOLAR_NEGATIVE;
+        if (minVal == -maxVal)
+            return Polarity::BIPOLAR;
+        return Polarity::NO_POLARITY;
+    }
+
+    bool isBipolar() const { return getPolarity() == Polarity::BIPOLAR; }
+    bool isUnipolar() const
+    {
+        auto p = getPolarity();
+        return p == Polarity::UNIPOLAR_NEGATIVE || p == Polarity::UNIPOLAR_POSITIVE;
+    }
+
+    /*
+     * Parameters have an optional quantization which clients can use to
+     * have jogs, quantized drags, and so forth. Right now we support three
+     * baseic forms. None, a custom interval (so each drag is the interval in
+     * natural units) or a custom step (so the space is divided into that many
+     * steps). Standard with() functions to set it up are below.
+     */
+    enum struct Quantization
+    {
+        NO_QUANTIZATION,
+        CUSTOM_INTERVAL,  // Quantize to interval
+        CUSTOM_STEP_COUNT // this manyu steps. Basically interval = max-min/step
+    } quantization{Quantization::NO_QUANTIZATION};
+    float quantizationParam{0.f};
+
+    bool supportsQuantization() const { return quantization != Quantization::NO_QUANTIZATION; }
+    float quantize(float f) const
+    {
+        if (quantization == Quantization::CUSTOM_INTERVAL ||
+            quantization == Quantization::CUSTOM_STEP_COUNT)
+        {
+            switch (displayScale)
+            {
+            case CUBED_AS_DECIBEL:
+            {
+                assert(quantization == Quantization::CUSTOM_INTERVAL);
+                // so we have the db = 20 log10(val^3 * svA);
+                auto v3 = f * f * f * svA;
+                auto db = 20 * std::log10(v3);
+                auto quantdb = quantizationParam * std::round(db / quantizationParam);
+                auto quantv3 = pow(10.f, quantdb / 20);
+                auto lv = std::cbrt(quantv3 / svA);
+                return lv;
+            }
+            break;
+            case SCALED_OFFSET_EXP:
+            {
+                auto dval = (std::exp(svA + f * (svB - svA)) + svC) / svD;
+                auto quantLev = 10.f;
+                if (dval < 0.1)
+                    quantLev = 0.01;
+                else if (dval < 1)
+                    quantLev = 0.1;
+                else if (dval < 100)
+                    quantLev = 1.f;
+                auto qval = quantLev * std::round(dval / quantLev);
+                if (qval == 0.f)
+                    return 0.f;
+
+                auto drc = std::max(svD * qval - svC, 0.00000001f);
+                auto xv = (std::log(drc) - svA) / (svB - svA);
+
+                return std::clamp(xv, minVal, maxVal);
+            }
+            break;
+            default:
+            {
+                auto dI = quantization == Quantization::CUSTOM_INTERVAL
+                              ? quantizationParam
+                              : ((maxVal - minVal) / quantizationParam);
+                return dI * std::round(f / dI);
+            }
+            }
+        }
+
+        return f;
+    }
+    ParamMetaData withIntegerQuantization() const { return withQuantizedInterval(1.f); }
+    ParamMetaData withQuantizedInterval(float interval) const
+    {
+        auto res = *this;
+        res.quantization = Quantization::CUSTOM_INTERVAL;
+        res.quantizationParam = interval;
+        return res;
+    }
+
+    ParamMetaData withQuantizedStepCount(int steps) const
+    {
+        auto res = *this;
+        res.quantization = Quantization::CUSTOM_STEP_COUNT;
+        res.quantizationParam = steps;
+        return res;
+    }
+
+    /*
+     * Enabled indicates whether or not this parameter is used by the provider.
+     * This is handy in dynamic situations where theres inter-param action, ike
+     * the shrot circuit VA oscillator
+     */
+    bool enabled{true};
+    bool isEnabled() const { return enabled; }
+    ParamMetaData withEnabled(bool e)
+    {
+        auto res = *this;
+        res.enabled = e;
+        return res;
+    }
+
+    /*
+     * Parameters have an extensible optional set of features stored in a single
+     * uint64_t which you can flag on and off. This allows us to add things we want
+     * as binaries on params without adding a squillion little bools for lesser importance
+     * information only toggles. These features are not stream-at-rest stable just
+     * stream-in-session stable by integer.
+     */
+    enum struct Features : uint64_t
+    {
+        SUPPORTS_MULTIPLICATIVE_MODULATION = 1ULL << 0,
+        BELOW_ONE_IS_INVERSE_FRACTION = 1ULL << 1,
+        ALLOW_FRACTIONAL_TYPEINS = 1ULL << 2,
+        ALLOW_TUNING_FRACTION_TYPEINS = 1ULL << 3,
+        ALLOW_MIDI_NOTENAMES = 1ULL << 4,
+        MULTIPLICATIVE_MODULATION_OFF_BY_DEFAULT = 1ULL << 5,
+        FLOAT_ALWAYS_QUANTIZES = 1ULL << 6,
+
+        USER_FEATURE_0 = 1ULL << 32
+    };
+    uint64_t features{0};
+    ParamMetaData withFeature(Features f) const
+    {
+        auto res = *this;
+        res.features |= (uint64_t)f;
+        return res;
+    }
+    ParamMetaData withFeature(uint64_t f) const
+    {
+        auto res = *this;
+        res.features |= f;
+        return res;
+    }
+    bool hasFeature(Features f) const { return features & (uint64_t)f; }
+    bool hasFeature(uint64_t f) const { return features & (uint64_t)f; }
+
+    // This allows parameters to associate with a version of software and is primarily
+    // used to generate ordering when adding parameters in auv2.
+    uint64_t version{0};
+    uint64_t getVersion() const { return version; }
+    ParamMetaData withVersion(uint64_t v) const
+    {
+        auto res = *this;
+        res.version = v;
+        return res;
+    }
+
+    ParamMetaData withSupportsMultiplicativeModulation() const
+    {
+        return withFeature(Features::SUPPORTS_MULTIPLICATIVE_MODULATION);
+    }
+
+    ParamMetaData withMultiplicativeModulationOffByDefault() const
+    {
+        return withFeature(Features::MULTIPLICATIVE_MODULATION_OFF_BY_DEFAULT);
+    }
+
+    ParamMetaData withFloatAlwaysQuantizes() const
+    {
+        return withFeature(Features::FLOAT_ALWAYS_QUANTIZES);
+    }
+
+    bool hasSupportsMultiplicativeModulation() const
+    {
+        return hasFeature(Features::SUPPORTS_MULTIPLICATIVE_MODULATION);
+    }
+
+    bool hasMultiplicativeModulationOffByDefault() const
+    {
+        return hasFeature(Features::MULTIPLICATIVE_MODULATION_OFF_BY_DEFAULT);
+    }
+
+    bool hasFloatAlwaysQuantizes() const { return hasFeature(Features::FLOAT_ALWAYS_QUANTIZES); }
+
+    /*
+     * To String and From String conversion functions require information about the
+     * parameter to execute. The primary driver is the value so the API takes the form
+     * `valueToString(float)` but for optional features like extension, deform,
+     * absolute and temposync we need to know that. Since this metadata does not
+     * store any values but has the values handed externally, we could either have
+     * a long-argument-list API or a little helper class for those values. We chose
+     * the later in FeatureState
+     */
+    struct FeatureState
+    {
+        bool isHighPrecision{false}, isExtended{false}, isAbsolute{false}, isTemposynced{false},
+            isNoUnits{false}, modulationClamped{true};
+
+        FeatureState() {}
+
+        FeatureState withHighPrecision(bool e)
+        {
+            auto res = *this;
+            res.isHighPrecision = e;
+            return res;
+        }
+        FeatureState withExtended(bool e)
+        {
+            auto res = *this;
+            res.isExtended = e;
+            return res;
+        }
+        FeatureState withAbsolute(bool e)
+        {
+            auto res = *this;
+            res.isAbsolute = e;
+            return res;
+        }
+        FeatureState withTemposync(bool e)
+        {
+            auto res = *this;
+            res.isTemposynced = e;
+            return res;
+        }
+        FeatureState withNoUnits(bool e)
+        {
+            auto res = *this;
+            res.isNoUnits = e;
+            return res;
+        }
+        FeatureState withModulationClamped(bool e)
+        {
+            auto res = *this;
+            res.modulationClamped = e;
+            return res;
+        }
+    };
+
+    /*
+     * What is the primary string representation of this value
+     */
+    std::optional<std::string> valueToString(float val, const FeatureState &fs = {}) const;
+
+    /*
+     * Some parameters have a secondary representation. For instance 441.2hz could also be ~A4.
+     * If this parameter supports that it will return a string value from this API. Surge uses
+     * this in the left side of the tooltip.
+     */
+    std::optional<std::string> valueToAlternateString(float val, const FeatureState &fs = {}) const;
+
+    /*
+     * Convert a value to a string; if the optional is empty populate the error message.
+     */
+    std::optional<float> valueFromString(std::string_view, std::string &errMsg,
+                                         const FeatureState &fs = {}) const;
+
+    /*
+     * Distances to String conversions are more peculiar, especially with non-linear ranges.
+     * The parameter metadata assumes all distances are represented in a [-1,1] value on the
+     * range of the parameter, and then can create four strings for a given distance:
+     * - value up/down (to string of val +/- modulation)
+     * - distance up (the string of the distance of appying the modulation up down)
+     * To calculate these, modulation needs to be expressed as a natural base value
+     * and a percentage modulation depth.
+     */
+    struct ModulationDisplay
+    {
+        // value is with-units value suitable to seed a typein. Like "4.3 semitones"
+        std::string value;
+        // Summary is a brief description suitable for a menu like "+/- 13.2%"
+        std::string summary;
+
+        // baseValue, valUp/Dn and changeUp/Dn are no unit indications of change in each
+        // direction.
+        std::string baseValue, valUp, valDown, changeUp, changeDown;
+
+        // modulationSummary is a longer-than-menu display suitable for single line infowindows
+        std::string singleLineModulationSummary;
+    };
+    std::optional<ModulationDisplay> modulationNaturalToString(float naturalBaseVal,
+                                                               float modulationNatural,
+                                                               bool isBipolar,
+                                                               const FeatureState &fs = {}) const;
+
+    // a modulated value stops at the range ends, marked with < or >
+    void clampModulationEndpoint(float &v, std::string &prefix) const
+    {
+        // landing on the end is not past it, even after a float round trip
+        auto eps = 1e-5f * (maxVal - minVal);
+        if (v > maxVal + eps)
+            prefix = ">";
+        if (v < minVal - eps)
+            prefix = "<";
+        v = std::clamp(v, minVal, maxVal);
+    }
+
+    // a display distance in the units valueToString would pick for a value that size
+    std::tuple<double, int, std::string> alternateScaledDelta(double delta,
+                                                              const FeatureState &fs) const
+    {
+        auto useAlt =
+            (alternateScaleWhen == SCALE_BELOW && std::fabs(delta) < alternateScaleCutoff) ||
+            (alternateScaleWhen == SCALE_ABOVE && std::fabs(delta) > alternateScaleCutoff);
+        auto dp = decimalPlaces;
+        if (useAlt && alternateScaleDecimalPlaces >= 0)
+            dp = alternateScaleDecimalPlaces;
+        if (fs.isHighPrecision)
+            dp += 4;
+        if (useAlt)
+            return {delta * alternateScaleRescaling, dp, alternateScaleUnits};
+        return {delta, dp, unit};
+    }
+    std::optional<float> modulationNaturalFromString(std::string_view deltaNatural,
+                                                     float naturalBaseVal, std::string &errMsg,
+                                                     const FeatureState &fs = {}) const;
+
+    enum DisplayScale
+    {
+        LINEAR,            // out = A * r + B
+        A_TWO_TO_THE_B,    // out = A 2^(B r + C) + D
+        CUBED_AS_DECIBEL,  // the underlier is an amplitude applied as v*v*v and displayed as db
+        SCALED_OFFSET_EXP, // (exp(A + x ( B - A )) + C) / D
+        DECIBEL,           // TODO - implement
+        UNORDERED_MAP,     // out = discreteValues[(int)std::round(val)]
+        MIDI_NOTE,    // uses C4 etc.. notation. The octaveOffset has 0 -> 69=A4, 1 = A5, -1 = A3
+        LOGARITHMIC,  // A ln(v) / ln(B) + C
+        USER_PROVIDED // TODO - implement
+    } displayScale{LINEAR};
+
+    std::string unit;
+    std::string unitSeparator{" "};
+    std::vector<std::tuple<std::string, float, float>> customValueLabelsWithAccuracy;
+    bool ordinalNumbering{false};
+    std::string getOrdinalEnding(const float v) const
+    {
+        switch ((int)std::round(v))
+        {
+        case 1:
+        case 21:
+        case 31:
+        case 41:
+        case 51:
+        case 61:
+            return "st";
+        case 2:
+        case 22:
+        case 32:
+        case 42:
+        case 52:
+        case 62:
+            return "nd";
+        case 3:
+        case 23:
+        case 33:
+        case 43:
+        case 53:
+        case 63:
+            return "rd";
+        default:
+            return "th";
+        }
+    }
+
+    std::unordered_map<int, std::string> discreteValues;
+    int decimalPlaces{2};
+    inline static int defaultMidiNoteOctaveOffset{0};
+
+    float svA{0.f}, svB{0.f}, svC{0.f}, svD{0.f}; // for various functional forms
+    float exA{1.f}, exB{0.f};
+
+    enum AlternateScaleWhen
+    {
+        NO_ALTERNATE,
+        SCALE_BELOW,
+        SCALE_ABOVE
+    } alternateScaleWhen{NO_ALTERNATE};
+
+    double alternateScaleCutoff{0.f}, alternateScaleRescaling{0.f};
+    std::string alternateScaleUnits{};
+    bool alternateScaleIsDefaultFromString{false};
+    int alternateScaleDecimalPlaces{-1}; // -1 means use the decimalPlaces default
+
+    float naturalToNormalized01(float naturalValue, bool useSurgeIntConvention = false) const
+    {
+        float v = 0;
+        switch (type)
+        {
+        case FLOAT:
+            assert(maxVal != minVal);
+            v = (naturalValue - minVal) / (maxVal - minVal);
+            break;
+        case INT:
+            assert(maxVal != minVal);
+            if (useSurgeIntConvention)
+            {
+                // This is the surge conversion. Do we want to keep it?
+                v = 0.005 + 0.99 * (naturalValue - minVal) / (maxVal - minVal);
+            }
+            else
+            {
+                v = (naturalValue - minVal) / (maxVal - minVal);
+            }
+            break;
+        case BOOL:
+            assert(maxVal == 1 && minVal == 0);
+            v = (naturalValue > 0.5 ? 1.f : 0.f);
+            break;
+        case NONE:
+            assert(false);
+            v = 0.f;
+            break;
+        }
+        return std::clamp(v, 0.f, 1.f);
+    }
+    float normalized01ToNatural(float normalizedValue) const
+    {
+        assert(normalizedValue >= 0.f && normalizedValue <= 1.f);
+        assert(maxVal != minVal);
+        normalizedValue = std::clamp(normalizedValue, 0.f, 1.f);
+        switch (type)
+        {
+        case FLOAT:
+            return normalizedValue * (maxVal - minVal) + minVal;
+        case INT:
+        {
+            // again the surge conversion
+            return (int)((1 / 0.99) * (normalizedValue - 0.005) * (maxVal - minVal) + 0.5) + minVal;
+        }
+        case BOOL:
+            assert(maxVal == 1 && minVal == 0);
+            return normalizedValue > 0.5 ? maxVal : minVal;
+        case NONE:
+            assert(false);
+            return 0.f;
+        }
+        // quiet gcc
+        return 0.f;
+    }
+
+    ParamMetaData withType(Type t)
+    {
+        auto res = *this;
+        res.type = t;
+        return res;
+    }
+    ParamMetaData asFloat()
+    {
+        auto res = *this;
+        res.type = FLOAT;
+        return res;
+    }
+    ParamMetaData asInt()
+    {
+        auto res = *this;
+        res.type = INT;
+        return res;
+    }
+    ParamMetaData asBool()
+    {
+        auto res = *this;
+        res.type = BOOL;
+        res.minVal = 0;
+        res.maxVal = 1;
+        return res;
+    }
+    ParamMetaData asOnOffBool() { return asBool().withOnOffFormatting(); }
+    ParamMetaData asStereoSwitch() { return asOnOffBool().withName("Stereo"); }
+    ParamMetaData withName(std::string_view t)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+        {
+            res.name = t;
+            if (res.shortName.empty())
+                res.shortName = t;
+        }
+        return res;
+    }
+    ParamMetaData withShortName(std::string_view t)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.shortName = t;
+        return res;
+    }
+    ParamMetaData withGroupName(std::string_view t)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.groupName = t;
+        return res;
+    }
+    ParamMetaData withID(const uint32_t id)
+    {
+        auto res = *this;
+        res.id = id;
+        return res;
+    }
+    ParamMetaData withFlags(const uint32_t f)
+    {
+        auto res = *this;
+        res.flags = f;
+        return res;
+    }
+    ParamMetaData withRange(float mn, float mx)
+    {
+        auto res = *this;
+        res.minVal = mn;
+        res.maxVal = mx;
+        res.defaultVal = std::clamp(defaultVal, minVal, maxVal);
+        return res;
+    }
+    ParamMetaData withDefault(float t)
+    {
+        auto res = *this;
+        res.defaultVal = t;
+        return res;
+    }
+    ParamMetaData withPolarity(Polarity p)
+    {
+        auto res = *this;
+        res.polarity = p;
+        return res;
+    }
+
+    ParamMetaData withTemposyncMultiplier(float f)
+    {
+        auto res = *this;
+        res.temposyncMultiplier = f;
+        return res;
+    }
+    ParamMetaData withTemposyncFlavor(tables::temposync::Flavor fl)
+    {
+        auto res = *this;
+        res.temposyncFlavor = fl;
+        return res;
+    }
+    ParamMetaData withTemposyncZeroStage(bool b = true)
+    {
+        auto res = *this;
+        res.temposyncZeroStage = b;
+        return res;
+    }
+    ParamMetaData extendable(bool b = true)
+    {
+        auto res = *this;
+        res.canExtend = b;
+        return res;
+    }
+    // extend is val = (A * val) + B
+    ParamMetaData withExtendFactors(float A, float B = 0.f)
+    {
+        auto res = *this;
+        res.exA = A;
+        res.exB = B;
+        return res;
+    }
+    ParamMetaData deformable(bool b = true)
+    {
+        auto res = *this;
+        res.canDeform = b;
+        return res;
+    }
+    ParamMetaData withDeformationCount(int c)
+    {
+        auto res = *this;
+        res.deformationCount = c;
+        return res;
+    }
+    ParamMetaData absolutable(bool b = true)
+    {
+        auto res = *this;
+        res.canAbsolute = b;
+        return res;
+    }
+    ParamMetaData temposyncable(bool b = true)
+    {
+        auto res = *this;
+        res.canTemposync = b;
+        return res;
+    }
+    ParamMetaData deactivatable(bool b = true, bool byDefault = false)
+    {
+        auto res = *this;
+        res.canDeactivate = b;
+        res.deactivateByDefault = byDefault;
+        return res;
+    }
+
+    ParamMetaData withATwoToTheBFormatting(float A, float B, std::string_view units)
+    {
+        return withATwoToTheBPlusCFormatting(A, B, 0.f, units);
+    }
+
+    ParamMetaData withATwoToTheBPlusCFormatting(float A, float B, float C, std::string_view units)
+    {
+        return withATwoToTheBPlusCPlusDFormatting(A, B, C, 0.f, units);
+    }
+
+    ParamMetaData withATwoToTheBPlusCPlusDFormatting(float A, float B, float C, float D,
+                                                     std::string_view units)
+    {
+        auto res = *this;
+        res.svA = A;
+        res.svB = B;
+        res.svC = C;
+        res.svD = D;
+        if (!res.quantaOnly)
+            res.unit = units;
+        res.displayScale = A_TWO_TO_THE_B;
+        res.supportsStringConversion = true;
+        return res;
+    }
+
+    // A e^ (Bx + C) + d
+    ParamMetaData withAExpBPlusCPlusDFormatting(float A, float B, float C, float D,
+                                                std::string_view units)
+    {
+        // so e^x = 2^x/ln(2)
+        // e^(BX + C) = 2^(BX + C)/ln(2)
+        static constexpr float ln2{0.693147180559945};
+        auto res = *this;
+        res.svA = A;
+        res.svB = B / ln2;
+        res.svC = C / ln2;
+        res.svD = D;
+        if (!res.quantaOnly)
+            res.unit = units;
+        res.displayScale = A_TWO_TO_THE_B;
+        res.supportsStringConversion = true;
+        return res;
+    }
+
+    ParamMetaData withOBXFLogScale(float min, float max, float rolloff, std::string_view units)
+    {
+        // return ((expf(param * logf(rolloff + 1.f)) - 1.f) / (rolloff)) * (max - min) + min;
+        // (e^(x log(ro+1)) - 1) * (max-min)/rolloff + min
+        // A == (max-min)/rolloff
+        // A e^(x log(ro+1)) - A + D
+        auto At = (max - min) / rolloff;
+        auto Bt = log(rolloff + 1);
+        auto Dt = min - At;
+        return withAExpBPlusCPlusDFormatting(At, Bt, 0, Dt, units);
+    }
+
+    ParamMetaData withScaledOffsetExpFormatting(float A, float B, float C, float D,
+                                                std::string_view units)
+    {
+        auto res = *this;
+        res.svA = A;
+        res.svB = B;
+        res.svC = C;
+        res.svD = D;
+        if (!res.quantaOnly)
+            res.unit = units;
+        res.displayScale = SCALED_OFFSET_EXP;
+        res.supportsStringConversion = true;
+        return res;
+    }
+
+    [[deprecated]] ParamMetaData withSemitoneZeroAt400Formatting()
+    {
+        return withSemitoneZeroAt440Formatting();
+    }
+
+    ParamMetaData withSemitoneZeroAt440Formatting()
+    {
+        return withATwoToTheBFormatting(440, 1.0 / 12.0, "Hz")
+            .withIntegerQuantization()
+            .withFeature(Features::ALLOW_MIDI_NOTENAMES);
+    }
+    ParamMetaData withSemitoneZeroAtMIDIZeroFormatting()
+    {
+        return withATwoToTheBFormatting(440.f * pow(2.f, -69 / 12), 1.0 / 12.0, "Hz")
+            .withIntegerQuantization();
+    }
+    ParamMetaData withLog2SecondsFormatting() { return withATwoToTheBFormatting(1, 1, "s"); }
+
+    ParamMetaData withLinearScaleFormatting(std::string_view units, float scale = 1.f,
+                                            float offset = 0.f)
+    {
+        auto res = *this;
+        res.svA = scale;
+        res.svB = offset;
+        if (!res.quantaOnly)
+            res.unit = units;
+        res.displayScale = LINEAR;
+        res.supportsStringConversion = true;
+        return res;
+    }
+
+    ParamMetaData withHarmonicSeriesFormatting()
+    {
+        auto res = *this;
+        res.decimalPlaces = 0;
+        res.svA = 1.f;
+        res.svB = 0.f;
+        res.displayScale = LINEAR;
+        res.supportsStringConversion = true;
+        if (!res.quantaOnly)
+            res.unit = "harmonic";
+        res.ordinalNumbering = true;
+        return res;
+    }
+
+    ParamMetaData withDimensionlessFormatting() { return withLinearScaleFormatting(""); }
+
+    ParamMetaData withSemitoneFormatting()
+    {
+        return withLinearScaleFormatting("semitones")
+            .withIntegerQuantization()
+            .withFeature(Features::ALLOW_TUNING_FRACTION_TYPEINS);
+    }
+    ParamMetaData withLogarithmicFormating(std::string_view units, float scale = 1,
+                                           float basis = std::exp(0), float offset = 0)
+    {
+        auto res = *this;
+        res.svA = scale;
+        res.svB = basis;
+        res.svC = offset;
+        if (!res.quantaOnly)
+            res.unit = units;
+        res.displayScale = LOGARITHMIC;
+        res.supportsStringConversion = true;
+        return res;
+    }
+
+    ParamMetaData withMidiNoteFormatting()
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.unit = "semitones";
+        res.displayScale = MIDI_NOTE;
+        res.supportsStringConversion = true;
+        return res;
+    }
+    // Scan defaults to false because it needs to iterate through the map to find the value
+    // range and client code could already know the appropriate min and max anyway
+    ParamMetaData withUnorderedMapFormatting(const std::unordered_map<int, std::string> &map,
+                                             bool scanAndInitParamRange = false)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.discreteValues = map;
+        res.displayScale = UNORDERED_MAP;
+        res.supportsStringConversion = true;
+        if (scanAndInitParamRange)
+        {
+            auto valmax = std::numeric_limits<int>::min();
+            auto valmin = std::numeric_limits<int>::max();
+            for (const auto &e : map)
+            {
+                valmax = std::max(e.first, valmax);
+                valmin = std::min(e.first, valmin);
+            }
+            res.minVal = valmin;
+            res.maxVal = valmax;
+        }
+        res.type = INT;
+        return res;
+    }
+
+    // Braced-literal form. The initializer_list backing array is automatic storage and the values
+    // are string_views onto static literals, so the *argument* allocates nothing - which lets a
+    // quanta build (map store skipped below) stay heap-free. Braced calls prefer this overload over
+    // the unordered_map one by the list-initialization rule; callers passing a map variable still
+    // bind the overload above. Keep the numeric range/type in sync with it.
+    ParamMetaData
+    withUnorderedMapFormatting(std::initializer_list<std::pair<int, std::string_view>> vals,
+                               bool scanAndInitParamRange = false)
+    {
+        auto res = *this;
+        res.displayScale = UNORDERED_MAP;
+        res.supportsStringConversion = true;
+        if (scanAndInitParamRange)
+        {
+            auto valmax = std::numeric_limits<int>::min();
+            auto valmin = std::numeric_limits<int>::max();
+            for (const auto &[k, sv] : vals)
+            {
+                valmax = std::max(k, valmax);
+                valmin = std::min(k, valmin);
+            }
+            res.minVal = valmin;
+            res.maxVal = valmax;
+        }
+        if (!res.quantaOnly)
+            for (const auto &[k, sv] : vals)
+                res.discreteValues[k] = std::string(sv);
+        res.type = INT;
+        return res;
+    }
+
+    ParamMetaData withOnOffFormatting()
+    {
+        assert(type == BOOL || (type == INT && maxVal == 1 && minVal == 0));
+        return withUnorderedMapFormatting({{false, "Off"}, {true, "On"}});
+    }
+    ParamMetaData withDecimalPlaces(int d)
+    {
+        auto res = *this;
+        res.decimalPlaces = d;
+        return res;
+    }
+
+    ParamMetaData withUnit(std::string_view s)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.unit = s;
+        return res;
+    }
+
+    ParamMetaData withUnitSeparator(std::string_view s)
+    {
+        auto res = *this;
+        if (!res.quantaOnly)
+            res.unitSeparator = s;
+        return res;
+    }
+
+    ParamMetaData withValueLabelRemoved(float v)
+    {
+        auto res = *this;
+
+        auto r = res.customValueLabelsWithAccuracy.begin();
+        while (r != res.customValueLabelsWithAccuracy.end())
+        {
+            if (std::get<1>(*r) == v)
+            {
+                r = res.customValueLabelsWithAccuracy.erase(r);
+            }
+            else
+            {
+                ++r;
+            }
+        }
+        return res;
+    }
+    ParamMetaData withCustomMaxDisplay(std::string_view v)
+    {
+        return withCustomValueDisplay(v, maxVal, 1e-6);
+    }
+
+    ParamMetaData withCustomMinDisplay(std::string_view v)
+    {
+        return withCustomValueDisplay(v, minVal, 1e-6);
+    }
+    ParamMetaData withCustomDefaultDisplay(std::string_view v)
+    {
+        return withCustomValueDisplay(v, defaultVal);
+    }
+
+    ParamMetaData withCustomValueDisplay(std::string_view v, float val, float tol = 0.005)
+    {
+        auto res = withValueLabelRemoved(val);
+        if (!res.quantaOnly)
+            res.customValueLabelsWithAccuracy.emplace_back(std::string(v), val, tol);
+        return res;
+    }
+
+    ParamMetaData withDisplayRescalingBelow(const float cutoff, const float rescale,
+                                            std::string_view units)
+    {
+        auto res = *this;
+        res.alternateScaleWhen = SCALE_BELOW;
+        res.alternateScaleCutoff = cutoff;
+        res.alternateScaleRescaling = rescale;
+        if (!res.quantaOnly)
+            res.alternateScaleUnits = units;
+        res.alternateScaleIsDefaultFromString = false;
+        return res;
+    }
+
+    ParamMetaData withAlternateAsDefaultFromStringUnit(bool b = true)
+    {
+        auto res = *this;
+        res.alternateScaleIsDefaultFromString = b;
+        return res;
+    }
+
+    ParamMetaData withAlternateDecimalPlaces(int dp)
+    {
+        auto res = *this;
+        res.alternateScaleDecimalPlaces = dp;
+        return res;
+    }
+
+    ParamMetaData withoutDisplayRescaling()
+    {
+        auto res = *this;
+        res.alternateScaleWhen = NO_ALTERNATE;
+        return res;
+    }
+
+    ParamMetaData withMilisecondsBelowOneSecond()
+    {
+        auto res = withDisplayRescalingBelow(1.f, 1000.f, "ms")
+                       .withAlternateAsDefaultFromStringUnit(true)
+                       .withAlternateDecimalPlaces(1);
+
+        return res;
+    }
+
+    ParamMetaData withDisplayRescalingAbove(const float cutoff, const float rescale,
+                                            std::string_view units)
+    {
+        auto res = *this;
+        res.alternateScaleWhen = SCALE_ABOVE;
+        res.alternateScaleCutoff = cutoff;
+        res.alternateScaleRescaling = rescale;
+        if (!res.quantaOnly)
+            res.alternateScaleUnits = units;
+        return res;
+    }
+
+    ParamMetaData asPercent()
+    {
+        return withRange(0.f, 1.f)
+            .withDefault(0.f)
+            .withType(FLOAT)
+            .withLinearScaleFormatting("%", 100.f)
+            .withQuantizedInterval(0.1f)
+            .withDecimalPlaces(2);
+    }
+
+    ParamMetaData asPercentExtendableToBipolar()
+    {
+        return asPercent().extendable().withExtendFactors(2.f, -1.f);
+    }
+
+    ParamMetaData asPercentBipolar()
+    {
+        return withRange(-1.f, 1.f)
+            .withDefault(0.f)
+            .withType(FLOAT)
+            .withLinearScaleFormatting("%", 100.f)
+            .withQuantizedInterval(0.1f)
+            .withDecimalPlaces(2);
+    }
+    ParamMetaData asDecibelWithRange(float low, float high, float def = 0.f)
+    {
+        return withRange(low, high).withDefault(def).withType(FLOAT).withLinearScaleFormatting(
+            "dB");
+    }
+    ParamMetaData asDecibelNarrow() { return asDecibelWithRange(-24, 24); }
+    ParamMetaData asDecibel() { return asDecibelWithRange(-48, 48); }
+    ParamMetaData asMIDIPitch()
+    {
+        return withType(FLOAT)
+            .withRange(0.f, 127.f)
+            .withDefault(60.f)
+            .withLinearScaleFormatting("semitones")
+            .withIntegerQuantization()
+            .withDecimalPlaces(0);
+    }
+    ParamMetaData asMIDINote()
+    {
+        return withType(INT)
+            .withRange(0, 127)
+            .withDefault(60)
+            .withMidiNoteFormatting()
+            .withIntegerQuantization()
+            .withDecimalPlaces(0);
+    }
+    ParamMetaData asLfoRate(float from = -7.f, float to = 9.f)
+    {
+        return withType(FLOAT)
+            .withRange(from, to)
+            .temposyncable()
+            .withTemposyncMultiplier(-1)
+            .withIntegerQuantization()
+            .withATwoToTheBFormatting(1, 1, "Hz");
+    }
+    ParamMetaData asSemitoneRange(float lower = -96, float upper = 96)
+    {
+        return withType(FLOAT).withRange(lower, upper).withDefault(0).withSemitoneFormatting();
+    }
+    ParamMetaData asLog2SecondsRange(float lower, float upper, float defVal = 0)
+    {
+        return withType(FLOAT)
+            .withRange(lower, upper)
+            .withDefault(std::clamp(defVal, lower, upper))
+            .temposyncable()
+            .withATwoToTheBFormatting(1, 1, "s")
+            .withMilisecondsBelowOneSecond();
+    }
+    ParamMetaData asEnvelopeTime() { return asLog2SecondsRange(-8.f, 5.f, -1.f); }
+
+    // (exp(lerp(norm_val, 0.6931471824646, 10.1267113685608)) - 2.0)/1000.0
+    ParamMetaData as25SecondExpTime()
+    {
+        return withType(FLOAT)
+            .withRange(0, 1)
+            .withDefault(0.1)
+            .withQuantizedInterval(
+                0.025) // this is kinda ignored though. See custom code in quantize
+            .withScaledOffsetExpFormatting(0.6931471824646, 10.1267113685608, -2.0, 1000.0, "s")
+            .withMilisecondsBelowOneSecond();
+    }
+
+    // as25SecondExpTime plus blanket temposync via the ZERO_ONE note table, with a
+    // true 0 s at the bottom slot (for envelope stages that want a real zero).
+    ParamMetaData as25SecondTemposyncableExpTime()
+    {
+        return as25SecondExpTime()
+            .temposyncable()
+            .withTemposyncFlavor(tables::temposync::Flavor::ZERO_ONE)
+            .withTemposyncZeroStage();
+    }
+
+    ParamMetaData asAudibleFrequency()
+    {
+        return withType(FLOAT).withRange(-60, 70).withDefault(0).withSemitoneZeroAt440Formatting();
+    }
+
+    /**
+     * A 0...1 value where the amplitude is the value cubed and the display is in
+     * decibels
+     */
+    ParamMetaData asCubicDecibelAttenuation() { return asCubicDecibelUpTo(0.f); }
+
+    /**
+     * This creates a param with a max val different from 1, such that the value of
+     * 1 is still 0db and the max val is the dbs provided
+     * @param maxDB Decibels for the top of range
+     */
+    ParamMetaData asCubicDecibelAttenuationWithUpperDBBound(float maxDB)
+    {
+        auto res = asCubicDecibelAttenuation();
+        auto ampmax = pow(10, maxDB / 20);
+        auto mx = std::cbrt(ampmax);
+        res.maxVal = mx;
+        return res.withDefault(1.0);
+    }
+
+    /**
+     * This assumes you have a 0...1 underlyer and want it to represent a
+     * scaled range up to some decibels.
+     *
+     * @param maxDb the decibels represented by the '1' extram
+     */
+    ParamMetaData asCubicDecibelUpTo(float maxDb)
+    {
+        auto res = withType(FLOAT).withRange(0.f, 1.f).withDefault(1.f);
+        res.displayScale = CUBED_AS_DECIBEL;
+        res.supportsStringConversion = true;
+        res.svA = pow(10.f, maxDb / 20.0);
+
+        // find the 0db point
+        // v * v * v * svA is the amp
+        // db = 20 log10(amp)
+        // 0 = 20 log10(v*v*v*svA)
+        // v * v * v * svA = 1
+        // v = cbrt(1/svA)
+        res = res.withDefault(std::cbrt(1.f / res.svA)).withQuantizedInterval(3.f);
+
+        res = res.withSupportsMultiplicativeModulation();
+        return res;
+    }
+    ParamMetaData asLinearDecibel(float lower = -96, float upper = 12)
+    {
+        return withType(FLOAT)
+            .withRange(lower, upper)
+            .withDefault(0)
+            .withIntegerQuantization()
+            .withSupportsMultiplicativeModulation()
+            .withLinearScaleFormatting("dB");
+    }
+
+    ParamMetaData asPan()
+    {
+        return asPercentBipolar()
+            .withDefault(0)
+            .withDecimalPlaces(0)
+            .withCustomDefaultDisplay("C")
+            .withCustomMaxDisplay("R")
+            .withCustomMinDisplay("L");
+    }
+
+    // For now, his is the temposync notation assuming a 2^x and temposync ratio based on 120bpm
+    std::string temposyncNotation(float f) const;
+    std::optional<float> valueFromTemposyncNotation(const std::string &s) const;
+    float snapToTemposync(float f) const;
+    // flavor dispatch: TWO_TO_THE vs ZERO_ONE share one Note currency
+    tables::temposync::Note temposyncDecode(float f) const;
+    float temposyncEncode(const tables::temposync::Note &n) const;
+
+    std::optional<int> noteNameToNoteNumber(const std::string &s) const;
+
+    /*
+     * OK so I'm doing something a bit tricky here. I want to be able to project
+     * a PMD onto a clap_param_info * but I don't want to couple this low level library
+     * to clap/ext/param.h. So I will duck type it with a template
+     */
+    template <int stringSize, typename IsAClapParamInfo>
+    void toClapParamInfo(IsAClapParamInfo *info) const
+    {
+        info->id = id;
+        strncpy(info->name, name.c_str(), stringSize - 2);
+        info->name[stringSize - 1] = 0;
+        strncpy(info->module, groupName.c_str(), stringSize - 2);
+        info->module[stringSize - 1] = 0;
+        info->min_value = minVal;
+        info->max_value = maxVal;
+        info->default_value = defaultVal;
+        info->flags = flags;
+    }
+
+    float applyAlternateUnscalingOnFromString(const std::string_view &, float) const;
+};
+
+/*
+ * Implementation below here
+ */
+inline std::optional<std::string> ParamMetaData::valueToString(float val,
+                                                               const FeatureState &fs) const
+{
+    // A quanta-only build carries no display strings, so it cannot render a value.
+    if (quantaOnly)
+        return std::nullopt;
+    if (type == BOOL)
+    {
+        for (auto &v : customValueLabelsWithAccuracy)
+        {
+            if (std::get<1>(v) < 0.1 && val < 0.5)
+                return std::get<0>(v);
+
+            if (std::get<1>(v) > 0.9 && val > 0.5)
+                return std::get<0>(v);
+        }
+    }
+
+    if (type == INT)
+    {
+        for (auto &det : customValueLabelsWithAccuracy)
+        {
+            auto dv = std::get<1>(det);
+            auto da = std::get<2>(det);
+
+            if (fabs(val - dv) < da * (maxVal - minVal))
+                return std::get<0>(det);
+        }
+
+        auto iv = (int)std::round(val);
+        if (displayScale == UNORDERED_MAP)
+        {
+            if (discreteValues.find(iv) != discreteValues.end())
+                return discreteValues.at(iv);
+            return std::nullopt;
+        }
+        if (displayScale == MIDI_NOTE)
+        {
+            if (iv < 0)
+                return "";
+            auto n = iv;
+            auto o = n / 12 - 1 + defaultMidiNoteOctaveOffset;
+            auto ni = n % 12;
+            static std::array<std::string, 12> nn{"C",  "C#", "D",  "D#", "E",  "F",
+                                                  "F#", "G",  "G#", "A",  "A#", "B"};
+
+            auto res = nn[ni] + std::to_string(o);
+
+            return res;
+        }
+        if (displayScale == LINEAR)
+        {
+            if (fs.isNoUnits)
+                return std::to_string(iv);
+
+            return std::to_string(iv) + (unit.empty() ? "" : unitSeparator) + unit;
+        }
+
+        return std::nullopt;
+    }
+
+    for (auto &det : customValueLabelsWithAccuracy)
+    {
+        auto dv = std::get<1>(det);
+        auto da = std::get<2>(det);
+
+        if (fabs(val - dv) < da * (maxVal - minVal))
+            return std::get<0>(det);
+    }
+
+    if (fs.isExtended)
+        val = exA * val + exB;
+
+    if (fs.isTemposynced)
+    {
+        return temposyncNotation(snapToTemposync(temposyncMultiplier * val));
+    }
+
+    // float cases
+    switch (displayScale)
+    {
+    case LINEAR:
+        if (alternateScaleWhen == NO_ALTERNATE)
+        {
+            if (fs.isNoUnits)
+            {
+                auto res = fmt::format("{:.{}f}", svA * val + svB,
+                                       (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces));
+                return res;
+            }
+            else
+            {
+                return fmt::format(
+                    "{:.{}f}{}{:s}", svA * val + svB,
+                    (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                    ordinalNumbering ? getOrdinalEnding(val) + unitSeparator : unitSeparator, unit);
+            }
+        }
+        else
+        {
+            // Conscious choice - don't supress units if alternate units are in effect
+            assert(!fs.isNoUnits);
+            auto rsv = svA * val;
+            if ((alternateScaleWhen == SCALE_BELOW && rsv < alternateScaleCutoff) ||
+                (alternateScaleWhen == SCALE_ABOVE && rsv > alternateScaleCutoff))
+            {
+                rsv = rsv * alternateScaleRescaling;
+                auto dp = (alternateScaleDecimalPlaces >= 0) ? alternateScaleDecimalPlaces
+                                                             : decimalPlaces;
+                return fmt::format("{:.{}f}{}{:s}", rsv, (fs.isHighPrecision ? (dp + 4) : dp),
+                                   unitSeparator, alternateScaleUnits);
+            }
+            else
+            {
+                return fmt::format("{:.{}f}{}{:s}", svA * val,
+                                   (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                                   unitSeparator, unit);
+            }
+        }
+        break;
+    case A_TWO_TO_THE_B:
+        if (alternateScaleWhen == NO_ALTERNATE)
+        {
+            auto dval = svA * pow(2.0, svB * val + svC) + svD;
+            std::string prefix{};
+            if ((features & (uint64_t)Features::BELOW_ONE_IS_INVERSE_FRACTION) && dval < 1 &&
+                dval > 0)
+            {
+                dval = 1.0 / dval;
+                prefix = "1/";
+            }
+            if (fs.isNoUnits)
+            {
+                return fmt::format("{}{:.{}f}", prefix, dval,
+                                   (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces));
+            }
+            else
+            {
+                return fmt::format("{}{:.{}f}{}{:s}", prefix, dval,
+                                   (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                                   unitSeparator, unit);
+            }
+        }
+        else
+        {
+            // Conscious choice - don't supress units if alternate units are in effect
+            assert(!fs.isNoUnits);
+
+            auto rsv = svA * pow(2.0, svB * val + svC) + svD;
+            if ((alternateScaleWhen == SCALE_BELOW && rsv < alternateScaleCutoff) ||
+                (alternateScaleWhen == SCALE_ABOVE && rsv > alternateScaleCutoff))
+            {
+                rsv = rsv * alternateScaleRescaling;
+                auto dp = (alternateScaleDecimalPlaces >= 0) ? alternateScaleDecimalPlaces
+                                                             : decimalPlaces;
+
+                return fmt::format("{:.{}f}{}{:s}", rsv, (fs.isHighPrecision ? (dp + 4) : dp),
+                                   unitSeparator, alternateScaleUnits);
+            }
+            else
+            {
+                return fmt::format("{:.{}f}{}{:s}", rsv,
+                                   (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                                   unitSeparator, unit);
+            }
+        }
+        break;
+    case LOGARITHMIC:
+    {
+        if (val <= 0)
+            return "-inf";
+        auto dval = svA * std::log(val) / std::log(svB) + svC;
+
+        if (fs.isNoUnits)
+        {
+            return fmt::format("{:.{}f}", dval,
+                               (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces));
+        }
+        else
+        {
+            return fmt::format("{:.{}f}{}{:s}", dval,
+                               (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                               unitSeparator, unit);
+        }
+    }
+    break;
+    case SCALED_OFFSET_EXP:
+    {
+        auto dval = (std::exp(svA + val * (svB - svA)) + svC) / svD;
+        if (alternateScaleWhen == NO_ALTERNATE ||
+            (alternateScaleWhen == SCALE_BELOW && dval > alternateScaleCutoff) ||
+            (alternateScaleWhen == SCALE_ABOVE && dval < alternateScaleCutoff))
+        {
+            // a bit backwards - this is the NON alternate case
+            auto dp = decimalPlaces;
+            if (fs.isNoUnits)
+                return fmt::format("{:.{}f}", dval, (fs.isHighPrecision ? (dp + 4) : dp));
+            return fmt::format("{:.{}f}{}{:s}", dval, (fs.isHighPrecision ? (dp + 4) : dp),
+                               unitSeparator, unit);
+        }
+        auto dp = (alternateScaleDecimalPlaces >= 0) ? alternateScaleDecimalPlaces : decimalPlaces;
+        if (fs.isNoUnits)
+            return fmt::format("{:.{}f}", dval * alternateScaleRescaling,
+                               (fs.isHighPrecision ? (dp + 4) : dp));
+        return fmt::format("{:.{}f}{}{:s}", dval * alternateScaleRescaling,
+                           (fs.isHighPrecision ? (dp + 4) : dp), unitSeparator,
+                           alternateScaleUnits);
+    }
+    break;
+    case CUBED_AS_DECIBEL:
+    {
+        if (val <= 0)
+        {
+            return fmt::format("-inf{}dB", unitSeparator);
+        }
+
+        auto v3 = val * val * val * svA;
+        auto db = 20 * std::log10(v3);
+        return fmt::format("{:.{}f}{}", db,
+                           (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces),
+                           fs.isNoUnits ? "" : unitSeparator + "dB");
+    }
+    break;
+    default:
+        break;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<int> ParamMetaData::noteNameToNoteNumber(const std::string &s) const
+{
+    auto p = s.find_first_not_of(' ');
+    if (p == std::string::npos)
+        return std::nullopt;
+    auto c0 = std::toupper(s[p]);
+    if (c0 >= 'A' && c0 <= 'G')
+    {
+        auto n0 = c0 - 'A';
+        auto sharp = p + 1 < s.size() && s[p + 1] == '#';
+        auto flat = p + 1 < s.size() && s[p + 1] == 'b';
+        auto rest = s.substr(p + 1 + (sharp ? 1 : 0) + (flat ? 1 : 0));
+
+        // a bare letter is octave 0, anything else after it has to be a number
+        auto oct = 0;
+        if (rest.find_first_not_of(' ') != std::string::npos)
+        {
+            auto pn = mechanics::parseNumber(rest);
+            if (!pn.has_value())
+                return std::nullopt;
+            oct = (int)*pn;
+        }
+
+        std::array<int, 7> noteToPosition{9, 11, 0, 2, 4, 5, 7};
+        auto res = noteToPosition[n0] + sharp - flat + (oct + 1 - defaultMidiNoteOctaveOffset) * 12;
+        return res;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<float> ParamMetaData::valueFromString(std::string_view v, std::string &errMsg,
+                                                           const FeatureState &fs) const
+{
+    // The UNORDERED_MAP forward direction is discreteValues[round(val)] -> label; to invert we
+    // scan the map for a matching label. Exact match first (strict inversion) then a
+    // case-insensitive fallback so typeins like "2 baRs" resolve to key "2 Bars".
+    auto fromUnorderedMap = [this, v]() -> std::optional<float> {
+        if (displayScale != UNORDERED_MAP)
+            return std::nullopt;
+        for (const auto &[k, label] : discreteValues)
+            if (label == v)
+                return (float)k;
+        auto lc = [](std::string_view s) {
+            std::string r(s);
+            std::transform(r.begin(), r.end(), r.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            return r;
+        };
+        auto target = lc(v);
+        for (const auto &[k, label] : discreteValues)
+            if (lc(label) == target)
+                return (float)k;
+        return std::nullopt;
+    };
+
+    // A quanta-only build carries no display metadata, so it cannot parse a value.
+    if (quantaOnly)
+    {
+        errMsg = "no display metadata";
+        return std::nullopt;
+    }
+    if (type == BOOL)
+    {
+        if (v == "On" || v == "on" || v == "1" || v == "true" || v == "True")
+            return 1.f;
+        if (v == "Off" || v == "off" || v == "0" || v == "false" || v == "False")
+            return 0.f;
+        if (auto r = fromUnorderedMap())
+            return r;
+    }
+    if (type == INT)
+    {
+        if (displayScale == MIDI_NOTE)
+        {
+            auto s = std::string(v);
+            auto nn = noteNameToNoteNumber(s);
+            if (nn.has_value())
+            {
+                auto res = *nn;
+                if (res >= minVal && res <= maxVal)
+                    return (float)res;
+            }
+            else if (auto pn = mechanics::parseNumber(s))
+            {
+                auto res = (float)(int)*pn;
+                if (res >= minVal && res <= maxVal)
+                    return res;
+            }
+        }
+        if (displayScale == LINEAR)
+        {
+            if (auto pn = mechanics::parseNumber(v))
+            {
+                auto res = (int)*pn;
+                if (res >= minVal && res <= maxVal)
+                    return res;
+            }
+        }
+        if (auto r = fromUnorderedMap())
+            return *r;
+
+        return std::nullopt;
+    }
+
+    for (const auto &det : customValueLabelsWithAccuracy)
+    {
+        if (v == std::get<0>(det))
+            return std::get<1>(det);
+    };
+
+    auto rangeMsg = [this, v]() {
+        std::string em;
+        auto that = *this;
+        that.customValueLabelsWithAccuracy.clear();
+
+        auto nv = valueToString(minVal);
+        auto nvNat = that.valueToString(minVal);
+        if (nvNat == nv)
+            nvNat = std::nullopt;
+        else
+            nvNat = " (" + *nvNat + ")";
+
+        auto xv = valueToString(maxVal);
+        auto xvNat = that.valueToString(maxVal);
+        if (xvNat == xv)
+            xvNat = std::nullopt;
+        else
+            xvNat = " (" + *xvNat + ")";
+
+        if (nv.has_value() && xv.has_value())
+            em = fmt::format("{}{} < val ({}) < {}{}", *nv, nvNat.value_or(""), v, *xv,
+                             xvNat.value_or(""));
+        else
+            em = fmt::format("Invalid input");
+        return em;
+    };
+    switch (displayScale)
+    {
+    case LINEAR:
+    {
+        try
+        {
+            auto r = 1.0;
+            auto vs = std::string(v);
+
+            auto isFrac = (features & (uint64_t)Features::ALLOW_FRACTIONAL_TYPEINS);
+            auto isTunFrac = (features & (uint64_t)Features::ALLOW_TUNING_FRACTION_TYPEINS);
+            if ((isFrac || isTunFrac) && vs.find("/") != std::string::npos)
+            {
+                auto ps = vs.find("/");
+                auto num = vs.substr(0, ps);
+                auto den = vs.substr(ps + 1);
+                auto uv = detail::toFloat(num);
+                auto dv = detail::toFloat(den);
+                r = detail::toFloat(v);
+                if (isFrac && uv != 0 && dv != 0)
+                {
+                    r = uv / dv;
+                }
+                if (isTunFrac && dv != 0 && uv / dv > 0)
+                {
+                    r = 12 * log2(uv / dv);
+                }
+            }
+            else
+            {
+                r = detail::toFloat(v);
+            }
+
+            assert(svA != 0);
+            r = (r - svB) / svA;
+
+            r = applyAlternateUnscalingOnFromString(v, r);
+
+            if (fs.isExtended)
+            {
+                r = (r - exB) / exA;
+            }
+
+            if (r < minVal || r > maxVal)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+
+            return r;
+        }
+        catch (const std::exception &)
+        {
+            errMsg = rangeMsg();
+            return std::nullopt;
+        }
+    }
+    break;
+    case A_TWO_TO_THE_B:
+    {
+        try
+        {
+            auto r = 1.0;
+            auto vs = std::string(v);
+
+            if ((features & (uint64_t)Features::ALLOW_MIDI_NOTENAMES) &&
+                noteNameToNoteNumber(vs).has_value())
+            {
+                r = *noteNameToNoteNumber(vs);
+                r = 440 * pow(2.0, (r - 69) / 12);
+            }
+            else if ((features & (uint64_t)Features::ALLOW_FRACTIONAL_TYPEINS) &&
+                     vs.find("/") != std::string::npos)
+            {
+                auto ps = vs.find("/");
+                auto num = vs.substr(0, ps);
+                auto den = vs.substr(ps + 1);
+                auto uv = detail::toFloat(num);
+                auto dv = detail::toFloat(den);
+                if (uv == 0 || dv == 0)
+                    r = detail::toFloat(v);
+                else
+                    r = uv / dv;
+            }
+            else if ((features & (uint64_t)Features::BELOW_ONE_IS_INVERSE_FRACTION) &&
+                     vs.find("1/") != std::string::npos)
+            {
+                auto ps = vs.find("1/");
+                auto ss = vs.substr(ps + 2);
+                auto uv = detail::toFloat(ss);
+                if (uv == 0)
+                    r = 1.;
+                else
+                    r = 1.0 / uv;
+            }
+            else
+            {
+                r = detail::toFloat(v);
+                if (r < 0 && (features & (uint64_t)Features::BELOW_ONE_IS_INVERSE_FRACTION))
+                {
+                    r = 1.0 / -r;
+                }
+            }
+            assert(svA != 0);
+            assert(svB != 0);
+
+            r = applyAlternateUnscalingOnFromString(v, r);
+
+            if (r < 0)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+            /* v = svA 2^(svB r + svC) + svD
+             * log2((v-svD) / svA) = svB r + svC
+             * (log2((v-svD)/svA) - svC)/svB = r
+             */
+            r = (log2((r - svD) / svA) - svC) / svB;
+
+            // This has a float rounding issue at the extrema
+            if (std::fabs(r - maxVal) < 1e-6 && r > maxVal)
+                return maxVal;
+            if (std::fabs(r - minVal) < 1e-6 && r < minVal)
+                return minVal;
+
+            if (r < minVal || r > maxVal)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+
+            return (float)r;
+        }
+        catch (const std::exception &)
+        {
+            errMsg = rangeMsg();
+            return std::nullopt;
+        }
+    }
+    break;
+    case LOGARITHMIC:
+    {
+        if (v == "-inf")
+            return minVal;
+
+        try
+        {
+            auto r = detail::toFloat(v);
+            // A ln(r) / ln(B) + C = v
+            // (r - c) * lnB / A = lnv
+            auto lnv = (r - svC) * std::log(svB) / svA;
+            auto res = std::exp(lnv);
+            if (res < minVal || res > maxVal)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+            return res;
+        }
+        catch (const std::exception &)
+        {
+            errMsg = rangeMsg();
+            return std::nullopt;
+        }
+    }
+    break;
+
+    case SCALED_OFFSET_EXP:
+    {
+        try
+        {
+            auto r = detail::toFloat(v);
+
+            r = applyAlternateUnscalingOnFromString(v, r);
+
+            // OK so its R = exp(A + X (B-A)) + C)/D
+            // D R - C = exp(A + X (B-a))
+            // log(DR - C) = A + X (B-A)
+            // (log (DR - C) - A) / (B - A) = X
+            auto drc = std::max(svD * r - svC, 0.00000001f);
+            auto xv = (std::log(drc) - svA) / (svB - svA);
+
+            if (xv < minVal || xv > maxVal)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+
+            return xv;
+        }
+        catch (const std::exception &)
+        {
+            errMsg = rangeMsg();
+            return std::nullopt;
+        }
+        return 0.f;
+    }
+    break;
+    case CUBED_AS_DECIBEL:
+    {
+        try
+        {
+            if (v == "-inf")
+                return 0.f;
+
+            auto r = detail::toFloat(v);
+            auto db = pow(10.f, r / 20);
+            auto lv = std::cbrt(db / svA);
+            if (lv < minVal || lv > maxVal)
+            {
+                errMsg = rangeMsg();
+                return std::nullopt;
+            }
+
+            return (float)lv;
+        }
+        catch (const std::exception &)
+        {
+            errMsg = rangeMsg();
+            return std::nullopt;
+        }
+    }
+    break;
+    default:
+        break;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::string>
+ParamMetaData::valueToAlternateString(float f, const FeatureState &fs) const
+{
+    if ((type == FLOAT) && (displayScale == A_TWO_TO_THE_B) &&
+        (features & (uint64_t)Features::ALLOW_MIDI_NOTENAMES))
+    {
+        auto val = svA * pow(2.f, (svB * f + svC)) + svD;
+        // OK so 440 * pow(2, (n-69)/12) = val
+        // log2(val / 440) * 12 + 69 = n;
+        auto n = (log2(val / 440.f) * 12.f + 69.f);
+        auto note = (int)std::round(n);
+        auto ni = (note + 1200) % 12;
+        auto no = note / 12 - 1 + defaultMidiNoteOctaveOffset;
+
+        auto na = std::vector<std::string>{"C",  "C#", "D",  "D#", "E",  "F",
+                                           "F#", "G",  "G#", "A",  "A#", "B"};
+
+        auto approx = std::fabs(f - std::round(f)) < 1e-5 ? "" : "~";
+        return approx + na[ni] + std::to_string(no);
+    }
+    return std::nullopt;
+}
+
+inline std::optional<ParamMetaData::ModulationDisplay>
+ParamMetaData::modulationNaturalToString(float naturalBaseVal, float modulationNatural,
+                                         bool isBipolar, const FeatureState &fs) const
+{
+    if (type != FLOAT)
+        return std::nullopt;
+    ModulationDisplay result;
+
+    // When temposynced the natural->display map is a beat-fraction note table, so a
+    // delta in natural units (seconds) is meaningless. Show the depth as a percent of
+    // range; base/up/down stay in beat-fraction notation via valueToString.
+    if (fs.isTemposynced && canTemposync)
+    {
+        auto nvu = naturalBaseVal + modulationNatural;
+        auto nvd = naturalBaseVal - modulationNatural;
+        std::string upPfx{}, downPfx{};
+        clampModulationEndpoint(nvu, upPfx);
+        clampModulationEndpoint(nvd, downPfx);
+
+        auto rng = maxVal - minVal;
+        auto pu = (rng != 0 ? (nvu - naturalBaseVal) / rng : 0.f) * 100.f;
+        auto pd = (rng != 0 ? (nvd - naturalBaseVal) / rng : 0.f) * 100.f;
+        auto dp = (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces);
+
+        result.value = fmt::format("{}{:.{}f} %", upPfx, pu, dp);
+        if (isBipolar)
+            result.summary =
+                fmt::format("{} {:.{}f} %", pu >= 0 ? "+/-" : "-/+", std::fabs(pu), dp);
+        else
+            result.summary = fmt::format("{:.{}f} %", pu, dp);
+        result.changeUp = result.value;
+        if (isBipolar)
+            result.changeDown = fmt::format("{}{:.{}f} %", downPfx, pd, dp);
+
+        result.baseValue = valueToString(naturalBaseVal, fs).value_or("err");
+        result.valUp = upPfx + valueToString(nvu, fs).value_or("err");
+        if (isBipolar)
+            result.valDown = downPfx + valueToString(nvd, fs).value_or("err");
+
+        if (isBipolar)
+            result.singleLineModulationSummary =
+                fmt::format("{} < {} > {}", result.valDown, result.baseValue, result.valUp);
+        else
+            result.singleLineModulationSummary =
+                fmt::format("{} > {}", result.baseValue, result.valUp);
+        return result;
+    }
+
+    switch (displayScale)
+    {
+    case LINEAR:
+    {
+        assert(std::fabs(modulationNatural) <= maxVal - minVal);
+        auto nvu = naturalBaseVal + modulationNatural;
+        auto nvd = naturalBaseVal - modulationNatural;
+        std::string upPfx{}, downPfx{};
+        if (fs.modulationClamped)
+        {
+            clampModulationEndpoint(nvu, upPfx);
+            clampModulationEndpoint(nvd, downPfx);
+        }
+        // the offset belongs to values, not to distances
+        auto [ru, udp, uu] = alternateScaledDelta(svA * (nvu - naturalBaseVal), fs);
+        auto [rd, ddp, dunit] = alternateScaledDelta(svA * (nvd - naturalBaseVal), fs);
+
+        result.value = fmt::format("{}{:.{}f}{}{}", upPfx, ru, udp, unitSeparator, uu);
+        if (isBipolar)
+            result.summary = fmt::format("{} {:.{}f}{}{}", ru >= 0 ? "+/-" : "-/+", std::fabs(ru),
+                                         udp, unitSeparator, uu);
+        else
+            result.summary = fmt::format("{:.{}f}{}{}", ru, udp, unitSeparator, uu);
+        result.changeUp = result.value;
+        if (isBipolar)
+            result.changeDown =
+                fmt::format("{}{:.{}f}{}{}", downPfx, rd, ddp, unitSeparator, dunit);
+        result.valUp = upPfx + valueToString(nvu, fs).value_or("err");
+        if (isBipolar)
+            result.valDown = downPfx + valueToString(nvd, fs).value_or("err");
+        // TODO pass this on not create
+        auto v2s = valueToString(naturalBaseVal, fs);
+        if (v2s.has_value())
+            result.baseValue = *v2s;
+        else
+            result.baseValue = "-ERROR-";
+
+        if (isBipolar)
+            result.singleLineModulationSummary =
+                fmt::format("{} < {} > {}", result.valDown, result.baseValue, result.valUp);
+        else
+            result.singleLineModulationSummary =
+                fmt::format("{} > {}", result.baseValue, result.valUp);
+        return result;
+    }
+    case A_TWO_TO_THE_B:
+    {
+        auto nvu = naturalBaseVal + modulationNatural;
+        auto nvd = naturalBaseVal - modulationNatural;
+
+        std::string upPfx{}, downPfx{};
+        if (fs.modulationClamped)
+        {
+            clampModulationEndpoint(nvu, upPfx);
+            clampModulationEndpoint(nvd, downPfx);
+        }
+
+        auto scv = svA * pow(2, svB * naturalBaseVal + svC) + svD;
+        auto svu = svA * pow(2, svB * nvu + svC) + svD;
+        auto svd = svA * pow(2, svB * nvd + svC) + svD;
+        auto du = svu - scv;
+        auto dd = svd - scv;
+
+        auto v2s = valueToString(naturalBaseVal, fs);
+        if (v2s.has_value())
+            result.baseValue = *v2s;
+        else
+            result.baseValue = "-ERROR-";
+
+        // the endpoints may sit on either side of the unit switch, so they carry units
+        auto [ru, udp, uu] = alternateScaledDelta(du, fs);
+        auto [rd, ddp, dunit] = alternateScaledDelta(dd, fs);
+        result.value = fmt::format("{}{:.{}f}{}{}", upPfx, ru, udp, unitSeparator, uu);
+        if (isBipolar)
+            result.summary = fmt::format("{} {:.{}f}{}{}", ru >= 0 ? "+/-" : "-/+", std::fabs(ru),
+                                         udp, unitSeparator, uu);
+        else
+            result.summary = fmt::format("{:.{}f}{}{}", ru, udp, unitSeparator, uu);
+        result.changeUp = result.value;
+        if (isBipolar)
+            result.changeDown =
+                fmt::format("{}{:.{}f}{}{}", downPfx, rd, ddp, unitSeparator, dunit);
+        result.valUp = upPfx + valueToString(nvu, fs).value_or("err");
+        if (isBipolar)
+            result.valDown = downPfx + valueToString(nvd, fs).value_or("err");
+
+        if (isBipolar)
+            result.singleLineModulationSummary =
+                fmt::format("{} < {} > {}", result.valDown, result.baseValue, result.valUp);
+        else
+            result.singleLineModulationSummary =
+                fmt::format("{} > {}", result.baseValue, result.valUp);
+        return result;
+    }
+    case SCALED_OFFSET_EXP:
+    {
+        auto nvu = naturalBaseVal + modulationNatural;
+        auto nvd = naturalBaseVal - modulationNatural;
+        std::string upPfx{}, downPfx{};
+        if (fs.modulationClamped)
+        {
+            clampModulationEndpoint(nvu, upPfx);
+            clampModulationEndpoint(nvd, downPfx);
+        }
+        nvu = std::clamp(nvu, 0.f, 1.f);
+        nvd = std::clamp(nvd, 0.f, 1.f);
+        auto nv = std::clamp(naturalBaseVal, 0.f, 1.f);
+
+        auto v = (exp(svA + nv * (svB - svA)) + svC) / svD;
+        auto vu = (exp(svA + nvu * (svB - svA)) + svC) / svD;
+        auto vd = (exp(svA + nvd * (svB - svA)) + svC) / svD;
+
+        auto [deltUp, upDp, deltaUpUnit] = alternateScaledDelta(vu - v, fs);
+        auto [deltDn, dnDp, deltaDnUnit] = alternateScaledDelta(vd - v, fs);
+
+        result.value =
+            fmt::format("{}{:.{}f}{}{}", upPfx, deltUp, upDp, unitSeparator, deltaUpUnit);
+        if (isBipolar)
+        {
+            if (deltUp > 0)
+            {
+                result.summary =
+                    fmt::format("+/- {:.{}f}{}{}", deltUp, upDp, unitSeparator, deltaUpUnit);
+            }
+            else
+            {
+                result.summary =
+                    fmt::format("-/+ {:.{}f}{}{}", -deltUp, upDp, unitSeparator, deltaUpUnit);
+            }
+        }
+        else
+        {
+            result.summary = fmt::format("{:.{}f}{}{}", deltUp, upDp, unitSeparator, deltaUpUnit);
+        }
+        result.changeUp = result.value;
+        if (isBipolar)
+            result.changeDown =
+                fmt::format("{}{:.{}f}{}{}", downPfx, deltDn, dnDp, unitSeparator, deltaDnUnit);
+        result.valUp = upPfx + valueToString(nvu, fs).value_or("err");
+
+        if (isBipolar)
+            result.valDown = downPfx + valueToString(nvd, fs).value_or("err");
+
+        result.baseValue = valueToString(naturalBaseVal, fs).value_or("err");
+
+        if (isBipolar)
+            result.singleLineModulationSummary =
+                fmt::format("{} < {} > {}", result.valDown, result.baseValue, result.valUp);
+        else
+            result.singleLineModulationSummary =
+                fmt::format("{} > {}", result.baseValue, result.valUp);
+
+        return result;
+    }
+    break;
+    case CUBED_AS_DECIBEL:
+    {
+        auto nvu = naturalBaseVal + modulationNatural;
+        auto nvd = naturalBaseVal - modulationNatural;
+        std::string upPfx{}, downPfx{};
+        if (fs.modulationClamped)
+        {
+            clampModulationEndpoint(nvu, upPfx);
+            clampModulationEndpoint(nvd, downPfx);
+        }
+        auto toDb = [this](float x) {
+            x = std::max(x, 0.f);
+            return 20 * std::log10(x * x * x * svA);
+        };
+
+        auto db = toDb(naturalBaseVal);
+        auto deltUp = toDb(nvu) - db;
+        auto deltDn = toDb(nvd) - db;
+
+        auto dp = (fs.isHighPrecision ? (decimalPlaces + 4) : decimalPlaces);
+        auto dbUnit = unitSeparator + "dB";
+        result.value = fmt::format("{}{:.{}f}{}", upPfx, deltUp, dp, dbUnit);
+        if (isBipolar)
+            result.summary = fmt::format("{} {:.{}f}{}", deltUp >= 0 ? "+/-" : "-/+",
+                                         std::fabs(deltUp), dp, dbUnit);
+        else
+            result.summary = fmt::format("{:.{}f}{}", deltUp, dp, dbUnit);
+        result.changeUp = result.value;
+        if (isBipolar)
+            result.changeDown = fmt::format("{}{:.{}f}{}", downPfx, deltDn, dp, dbUnit);
+        result.valUp = upPfx + valueToString(nvu, fs).value_or("err");
+
+        if (isBipolar)
+            result.valDown = downPfx + valueToString(nvd, fs).value_or("err");
+        auto v2s = valueToString(naturalBaseVal, fs);
+        if (v2s.has_value())
+            result.baseValue = *v2s;
+        else
+            result.baseValue = "-ERROR-";
+
+        if (isBipolar)
+            result.singleLineModulationSummary =
+                fmt::format("{} < {} > {}", result.valDown, result.baseValue, result.valUp);
+        else
+            result.singleLineModulationSummary =
+                fmt::format("{} > {}", result.baseValue, result.valUp);
+
+        return result;
+    }
+    break;
+    default:
+        break;
+    }
+
+    return std::nullopt;
+}
+
+inline std::optional<float>
+ParamMetaData::modulationNaturalFromString(std::string_view deltaNatural, float naturalBaseVal,
+                                           std::string &errMsg, const FeatureState &fs) const
+{
+    // a clamped depth displays as >x or <x and reads back as x
+    auto lead = deltaNatural.find_first_not_of(" \t");
+    if (lead != std::string_view::npos && (deltaNatural[lead] == '<' || deltaNatural[lead] == '>'))
+        deltaNatural.remove_prefix(lead + 1);
+
+    if (fs.isTemposynced && canTemposync)
+    {
+        try
+        {
+            auto rng = maxVal - minVal;
+            auto mv = detail::toFloat(deltaNatural) / 100.f * rng;
+            if (std::fabs(mv) > rng)
+            {
+                errMsg = "Maximum depth: 100 %";
+                return std::nullopt;
+            }
+            return mv;
+        }
+        catch (const std::exception &e)
+        {
+            errMsg = "Unable to convert " + std::string(deltaNatural) + " to a percent";
+            return std::nullopt;
+        }
+    }
+
+    switch (displayScale)
+    {
+    case LINEAR:
+    {
+        try
+        {
+            auto mv =
+                applyAlternateUnscalingOnFromString(deltaNatural, detail::toFloat(deltaNatural)) /
+                svA;
+            if (std::fabs(mv) > (maxVal - minVal))
+            {
+                errMsg = fmt::format("Maximum depth: {}{}{}", (maxVal - minVal) * svA,
+                                     unitSeparator, unit);
+                return std::nullopt;
+            }
+            return mv;
+        }
+        catch (const std::exception &e)
+        {
+            return std::nullopt;
+        }
+    }
+    break;
+    case A_TWO_TO_THE_B:
+    {
+        try
+        {
+            auto xbv = svA * pow(2, svB * naturalBaseVal) + svD;
+            auto mv =
+                applyAlternateUnscalingOnFromString(deltaNatural, detail::toFloat(deltaNatural));
+            auto rv = xbv + mv;
+            if (rv < 0)
+            {
+                return std::nullopt;
+            }
+
+            auto r = log2(rv / svA) / svB;
+            auto rg = maxVal - minVal;
+            if (r < -rg || r > rg)
+            {
+                return std::nullopt;
+            }
+
+            return (float)(r - naturalBaseVal);
+        }
+        catch (const std::exception &e)
+        {
+            errMsg = "Unable to convert " + std::string(deltaNatural) + " to a float";
+            return std::nullopt;
+        }
+    }
+    break;
+    case CUBED_AS_DECIBEL:
+    {
+        try
+        {
+            auto bv = naturalBaseVal * naturalBaseVal * naturalBaseVal * svA;
+            auto db = 20 * std::log10(bv);
+            auto mv = detail::toFloat(deltaNatural);
+            auto rv = db + mv;
+            auto av = std::cbrt(pow(10.f, rv / 20) / svA);
+            return (av - naturalBaseVal);
+        }
+        catch (const std::exception &e)
+        {
+            errMsg = "Unable to convert " + std::string(deltaNatural) + " to a float";
+            return std::nullopt;
+        }
+    }
+    break;
+    case SCALED_OFFSET_EXP:
+    {
+        try
+        {
+            auto nv = std::clamp(naturalBaseVal, 0.f, 1.f);
+            auto v = (exp(svA + nv * (svB - svA)) + svC) / svD;
+            auto mv =
+                applyAlternateUnscalingOnFromString(deltaNatural, detail::toFloat(deltaNatural));
+            auto rv = v + mv;
+            // See comment in valueFromString for the algebra here
+            auto drc = std::max((float)(svD * rv - svC), 0.00000001f);
+            auto xv = (std::log(drc) - svA) / (svB - svA);
+            auto dist = xv - naturalBaseVal;
+            return dist;
+        }
+        catch (const std::exception &e)
+        {
+            errMsg = "Unable to convert " + std::string(deltaNatural) + " to a float";
+            return std::nullopt;
+        }
+    }
+    break;
+    default:
+        errMsg = "Display scale " + std::to_string(displayScale) +
+                 " not supported in modulation from string";
+        break;
+    }
+    return std::nullopt;
+}
+
+inline tables::temposync::Note ParamMetaData::temposyncDecode(float f) const
+{
+    namespace ts = tables::temposync;
+    return temposyncFlavor == ts::Flavor::ZERO_ONE ? ts::ZeroOne::fromFloat(f, temposyncZeroStage)
+                                                   : ts::TwoToThe::fromFloat(f);
+}
+
+inline float ParamMetaData::temposyncEncode(const tables::temposync::Note &n) const
+{
+    namespace ts = tables::temposync;
+    return temposyncFlavor == ts::Flavor::ZERO_ONE ? ts::ZeroOne::toFloat(n, temposyncZeroStage)
+                                                   : ts::TwoToThe::toFloat(n);
+}
+
+inline std::string ParamMetaData::temposyncNotation(float f) const
+{
+    assert(type == FLOAT);
+    if (temposyncFlavor == tables::temposync::Flavor::TWO_TO_THE)
+    {
+        assert(displayScale == A_TWO_TO_THE_B);
+        assert(svD == 0.f);
+    }
+    return tables::temposync::toString(temposyncDecode(f));
+}
+
+inline std::optional<float> ParamMetaData::valueFromTemposyncNotation(const std::string &s) const
+{
+    auto n = tables::temposync::fromString(s);
+    if (!n)
+        return std::nullopt;
+    return temposyncEncode(*n);
+}
+
+inline float ParamMetaData::snapToTemposync(float f) const
+{
+    namespace ts = tables::temposync;
+    assert(canTemposync);
+    assert(type == FLOAT);
+    if (temposyncFlavor == ts::Flavor::TWO_TO_THE)
+    {
+        assert(displayScale == A_TWO_TO_THE_B);
+        return ts::TwoToThe::snap(f);
+    }
+    // ZERO_ONE is a 0..1 index param by construction
+    assert(minVal == 0.f && maxVal == 1.f);
+    return ts::ZeroOne::snap(f);
+}
+
+inline float ParamMetaData::applyAlternateUnscalingOnFromString(const std::string_view &v,
+                                                                float r) const
+{
+    if (alternateScaleWhen != NO_ALTERNATE && alternateScaleRescaling != 0.f)
+    {
+        auto altUnitIsInUnit = (unit.find(alternateScaleUnits) != std::string::npos);
+        auto typeinHasUnit = (v.find(unit) != std::string::npos);
+        auto typeinHasAltUnit = (v.find(alternateScaleUnits) != std::string::npos);
+
+        bool applyAlt = false;
+        if (alternateScaleIsDefaultFromString)
+        {
+            applyAlt = true;
+            // OK so we want to check if the typein has the unit, and the typein doesnt
+            // have the alt unit. This stops the case of "3 ms" which also matches "s".
+            if (typeinHasUnit && !typeinHasAltUnit)
+                applyAlt = false;
+        }
+        else
+        {
+            if ((!altUnitIsInUnit && typeinHasAltUnit) ||
+                (altUnitIsInUnit && !typeinHasUnit && typeinHasAltUnit))
+                applyAlt = true;
+        }
+        if (applyAlt)
+        {
+            // We have a string containing the alternAte units
+            r = r / alternateScaleRescaling;
+        }
+    }
+    return r;
+}
+
+} // namespace sst::basic_blocks::params
+
+#endif

@@ -62,6 +62,13 @@ object NativeEngine {
     external fun nativeInitSynths()
     external fun nativeFmLoadBank(index: Int, data: ByteArray): Boolean
     external fun nativeFmPatchName(bank: Int, program: Int): String
+    external fun nativePolySet(slot: Int, index: Int, value: Float)
+    external fun nativePolyParamCount(): Int
+    external fun nativePolyParamName(i: Int): String
+    external fun nativePolyParamGroup(i: Int): String
+    external fun nativePolyParamDefault(i: Int): Float
+    external fun nativePolyParamSteps(i: Int): Int
+    external fun nativePolyDisplay(i: Int, v: Float): String
     external fun nativeSetFxBuffer(buf: ByteBuffer)
     external fun nativeSetFx(chain: Int, slot: Int, type: Int)
     external fun nativeFxMeter(chain: Int, slot: Int): Float
@@ -139,6 +146,8 @@ class AudioEngine(private val ctx: Context) {
     val params: SoundParams = SoundParams.load(ctx)
     /** Effect slots of sounds, groups and the master (saved separately). */
     val fx: FxParams = FxParams.load(ctx)
+    /** POLY source patches (OB-Xf engine), per sound. */
+    val poly: PolyParams by lazy { PolyParams(n) }
 
     var masterGain: Float = 0.7f
         set(v) {
@@ -178,6 +187,7 @@ class AudioEngine(private val ctx: Context) {
         n.nativeSetParamBuffer(params.buffer)
         n.nativeSetFxBuffer(fx.buffer)
         n.nativeInitSynths()
+        poly.load(ctx)
         params.fmPatchName = { b, p -> n.nativeFmPatchName(b, p) }
         loadFmBanks()
         // re-create the saved effects (each allocates its buffers here, not on the audio thread)

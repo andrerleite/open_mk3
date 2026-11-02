@@ -41,3 +41,18 @@ THE SOFTWARE.
 - Changes are listed in `core/src/main/cpp/third_party/dexed/README.md`.
 
 The effects (compressor, chorus, delay, reverb) are original Open MK3 code (GPL-3.0).
+
+## OB-Xf synth engine (GPL-3.0)
+
+The POLY sound source uses the synthesizer engine of OB-Xf
+(https://github.com/surge-synthesizer/OB-Xf) by the Surge Synth Team, continuing OB-Xd by
+Vadim Filatov (2DaT) and the OB-Xd contributors, licensed under the GNU General Public License
+v3. Source and changes: `core/src/main/cpp/third_party/obxf/` (see its README.md). It brings:
+
+- sst-basic-blocks (https://github.com/surge-synthesizer/sst-basic-blocks), GPL-3.0.
+- SIMDe (https://github.com/simd-everywhere/simde), MIT License, Copyright (c) 2017 Evan
+  Nemerson and the SIMDe contributors.
+- {fmt} (https://github.com/fmtlib/fmt), MIT License, Copyright (c) 2012 - present, Victor
+  Zverovich and {fmt} contributors.
+
+The OB-Xf factory patches are CC0 / public domain, by their authors (named in each patch).

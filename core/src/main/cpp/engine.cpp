@@ -35,6 +35,7 @@
 #include "fx.h"
 #include "synth.h"
 #include "fm.h"
+#include "obxf.h"
 #include <mutex>
 #include <vector>
 
@@ -232,6 +233,7 @@ struct Voice {
     int synth = -1;
     int fm = -1;          // FM source: index into the FM pool
     bool fmUp = false;    // note-off sent to the FM voice
+    int pinst = -1;       // POLY source: instance playing this note (the voice only times it)
     int quietBlocks = 0;
     int ageBlocks = 0;
 };
@@ -241,6 +243,7 @@ static SampleData gSynthDummy = [] { SampleData d; d.frames = 1; d.data.assign(1
 
 constexpr int kSynthVoices = 16;
 constexpr int kFmVoices = 16;
+constexpr int kPolyInst = 4;  // POLY (OB-Xf) instances: each plays one sound, polyphonically
 constexpr int kFxSlots = 4;
 constexpr int kChains = kSounds + kGroups + 1;   // per sound, per group, master
 constexpr int kChainGroup0 = kSounds;
@@ -353,13 +356,71 @@ public:
     openmk3::FmVoice* fmPool[kFmVoices] = {};
     Voice* fmOwner[kFmVoices] = {};
 
+    // ---- POLY source (OB-Xf): a few whole-synth instances, bound to sounds on demand ----
+    struct PolyEvent { int at; int type; int note; float vel; };  // type 0 on, 1 off, 2 all off
+    struct PolyInst {
+        openmk3::PolySynth* synth = nullptr;
+        int slot = -1;               // sound it plays (-1 = free)
+        uint64_t lastUse = 0;
+        int quietChunks = 0;         // chunks without notes or sound
+        int notes = 0;               // notes on (approximate)
+        float cur[openmk3::kPolyParams];  // parameters applied (NaN = apply at the next render)
+        PolyEvent ev[64];
+        int evN = 0;
+        void push(const PolyEvent& e) { if (evN < 64) ev[evN++] = e; }
+    };
+    PolyInst polyInst[kPolyInst];
+    /** Each sound's POLY patch (0..1 per parameter), written by Java. */
+    float polyPatch[kSounds][openmk3::kPolyParams];
+    bool polyPatchInit = false;
+    void initPolyPatches() {
+        if (polyPatchInit) return;
+        for (auto& pp : polyPatch)
+            for (int i = 0; i < openmk3::kPolyParams; i++) pp[i] = openmk3::PolySynth::paramDefault(i);
+        polyPatchInit = true;
+    }
+
     void ensureSynths() {
         for (auto& sv : synthPool)
             if (!sv) sv = openmk3::SynthVoice::create();
         openmk3::FmVoice::initTables(kSampleRate);
         for (auto& f : fmPool)
             if (!f) f = openmk3::FmVoice::create();
+        initPolyPatches();
+        for (auto& pi : polyInst) {
+            if (!pi.synth) pi.synth = openmk3::PolySynth::create(float(kSampleRate));
+            for (float& c : pi.cur) c = NAN;
+        }
     }
+
+    /** The instance for [slot]'s next note: its own, else a quiet one, else the least recent. */
+    int polyFor(int slot) {
+        int best = -1;
+        for (int k = 0; k < kPolyInst; k++) if (polyInst[k].synth && polyInst[k].slot == slot) return k;
+        for (int k = 0; k < kPolyInst; k++) {
+            auto& pi = polyInst[k];
+            if (!pi.synth) continue;
+            if (pi.slot < 0) { best = k; break; }
+            if (best < 0) { best = k; continue; }
+            auto& b = polyInst[best];
+            const bool q = pi.quietChunks > 20, bq = b.quietChunks > 20;
+            if ((q && !bq) || (q == bq && pi.lastUse < b.lastUse)) best = k;
+        }
+        if (best < 0) return -1;
+        auto& pi = polyInst[best];
+        if (pi.slot >= 0) {
+            // taken from another sound: its notes stop
+            pi.push({0, 2, 0, 0.f});
+            for (auto& v : voices) if (v.sample && v.pinst == best) { v.pinst = -1; v.sample = nullptr; }
+        }
+        pi.slot = slot;
+        pi.notes = 0;
+        for (float& c : pi.cur) c = NAN;
+        return best;
+    }
+
+    /** Renders the POLY instances into their sounds' buses. */
+    void renderPoly(int frames, float* pb, const float* fp, float* out, float* scopeTap, int sk, int si, uint32_t* active);
 
     // ---- stream management ----
     bool open();
@@ -420,6 +481,11 @@ private:
     int64_t framesDone = 0;  // frames rendered so far (absolute time for duplicate checks)
     void renderChunk(float* out, int32_t frames);
     void freeSynth(Voice& v) {
+        if (v.pinst >= 0) {  // a POLY note taken over: its note ends
+            polyInst[v.pinst].push({0, 1, v.note, 0.f});
+            polyInst[v.pinst].notes = std::max(0, polyInst[v.pinst].notes - 1);
+            v.pinst = -1;
+        }
         if (v.synth >= 0 && synthOwner[v.synth] == &v) synthOwner[v.synth] = nullptr;
         v.synth = -1;
         if (v.fm >= 0 && fmOwner[v.fm] == &v) fmOwner[v.fm] = nullptr;
@@ -677,6 +743,8 @@ void Engine::killSlot(int slot) {
     for (auto& v : voices)
         if (v.sample && (slot < 0 || v.slot == slot) && v.fadeOut < 0) v.fadeOut = kFadeOut;
     if (slot < 0) fxResetChunks = 3;  // everything off: effect tails too (after the fade-outs)
+    for (auto& pi : polyInst)
+        if (pi.slot >= 0 && (slot < 0 || pi.slot == slot)) { pi.push({0, 2, 0, 0.f}); pi.notes = 0; }
 }
 
 void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note, int chord) {
@@ -685,7 +753,8 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     const float* P = pb ? pb + slot * kParams : kDefaultParams;
     const int src = slot < kSounds ? int(P[P_SRC] + 0.5f) : 0;
     const bool isFm = src == 2;
-    const bool isSynth = src == 1 || isFm;  // no sample: both use the dummy
+    const bool isPoly = src == 3;
+    const bool isSynth = src == 1 || isFm || isPoly;  // no sample: all use the dummy
     const SampleData* s = isSynth ? &gSynthDummy : current[slot].load(std::memory_order_acquire);
     if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
@@ -696,7 +765,8 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     for (auto& v : voices)
         if (v.sample && v.slot == slot && v.note == std::clamp(note, 0, 127) && std::llabs(v.startAt - startAt) < 48) return;
     // A chord always gets enough voices for its own notes.
-    int poly = std::max(std::clamp(int(P[P_POLY] + 0.5f), 1, 16), std::clamp(chord, 1, 8));
+    // (POLY: the synth patch sets the polyphony)
+    int poly = isPoly ? 64 : std::max(std::clamp(int(P[P_POLY] + 0.5f), 1, 16), std::clamp(chord, 1, 8));
     while (true) {
         int count = 0;
         Voice* oldestOfSlot = nullptr;
@@ -725,7 +795,11 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     freeSynth(*best);
     int synthIdx = -1;
     int fmIdx = -1;
-    if (isFm) {
+    int polyIdx = -1;
+    if (isPoly) {
+        polyIdx = polyFor(slot);
+        if (polyIdx < 0) return;
+    } else if (isFm) {
         for (int k = 0; k < kFmVoices; k++)
             if (fmPool[k] && !fmOwner[k]) { fmIdx = k; break; }
         if (fmIdx < 0) {
@@ -781,7 +855,14 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
         v.endF = 1;
         v.pos = 0.0;
         v.rev = false;
-        if (isFm) {
+        if (isPoly) {
+            v.pinst = polyIdx;
+            auto& pi = polyInst[polyIdx];
+            pi.lastUse = voiceAge;
+            pi.quietChunks = 0;
+            pi.notes++;
+            pi.push({std::max(0, offset), 0, std::clamp(note, 0, 127), std::clamp(vel, 0.01f, 1.f)});
+        } else if (isFm) {
             v.fm = fmIdx;
             fmOwner[fmIdx] = &v;
             openmk3::FmEdit e;
@@ -1112,6 +1193,68 @@ void Engine::render(float* out, int32_t frames) {
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
 }
 
+void Engine::renderPoly(int frames, float* pb, const float* fp, float* out, float* scopeTap, int sk, int si, uint32_t* active) {
+    float l[kChunk], r[kChunk];
+    for (int k = 0; k < kPolyInst; k++) {
+        auto& pi = polyInst[k];
+        if (!pi.synth || pi.slot < 0) continue;
+        const int slot = pi.slot;
+        if (pi.evN == 0 && pi.notes == 0 && pi.quietChunks > 400) continue;  // asleep (~2 s silent)
+        const float* P = pb ? pb + slot * kParams : kDefaultParams;
+        // patch edits (and a fresh binding) reach the synth before this chunk's notes
+        const float* want = polyPatch[slot];
+        for (int i = 0; i < openmk3::kPolyParams; i++)
+            if (!(pi.cur[i] == want[i])) { pi.cur[i] = want[i]; pi.synth->setParam(i, want[i]); }
+        // touch strip: PITCH bends over the patch's bend range, MOD drives vibrato
+        const float rangeUp = std::max(1.f, want[36] * 48.f);
+        pi.synth->pitchWheel(std::clamp(std::clamp(P[P_BEND], -24.f, 24.f) / rangeUp, -1.f, 1.f));
+        pi.synth->modWheel(std::clamp(P[P_MODW], 0.f, 1.f));
+        // events in time order, the audio rendered between them
+        std::stable_sort(pi.ev, pi.ev + pi.evN, [](const PolyEvent& a, const PolyEvent& b) { return a.at < b.at; });
+        int pos = 0, e = 0;
+        while (pos < frames) {
+            while (e < pi.evN && pi.ev[e].at <= pos) {
+                const auto& ev = pi.ev[e++];
+                if (ev.type == 0) pi.synth->noteOn(ev.note, ev.vel);
+                else if (ev.type == 1) pi.synth->noteOff(ev.note);
+                else pi.synth->allSoundOff();
+            }
+            const int next = e < pi.evN ? std::min(frames, std::max(pos + 1, pi.ev[e].at)) : frames;
+            pi.synth->render(l + pos, r + pos, next - pos);
+            pos = next;
+        }
+        while (e < pi.evN) {  // events at or past the end of the chunk
+            const auto& ev = pi.ev[e++];
+            if (ev.type == 0) pi.synth->noteOn(ev.note, ev.vel);
+            else if (ev.type == 1) pi.synth->noteOff(ev.note);
+            else pi.synth->allSoundOff();
+        }
+        pi.evN = 0;
+        // the sound's volume and pan, then its bus
+        const float volDb = std::clamp(P[P_VOL], -60.f, 12.f);
+        const float vol = volDb <= -59.9f ? 0.f : std::pow(10.f, volDb / 20.f);
+        const float pan = std::clamp(P[P_PAN], -1.f, 1.f);
+        const float gl = vol * (pan > 0.f ? 1.f - pan : 1.f), gr = vol * (pan < 0.f ? 1.f + pan : 1.f);
+        float* dst;
+        if (chainActive(fp, slot)) {
+            dst = soundBus[slot];
+            if (!soundUsed[slot]) { std::memset(dst, 0, sizeof(float) * frames * 2); soundUsed[slot] = true; }
+        } else dst = groupBus[slot / kPads];
+        float* tap = (sk == 2 && slot == si) ? scopeTap : nullptr;
+        float peak = 0.f;
+        for (int i = 0; i < frames; i++) {
+            const float ol = l[i] * gl, orr = r[i] * gr;
+            dst[i * 2] += ol;
+            dst[i * 2 + 1] += orr;
+            if (tap) { tap[i * 2] += ol; tap[i * 2 + 1] += orr; }
+            peak = std::max(peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
+        }
+        if (pi.notes > 0 || peak > 1e-4f) { pi.quietChunks = 0; active[slot / 32] |= 1u << (slot % 32); }
+        else pi.quietChunks++;
+    }
+    (void)out;
+}
+
 void Engine::renderChunk(float* out, int32_t frames) {
     struct Advance { int64_t& f; int n; ~Advance() { f += n; } } advance{framesDone, frames};
     // effects swapped in by Java (allocation happens there; frees happen there too)
@@ -1190,6 +1333,25 @@ void Engine::renderChunk(float* out, int32_t frames) {
         const SampleData* s = v.sample;
         if (!s) continue;
         const float* P = pb ? pb + v.slot * kParams : kDefaultParams;
+        if (v.pinst >= 0) {
+            // POLY note: the instance makes the sound; the voice only times the note-off
+            auto& pi = polyInst[v.pinst];
+            int i = std::min(v.startOffset, frames - 1);
+            v.startOffset = 0;
+            int off = -1;
+            if (v.fadeOut >= 0 || v.released || v.gate == 0) off = i;
+            else if (v.gate > 0) {
+                if (v.gate <= frames - i) off = i + v.gate - 1;
+                else v.gate -= frames - i;
+            }
+            if (off >= 0) {
+                pi.push({off, 1, v.note, 0.f});
+                pi.notes = std::max(0, pi.notes - 1);
+                v.pinst = -1;
+                v.sample = nullptr;
+            } else active[v.slot / 32] |= 1u << (v.slot % 32);
+            continue;
+        }
         // ---- parameters read every callback (knob moves affect playing notes) ----
         const float volDb = std::clamp(P[P_VOL], -60.f, 12.f);
         const float vol = volDb <= -59.9f ? 0.f : std::pow(10.f, volDb / 20.f);
@@ -1458,6 +1620,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
             if (v.age > newest[v.slot]) { newest[v.slot] = v.age; newestPos[v.slot] = float(v.pos); }
         }
     }
+    renderPoly(frames, pb, fp, out, sk == 2 ? scopeTap : nullptr, sk, si, active);
     for (int k = 0; k < (kSlots + 31) / 32; k++) activeMask[k].store(active[k], std::memory_order_relaxed);
     for (int k = 0; k < kSlots; k++) playPos[k].store(newestPos[k], std::memory_order_relaxed);
 
@@ -2181,6 +2344,31 @@ JNIEXPORT void JNICALL JNI_FN(nativeKill)(JNIEnv*, jobject, jint slot) {
     gEngine.pushTrigger(slot, 0.f, 2);
 }
 JNIEXPORT void JNICALL JNI_FN(nativeInitSynths)(JNIEnv*, jobject) { gEngine.ensureSynths(); }
+/** POLY source: parameter [index] (0..1) of sound [slot]'s patch. */
+JNIEXPORT void JNICALL JNI_FN(nativePolySet)(JNIEnv*, jobject, jint slot, jint index, jfloat value) {
+    if (slot < 0 || slot >= kSounds || index < 0 || index >= openmk3::kPolyParams) return;
+    gEngine.initPolyPatches();
+    gEngine.polyPatch[slot][index] = std::clamp(value, 0.f, 1.f);
+}
+JNIEXPORT jint JNICALL JNI_FN(nativePolyParamCount)(JNIEnv*, jobject) { return openmk3::PolySynth::paramCount(); }
+JNIEXPORT jstring JNICALL JNI_FN(nativePolyParamName)(JNIEnv* env, jobject, jint i) {
+    return env->NewStringUTF(openmk3::PolySynth::paramName(std::clamp(int(i), 0, openmk3::kPolyParams - 1)));
+}
+JNIEXPORT jstring JNICALL JNI_FN(nativePolyParamGroup)(JNIEnv* env, jobject, jint i) {
+    return env->NewStringUTF(openmk3::PolySynth::paramGroup(std::clamp(int(i), 0, openmk3::kPolyParams - 1)));
+}
+JNIEXPORT jfloat JNICALL JNI_FN(nativePolyParamDefault)(JNIEnv*, jobject, jint i) {
+    return openmk3::PolySynth::paramDefault(std::clamp(int(i), 0, openmk3::kPolyParams - 1));
+}
+JNIEXPORT jint JNICALL JNI_FN(nativePolyParamSteps)(JNIEnv*, jobject, jint i) {
+    return openmk3::PolySynth::paramSteps(std::clamp(int(i), 0, openmk3::kPolyParams - 1));
+}
+JNIEXPORT jstring JNICALL JNI_FN(nativePolyDisplay)(JNIEnv* env, jobject, jint i, jfloat v) {
+    char b[64];
+    openmk3::PolySynth::display(std::clamp(int(i), 0, openmk3::kPolyParams - 1), v, b, sizeof(b));
+    return env->NewStringUTF(b);
+}
+
 /** Installs a DX7 cartridge (.syx) as user FM bank [index]. */
 JNIEXPORT jboolean JNICALL JNI_FN(nativeFmLoadBank)(JNIEnv* env, jobject, jint index, jbyteArray data) {
     jsize n = env->GetArrayLength(data);

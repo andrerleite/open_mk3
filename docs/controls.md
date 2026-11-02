@@ -197,6 +197,26 @@ The 96 built-in voices are the DX7-format banks that ship with Plaits. Put your 
 DX7 cartridges (.syx) in `Download/<app folder>/DX7`; up to 16 load as USER 1–16 at start.
 FM notes keep playing their release after note-off, like the original instrument.
 
+**POLY pages** (SOURCE = POLY: the OB-Xf engine, a polyphonic two-oscillator analog-style synth)
+
+| Page | Knobs |
+|---|---|
+| VOICE | K1 preset category, K2 preset (493 factory patches), K3 volume, K4 pan, K5 tune, K7 source |
+| OSC | Osc 1 pitch, osc 2 pitch, osc 2 detune, pulse width, osc 1 saw / pulse, osc 2 saw / pulse |
+| OSC MOD | Sync, cross mod, brightness, osc 2 PW offset, filter env → pitch, filter env → PW, osc 2 keytrack, env → both oscs |
+| MIXER | Osc 1, osc 2, ring mod, noise, noise colour, patch volume, transpose, tune |
+| FILTER | Cutoff, resonance, env amount, keytrack, mode, 4-pole, Xpander, Xpander mode |
+| FILTER ENV / AMP ENV | Attack, decay, sustain, release, attack curve, velocity (and invert / BP blend, glide / push) |
+| LFO 1 / LFO 2 | Rate, three waveforms, two amounts, destinations (more on the MORE pages: sync, PW, other targets) |
+| VOICING | Polyphony, unison, unison voices, unison detune, legato, note priority, reassign, HQ |
+| CONTROL | Bend up / down, bend osc 2 only, vibrato wave / rate, env inverts |
+| SLOP / VOICE PAN | Per-voice analog variation and the pan of voices 1–8 |
+
+A POLY sound plays its own polyphony (set in the patch; the sound's POLYPHONY does not apply)
+with its own envelopes and filter; the sound's volume, pan, effects, the PITCH strip (patch bend
+range) and MOD strip (vibrato) apply. Up to four sounds can use POLY at once (the quietest one is
+taken when a fifth plays). Stepped switches move one step per knob notch.
+
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
