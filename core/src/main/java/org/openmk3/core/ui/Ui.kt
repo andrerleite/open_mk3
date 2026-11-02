@@ -214,6 +214,23 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var nudgeGrid = 1f
     @Volatile var arrangeGrid = 16
 
+    // ---- AUTO: knob moves are recorded into the playing pattern ----
+    @Volatile var autoHeld = false
+    @Volatile var autoPinned = false
+    val autoActive get() = autoHeld || autoPinned
+    /** ERASE held (on any page): turning a knob removes that parameter's automation. */
+    @Volatile var eraseHeld = false
+
+    /** Call after a sound parameter changed on a knob: records or erases its automation. */
+    fun autoWrite(sound: Int, param: Int) {
+        val p = engine.pattern
+        if (eraseHeld) { if (p.hasAutomation(sound, param)) { p.clearAutomation(sound / 16, sound, param); p.save(ctx) }; return }
+        if (!autoActive || !engine.playing) return
+        val st = p.stepOf(sound / 16)
+        if (st < 0) return
+        if (!p.writeAutomation(sound, param, st, engine.params[sound, param])) AppLog.i("AUTO: 16 lanes per pattern are in use")
+    }
+
     /** FOLLOW: step pages follow the playhead. */
     @Volatile var follow = true
     /** Snap sample markers (start, end, loop, slices) to zero crossings. */
@@ -462,6 +479,15 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         if (bit in map.touchBits && page !is WizardPage) return@post
         val name = map.nameForBit(bit)
         if (name == "SHIFT") shiftHeld = down
+        if (name == "ERASE") eraseHeld = down
+        // AUTO: hold to record knob moves; SHIFT + AUTO pins it (leaving the mode unpins)
+        if (name == "AUTO" && !page.customLeds) {
+            if (down && shiftHeld) autoPinned = !autoPinned
+            else autoHeld = down
+            if (!down && autoPinned.not()) engine.pattern.save(ctx)
+            dirty = true
+            return@post
+        }
         if (name != null && name.startsWith("GROUP ") && name.length == 7) heldGroup = if (down) name[6] - 'A' else -1
         // Mode buttons are momentary; holding one and pressing D1 pins it (and it stays
         // pinned on later presses until unpinned the same way).
@@ -666,6 +692,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("CHORDS", padMode == PadMode.CHORDS)
         lights.set("NOTE REPEAT", repeatActive)
         lights.set("TAP", engine.pattern.metronome)
+        lights.set("AUTO", autoActive)
         lights.set("PITCH", stripMode == StripMode.PITCH)
         lights.set("MOD", stripMode == StripMode.MOD)
         lights.set("PERFORM", stripMode == StripMode.PERFORM)

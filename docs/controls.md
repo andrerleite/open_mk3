@@ -79,7 +79,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | 7 | Nudge the focused sound's notes one step left | ✅ |
 | 8 | Nudge right | ✅ |
 | 9 | Clear the focused group's pattern | ✅ |
-| 10 | Clear automation | ⬜ |
+| 10 | Clear the focused group's automation | ✅ |
 | 11 | Copy the pattern | ✅ |
 | 12 | Paste the pattern | ✅ |
 | 13 | Semitone down: KEYBOARD / CHORDS layout, or the focused sound's notes (pad mode) | ✅ |
@@ -101,7 +101,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
 | SETTINGS | Metronome on / level, count-in length (D8: LED check) | ✅ |
-| AUTO | Record knob automation while held / latched | ⬜ |
+| AUTO | Hold (SHIFT + AUTO pins) and turn knobs while playing: sound parameters (PLUG-IN pages, MIXER volume / pan) are recorded per step into the pattern (16 lanes per pattern). ERASE + turn a knob removes that parameter's automation | ✅ |
 | MACRO (Set) | Macro controls | ⬜ |
 
 ## Screens, knobs and encoder

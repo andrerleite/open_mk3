@@ -573,7 +573,7 @@ class HomePage(ui: Ui) : Page(ui) {
             6 -> { pattern.nudge(snd, -1); changed(); message("${ui.padLabel()} nudged left") }
             7 -> { pattern.nudge(snd, 1); changed(); message("${ui.padLabel()} nudged right") }
             8 -> { pattern.clearGroup(g); changed(); message("Pattern cleared") }
-            9 -> message("No automation yet")
+            9 -> { pattern.clearAutomation(g); changed(); message("Automation cleared (group ${ui.groupLetter})") }
             10 -> { ui.clipboard = pattern.copyOf(g); message(if (ui.clipboard != null) "Pattern copied" else "No pattern to copy") }
             11 -> ui.clipboard?.let { pattern.paste(g, it); changed(); message("Pattern pasted") } ?: message("Clipboard is empty")
             12 -> { pattern.transpose(snd, -1); changed(); message("${ui.padLabel()} notes −1 semitone") }

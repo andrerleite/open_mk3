@@ -80,7 +80,10 @@ constexpr int B_XNOTE = B_XVEL + kPads * kSteps * kExtraNotes;
 constexpr int B_SKIP = B_XNOTE + kPads * kSteps * kExtraNotes;
 constexpr int B_NLEN = B_SKIP + kPads * kSteps;           // note length in steps (0 = one step)
 constexpr int B_OFF = B_NLEN + kPads * kSteps;            // note start within the step, 0..1
-constexpr int B_LEN = B_OFF + kPads * kSteps;             // pattern length in steps (1..64)
+constexpr int kAutoLanes = 16;                            // automation lanes per pattern
+constexpr int kLaneFloats = 2 + kSteps;                   // pad + 1 (0 = empty), parameter, a value per step (NaN = none)
+constexpr int B_AUTO = B_OFF + kPads * kSteps;
+constexpr int B_LEN = B_AUTO + kAutoLanes * kLaneFloats;  // pattern length in steps (1..64)
 constexpr int BANK_FLOATS = B_LEN + 1;
 constexpr int PATTERN_FLOATS = OFF_BANKS + kGroups * 2 * BANK_FLOATS;
 constexpr int kRootNote = 60;                             // C3: the note a pad plays in pad mode
@@ -885,6 +888,16 @@ void Engine::runSequencer(int frames) {
             }
             const int step = int(n % len);
             p[OFF_GSTEP + g] = float(step);
+            // automation: set the recorded parameter values for this step
+            if (float* pb = params.load(std::memory_order_relaxed)) {
+                for (int ln = 0; ln < kAutoLanes; ln++) {
+                    const float* lane = bk + B_AUTO + ln * kLaneFloats;
+                    int pad = int(lane[0]) - 1, prm = int(lane[1]);  // pad + 1 (0 = empty lane)
+                    if (pad < 0 || pad >= kPads || prm < 0 || prm >= kParams) continue;
+                    float v = lane[2 + step];
+                    if (v == v) pb[(g * kPads + pad) * kParams + prm] = v;  // v == v: not NaN
+                }
+            }
             for (int pad = 0; pad < kPads; pad++) {
                 const int s = g * kPads + pad;
                 const int cell = pad * kSteps + step;

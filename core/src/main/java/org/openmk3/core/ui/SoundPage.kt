@@ -321,6 +321,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         } else {
             val before = source
             params.nudge(slot, p, delta, shift)
+            ui.autoWrite(slot, p)
             if (p == SRC && before != source) pageIdx = 0
         }
         changed()

@@ -101,6 +101,7 @@ class MixerPage(ui: Ui) : Page(ui) {
         } else {
             if (panMode) params[ch, SoundParams.PAN] = (params[ch, SoundParams.PAN] + delta * 0.002f * k).coerceIn(-1f, 1f)
             else params[ch, SoundParams.VOL] = (params[ch, SoundParams.VOL] + delta * 0.05f * k).coerceIn(-60f, 12f)
+            ui.autoWrite(ch, if (panMode) SoundParams.PAN else SoundParams.VOL)
         }
         changed()
     }

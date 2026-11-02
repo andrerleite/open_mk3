@@ -19,6 +19,10 @@ class PatternData(var length: Int = 16) {
     /** Start within the step, 0..1 (notes off the grid). */
     val off = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) }
 
+    /** An automation lane: a sound parameter's value per step (NaN = no point). */
+    class Lane(val pad: Int, val param: Int, val values: FloatArray = FloatArray(Pattern.STEPS) { Float.NaN })
+    val lanes = mutableListOf<Lane>()
+
     fun copy(): PatternData {
         val c = PatternData(length)
         for (p in 0 until Pattern.PADS) {
@@ -26,6 +30,7 @@ class PatternData(var length: Int = 16) {
             xvel[p].copyInto(c.xvel[p]); xnote[p].copyInto(c.xnote[p])
             len[p].copyInto(c.len[p]); off[p].copyInto(c.off[p])
         }
+        for (ln in lanes) c.lanes.add(Lane(ln.pad, ln.param, ln.values.copyOf()))
         return c
     }
 
@@ -62,6 +67,10 @@ class PatternData(var length: Int = 16) {
             }
         }
         put("events", ev)
+        put("automation", JSONArray().apply {
+            for (ln in lanes) put(JSONObject().put("pad", ln.pad).put("param", ln.param)
+                .put("values", JSONArray(ln.values.map { if (it.isNaN()) JSONObject.NULL else it.toDouble() })))
+        })
     }
 
     companion object {
@@ -78,6 +87,15 @@ class PatternData(var length: Int = 16) {
                     if (e.length() > 6) { d.len[p][t] = e.getDouble(5).toFloat().coerceIn(0.05f, 64f); d.off[p][t] = e.getDouble(6).toFloat().coerceIn(0f, 0.999f) }
                 }
                 else if (x < Pattern.EXTRA) { d.xvel[p][t * Pattern.EXTRA + x] = v; d.xnote[p][t * Pattern.EXTRA + x] = n.toFloat() }
+            }
+            j.optJSONArray("automation")?.let { a ->
+                for (i in 0 until a.length()) {
+                    val o = a.getJSONObject(i)
+                    val vs = o.getJSONArray("values")
+                    val ln = Lane(o.getInt("pad"), o.getInt("param"))
+                    for (t in 0 until minOf(Pattern.STEPS, vs.length())) if (!vs.isNull(t)) ln.values[t] = vs.getDouble(t).toFloat()
+                    d.lanes.add(ln)
+                }
             }
             return d
         }
@@ -126,7 +144,10 @@ class Pattern {
         private const val B_SKIP = B_XNOTE + PADS * STEPS * EXTRA
         private const val B_NLEN = B_SKIP + PADS * STEPS
         private const val B_OFF = B_NLEN + PADS * STEPS
-        private const val B_LEN = B_OFF + PADS * STEPS
+        const val LANES = 16
+        private const val LANE = 2 + STEPS
+        private const val B_AUTO = B_OFF + PADS * STEPS
+        private const val B_LEN = B_AUTO + LANES * LANE
         private const val BANK = B_LEN + 1
         private const val FLOATS = OFF_BANKS + GROUPS * 2 * BANK
     }
@@ -218,6 +239,7 @@ class Pattern {
             f.put(base + B_VEL + i, 0f); f.put(base + B_NOTE + i, ROOT.toFloat()); f.put(base + B_SKIP + i, 0f)
             f.put(base + B_NLEN + i, 1f); f.put(base + B_OFF + i, 0f)
         }
+        for (i in 0 until LANES * LANE) f.put(base + B_AUTO + i, if (i % LANE < 2) 0f else Float.NaN)
         for (i in 0 until PADS * STEPS * EXTRA) { f.put(base + B_XVEL + i, 0f); f.put(base + B_XNOTE + i, 0f) }
     }
 
@@ -227,6 +249,7 @@ class Pattern {
         val base = bankBase(g, b)
         f.put(base + B_LEN, (d?.length ?: 16).toFloat())
         if (d == null) return
+        writeLanes(base, d)
         for (p in 0 until PADS) for (t in 0 until STEPS) {
             val c = p * STEPS + t
             f.put(base + B_VEL + c, d.vel[p][t]); f.put(base + B_NOTE + c, d.note[p][t])
@@ -237,6 +260,41 @@ class Pattern {
             }
         }
     }
+
+    private fun writeLanes(base: Int, d: PatternData) {
+        for (k in 0 until LANES) {
+            val ln = d.lanes.getOrNull(k)
+            val b = base + B_AUTO + k * LANE
+            f.put(b, if (ln == null) 0f else (ln.pad + 1).toFloat())
+            f.put(b + 1, (ln?.param ?: 0).toFloat())
+            for (t in 0 until STEPS) f.put(b + 2 + t, ln?.values?.get(t) ?: Float.NaN)
+        }
+    }
+
+    /** AUTO: records [value] for a sound parameter at [step] of the playing pattern. */
+    fun writeAutomation(sound: Int, param: Int, step: Int, value: Float): Boolean {
+        val g = sound / PADS
+        val d = cur(g) ?: return false
+        val pad = sound % PADS
+        var ln = d.lanes.firstOrNull { it.pad == pad && it.param == param }
+        if (ln == null) {
+            if (d.lanes.size >= LANES) return false
+            ln = PatternData.Lane(pad, param)
+            d.lanes.add(ln)
+        }
+        if (step in 0 until STEPS) ln.values[step] = value
+        writeLanes(bankBase(g, active(g)), d)
+        return true
+    }
+
+    /** Removes automation: one parameter of a sound, all of a sound (param < 0), or the group (sound < 0). */
+    fun clearAutomation(g: Int, sound: Int = -1, param: Int = -1) {
+        val d = cur(g) ?: return
+        d.lanes.removeAll { (sound < 0 || it.pad == sound % PADS) && (param < 0 || it.param == param) }
+        writeLanes(bankBase(g, active(g)), d)
+    }
+
+    fun hasAutomation(sound: Int, param: Int) = cur(sound / PADS)?.lanes?.any { it.pad == sound % PADS && it.param == param } ?: false
 
     /** Makes the playing bank match the current pattern (after edits made off-buffer). */
     fun refreshGroup(g: Int) = writeBank(g, active(g), cur(g))
