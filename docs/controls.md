@@ -90,13 +90,13 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | CHANNEL (MIDI) | Channel / sound properties of the focused sound | ⬜ |
-| PLUG-IN (Instance) | Instrument and effect slots of the focused sound/group | ⬜ |
+| PLUG-IN (Instance) | Instrument and effect slots of the focused sound/group | 🟡 (sampler parameters of the focused sound; full app) |
 | ARRANGER | Arranger view (scenes / sections / song) | ⬜ |
 | MIXER | Mixer: levels, pan, sends per sound or group | ⬜ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, trim, normalise, save to pad; slicing planned) |
-| ◀ ▶ | Page through parameter pages on the screens | 🟡 (step through sounds today) |
+| ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Project menu. SHIFT + FILE saves. | ⬜ (pattern and kit autosave today) |
 | SETTINGS | Settings | 🟡 (LED palette page today) |
 | AUTO | Record knob automation while held / latched | ⬜ |
@@ -145,6 +145,18 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | K1 / K2 | Threshold / maximum length (up to 30 s) |
 | K5 / K6 (or encoder) | Trim start / end. Hold SHIFT for fine steps. |
 | Pads | Choose the target pad |
+
+## Sampler parameters (PLUG-IN, full app)
+
+| Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 |
+|---|---|---|---|---|---|---|---|
+| VOICE | Tune | Volume | Pan | | Start | End | Reverse |
+| ENVELOPE | Mode (one-shot / AHD) | Attack | Hold | Decay | | | |
+| FILTER | Type (off / LP / BP / HP) | Cutoff | Resonance | | | | |
+
+◀ ▶ or D1–D3 choose the page. Hold SHIFT for fine steps; SHIFT + touching a knob resets it.
+Pads focus (and play) a sound. Settings are saved per pad. Loading a new sample resets
+start and end.
 
 ## Open MK3–specific controls
 

@@ -22,6 +22,9 @@ object Edition {
     /** Folder under Download/ for samples and exported logs. */
     var storageFolder = "OpenMK3"
         private set
+    /** Full feature set (sound parameters, groups, ...). Vanilla keeps the essentials. */
+    var full = false
+        private set
     /** Builds the main page shown after setup and when leaving other pages. */
     var homePage: (Ui) -> Page = { HomePage(it) }
         private set
@@ -30,9 +33,11 @@ object Edition {
         app: Application,
         title: String,
         storageFolder: String = "OpenMK3",
+        full: Boolean = false,
         homePage: ((Ui) -> Page)? = null,
     ) {
         this.title = title
+        this.full = full
         this.storageFolder = storageFolder
         homePage?.let { this.homePage = it }
         appName = app.applicationInfo.loadLabel(app.packageManager).toString()

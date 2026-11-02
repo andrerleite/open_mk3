@@ -257,6 +257,7 @@ class HomePage(ui: Ui) : Page(ui) {
             "SETTINGS" -> ui.show(PalettePage(ui))
             "BROWSER" -> ui.show(BrowserPage(ui))
             "SAMPLING" -> ui.show(SamplingPage(ui))
+            "PLUG-IN" -> if (Edition.full) ui.show(SoundPage(ui))
         }
     }
 

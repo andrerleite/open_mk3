@@ -6,6 +6,6 @@ import org.openmk3.core.Edition
 class OpenMk3App : Application() {
     override fun onCreate() {
         super.onCreate()
-        Edition.init(this, title = "OPEN MK3")
+        Edition.init(this, title = "OPEN MK3", full = true)
     }
 }

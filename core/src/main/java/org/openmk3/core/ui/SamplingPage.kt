@@ -196,6 +196,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     "48.0 kHz · 24-bit · stereo · ${"%.2f".format(secs)} s")
                 ui.post {
                     ui.engine.setSample(slot, s)
+                    ui.engine.params.resetRange(slot)
+                    ui.engine.params.save(ui.ctx)
                     KitStore.save(ui.ctx, ui.engine.kit)
                     message = "Saved ${f.name} → pad ${slot + 1}"
                     AppLog.i("Sampling: saved ${f.absolutePath} to pad ${slot + 1}")

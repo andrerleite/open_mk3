@@ -75,14 +75,47 @@ constexpr int kSlots = kSounds + 1;  // 16 pads + 1 browser preview slot
 constexpr int kFadeIn = 16;
 constexpr int kFadeOut = 96;
 
+// Per-sound parameters: kSlots x kParams floats in a direct buffer shared with Kotlin
+// (SoundParams.kt). Read at voice start (pitch, start/end, envelope) and every callback
+// (volume, pan, filter) so knob moves are heard on playing sounds.
+constexpr int kParams = 16;
+enum {
+    P_TUNE = 0,    // semitones, -36..36 (fractional = fine tune)
+    P_VOL = 1,     // dB, -60 (silent) .. +12
+    P_PAN = 2,     // -1 left .. 1 right
+    P_START = 3,   // 0..1 of the sample
+    P_END = 4,     // 0..1 of the sample
+    P_REV = 5,     // > 0.5 = reverse
+    P_ENV = 6,     // 0 one-shot, 1 AHD
+    P_ATT = 7,     // seconds
+    P_HOLD = 8,    // seconds
+    P_DEC = 9,     // seconds (to -80 dB)
+    P_FTYPE = 10,  // 0 off, 1 low-pass, 2 band-pass, 3 high-pass
+    P_CUT = 11,    // Hz
+    P_RES = 12,    // 0..1
+};
+static const float kDefaultParams[kParams] = {0, 0, 0, 0, 1, 0, 0, 0.001f, 0.05f, 0.5f, 0, 20000, 0, 0, 0, 0};
+
 struct Voice {
     const SampleData* sample = nullptr;
-    int pos = 0;
-    float gain = 0.f;
+    double pos = 0.0;   // fractional read position (frames)
+    double rate = 1.0;  // frames per output frame
+    int startF = 0, endF = 0;
+    bool rev = false;
+    float gain = 0.f;   // velocity gain
     int startOffset = 0;
     int fadeIn = 0;     // frames rendered so far of the fade-in
     int fadeOut = -1;   // frames left of the fade-out, -1 = not fading
     int slot = -1;
+    uint64_t age = 0;
+    // AHD envelope
+    bool ahd = false;
+    int envStage = 0;   // 0 attack, 1 hold, 2 decay
+    int envCount = 0;
+    int attF = 0, holdF = 0;
+    float envLevel = 1.f, decCoef = 0.f;
+    // state-variable filter (stereo)
+    float ic1[2] = {0, 0}, ic2[2] = {0, 0};
 };
 
 struct Trigger {
@@ -97,6 +130,7 @@ public:
     std::atomic<float> masterGain{0.7f};
     std::atomic<float*> pattern{nullptr};
     std::atomic<int64_t*> lastTrigMs{nullptr};   // 16 x int64, CLOCK_MONOTONIC ms
+    std::atomic<float*> params{nullptr};         // kSlots x kParams
     std::atomic<bool> playRequested{false};
     std::atomic<bool> restartRequested{false};
 
@@ -165,6 +199,7 @@ public:
 
 private:
     Voice voices[kMaxVoices];
+    uint64_t voiceAge = 0;
     bool wasPlaying = false;
     double seqPhase = 0.0;
     int64_t nextStep = 0;
@@ -406,11 +441,32 @@ void Engine::startVoice(int slot, float vel, int offset) {
     Voice* oldest = &voices[0];
     for (auto& v : voices) {
         if (!v.sample) { best = &v; break; }
-        if (v.pos > oldest->pos) oldest = &v;
+        if (v.age < oldest->age) oldest = &v;
     }
     if (!best) best = oldest;
+    float* pb = params.load(std::memory_order_acquire);
+    const float* P = pb ? pb + slot * kParams : kDefaultParams;
+    float a = std::clamp(P[P_START], 0.f, 1.f);
+    float b = std::clamp(P[P_END], 0.f, 1.f);
+    int sf = int(a * float(s->frames));
+    int ef = int(b * float(s->frames));
+    if (ef <= sf) ef = std::min(s->frames, sf + 1);
+    if (sf >= s->frames) return;
     best->sample = s;
-    best->pos = 0;
+    best->startF = sf;
+    best->endF = ef;
+    best->rev = P[P_REV] > 0.5f;
+    best->pos = best->rev ? double(ef - 1) : double(sf);
+    best->rate = std::pow(2.0, double(std::clamp(P[P_TUNE], -48.f, 48.f)) / 12.0);
+    best->ahd = P[P_ENV] > 0.5f;
+    best->envStage = 0;
+    best->envCount = 0;
+    best->attF = int(std::max(0.f, P[P_ATT]) * kSampleRate);
+    best->holdF = int(std::max(0.f, P[P_HOLD]) * kSampleRate);
+    best->envLevel = best->attF > 0 ? 0.f : 1.f;
+    best->decCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_DEC]) * kSampleRate)));
+    best->ic1[0] = best->ic1[1] = best->ic2[0] = best->ic2[1] = 0.f;
+    best->age = ++voiceAge;
     best->gain = vel * vel;  // perceptual curve
     best->startOffset = offset;
     best->fadeIn = 0;
@@ -497,37 +553,88 @@ void Engine::render(float* out, int32_t frames) {
 
     // 3. voices
     std::memset(out, 0, sizeof(float) * frames * 2);
+    float* pb = params.load(std::memory_order_acquire);
     for (auto& v : voices) {
         const SampleData* s = v.sample;
         if (!s) continue;
+        const float* P = pb ? pb + v.slot * kParams : kDefaultParams;
+        // per-callback parameters
+        float vol = P[P_VOL] <= -59.9f ? 0.f : std::pow(10.f, std::clamp(P[P_VOL], -60.f, 12.f) / 20.f);
+        float pan = std::clamp(P[P_PAN], -1.f, 1.f);
+        float gl = pan > 0.f ? 1.f - pan : 1.f;
+        float gr = pan < 0.f ? 1.f + pan : 1.f;
+        int ftype = int(P[P_FTYPE] + 0.5f);
+        float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f, fk = 2.f;
+        if (ftype >= 1 && ftype <= 3) {
+            float fc = std::clamp(P[P_CUT], 20.f, 20000.f);
+            float fg = std::tan(3.14159265f * std::min(fc, 0.45f * kSampleRate) / kSampleRate);
+            fk = 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
+            fa1 = 1.f / (1.f + fg * (fg + fk));
+            fa2 = fg * fa1;
+            fa3 = fg * fa2;
+        } else {
+            ftype = 0;
+        }
         const float* d = s->data.data();
-        int n = s->frames;
+        const int n = s->frames;
         const bool st = s->channels == 2;
+        const int ch = s->channels;
+        auto at = [&](int f, int c) { return d[std::clamp(f, 0, n - 1) * ch + c]; };
         int i = v.startOffset;
         v.startOffset = 0;
-        int pos = v.pos;
-        float g = v.gain;
+        const float g = v.gain * vol;
+        const double step = v.rev ? -v.rate : v.rate;
         bool done = false;
-        for (; i < frames && pos < n; i++) {
+        for (; i < frames; i++) {
+            if (v.rev ? v.pos < double(v.startF) : v.pos >= double(v.endF)) { done = true; break; }
             float env = 1.f;
             if (v.fadeIn < kFadeIn) env = float(++v.fadeIn) / kFadeIn;
             if (v.fadeOut >= 0) {
                 env *= float(v.fadeOut) / kFadeOut;
                 if (--v.fadeOut <= 0) { done = true; break; }
             }
-            float ge = g * env;
-            if (st) {
-                out[i * 2] += d[pos * 2] * ge;
-                out[i * 2 + 1] += d[pos * 2 + 1] * ge;
-            } else {
-                float x = d[pos] * ge;
-                out[i * 2] += x;
-                out[i * 2 + 1] += x;
+            if (v.ahd) {
+                if (v.envStage == 0) {
+                    if (v.envCount >= v.attF) { v.envStage = 1; v.envCount = 0; v.envLevel = 1.f; }
+                    else v.envLevel = float(++v.envCount) / float(v.attF);
+                } else if (v.envStage == 1) {
+                    if (++v.envCount >= v.holdF) v.envStage = 2;
+                } else {
+                    v.envLevel *= v.decCoef;
+                    if (v.envLevel < 1e-4f) { done = true; break; }
+                }
+                env *= v.envLevel;
             }
-            pos++;
+            // 4-point Hermite interpolation (exact at rate 1, clean when pitched)
+            int ip = int(std::floor(v.pos));
+            float t = float(v.pos - ip);
+            float xs[2];
+            for (int c = 0; c < ch; c++) {
+                float y0 = at(ip - 1, c), y1 = at(ip, c), y2 = at(ip + 1, c), y3 = at(ip + 2, c);
+                if (t == 0.f) { xs[c] = y1; continue; }
+                float c1 = 0.5f * (y2 - y0);
+                float c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3;
+                float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+                xs[c] = ((c3 * t + c2) * t + c1) * t + y1;
+            }
+            if (!st) xs[1] = xs[0];
+            if (ftype) {
+                for (int c = 0; c < 2; c++) {
+                    float x = xs[c];
+                    float v3 = x - v.ic2[c];
+                    float v1 = fa1 * v.ic1[c] + fa2 * v3;
+                    float v2 = v.ic2[c] + fa2 * v.ic1[c] + fa3 * v3;
+                    v.ic1[c] = 2.f * v1 - v.ic1[c];
+                    v.ic2[c] = 2.f * v2 - v.ic2[c];
+                    xs[c] = ftype == 1 ? v2 : ftype == 2 ? fk * v1 : x - fk * v1 - v2;
+                }
+            }
+            float ge = g * env;
+            out[i * 2] += xs[0] * ge * gl;
+            out[i * 2 + 1] += xs[1] * ge * gr;
+            v.pos += step;
         }
-        v.pos = pos;
-        if (done || pos >= n) v.sample = nullptr;
+        if (done) v.sample = nullptr;
     }
 
     // 4. master gain, soft clip, meter
@@ -1147,6 +1254,11 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
     long long p = gUsb.packetsIn.load(), f = gUsb.framesIn.load();
     if (p < 8000) return 0.0;
     return (double(f) / double(p) / (kSampleRate / 8000.0) - 1.0) * 1e6;
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeSetParamBuffer)(JNIEnv* env, jobject, jobject buf) {
+    if (env->GetDirectBufferCapacity(buf) < jlong(kSlots * kParams * sizeof(float))) return;
+    gEngine.params.store(static_cast<float*>(env->GetDirectBufferAddress(buf)), std::memory_order_release);
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeRecArm)(JNIEnv*, jobject, jint source, jboolean threshold, jfloat thr, jint seconds) {

@@ -11,7 +11,7 @@ full app.
    - Record from the controller's inputs.
    - Record from phone playback.
    - Trim, normalise, assign to a pad.
-3. **Sound parameters**
+3. **Sound parameters** — done in 0.3.0
    - Per-sound tune, volume, pan, start/end, decay/envelope, filter and reverse.
    - Shown on the screens and set with the knobs.
    - Pages via ◀ ▶.

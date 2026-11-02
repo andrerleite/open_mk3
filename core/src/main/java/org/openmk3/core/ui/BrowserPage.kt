@@ -143,6 +143,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
             is Entry.BuiltIn -> {
                 val slot = ui.selectedSound
                 ui.engine.resetSlot(slot)
+                ui.engine.params.resetRange(slot)
+                ui.engine.params.save(ui.ctx)
                 KitStore.save(ui.ctx, ui.engine.kit)
                 message = "Pad ${slot + 1}: built-in ${ui.engine.kit[slot].name}"
                 AppLog.i("Kit: $message")
@@ -175,6 +177,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
     private fun assign(slot: Int, s: Sample) {
         ui.engine.setSample(slot, s)
+        ui.engine.params.resetRange(slot)
+        ui.engine.params.save(ui.ctx)
         KitStore.save(ui.ctx, ui.engine.kit)
         message = "Pad ${slot + 1} ← ${s.name}"
         info = s.info

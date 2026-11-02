@@ -49,6 +49,7 @@ object NativeEngine {
     external fun nativeUsbGuessed(): Int
     external fun nativeUsbClockPpm(): Double
     external fun nativeUsbStats(): String
+    external fun nativeSetParamBuffer(buf: ByteBuffer)
     external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
     external fun nativeRecStop()
     external fun nativeRecState(): Int
@@ -108,6 +109,9 @@ class AudioEngine(private val ctx: Context) {
             n.nativeSetPatternBuffer(v.buffer)
         }
 
+    /** Tune, volume, pan, range, envelope and filter of every sound (saved separately). */
+    val params: SoundParams = SoundParams.load(ctx)
+
     var masterGain: Float = 0.7f
         set(v) {
             field = v
@@ -143,6 +147,7 @@ class AudioEngine(private val ctx: Context) {
     init {
         n.nativeSetTrigBuffer(trigBuf)
         n.nativeSetPatternBuffer(pattern.buffer)
+        n.nativeSetParamBuffer(params.buffer)
         n.nativeSetMasterGain(masterGain)
         n.nativeTransport(0) // the native engine outlives sessions: start stopped
         // Samples are loaded before the stream starts, so the callback never sees a half-copied one.
