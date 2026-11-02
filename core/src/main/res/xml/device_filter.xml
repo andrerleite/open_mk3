@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Native Instruments, Maschine MK3 (0x17CC / 0x1600) -->
+    <usb-device vendor-id="6092" product-id="5632" />
+    <!-- Any other Native Instruments device, so a different PID still shows up -->
+    <usb-device vendor-id="6092" />
+</resources>
