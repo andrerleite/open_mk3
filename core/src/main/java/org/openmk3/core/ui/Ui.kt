@@ -622,6 +622,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
                     return@post
                 }
+                "SAMPLING" -> if (shiftHeld) {  // SHIFT + SAMPLING: the focused sound's zones
+                    if (page is ZonePage) showHome() else show(ZonePage(this))
+                    return@post
+                }
                 "PERFORM" -> if (shiftHeld) {  // SHIFT + PERFORM: choose the perform FX
                     if (page is PerformPage) showHome() else show(PerformPage(this))
                     return@post

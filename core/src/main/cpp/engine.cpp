@@ -237,6 +237,7 @@ struct Voice {
     int pinst = -1;       // POLY source: instance playing this note (the voice only times it)
     int quietBlocks = 0;
     int ageBlocks = 0;
+    float zoneShift = 0.f;  // semitones: the zone's root key relative to 60
 };
 
 // Synth voices have no sample: they point here so "voice in use" checks stay uniform.
@@ -315,6 +316,15 @@ public:
     std::atomic<SampleData*> current[kSlots];
     std::atomic<SampleData*> pending[kSlots];
     std::atomic<SampleData*> retired[kSlots];
+    // ---- sample zones: extra samples of a sound, each for a key and velocity range ----
+    static constexpr int kZones = 16;
+    std::atomic<SampleData*> zCur[kSounds][kZones];
+    std::atomic<SampleData*> zPending[kSounds][kZones];
+    std::atomic<SampleData*> zRetired[kSounds][kZones];
+    std::atomic<bool> zClear[kSounds][kZones];
+    std::atomic<bool> zDirty{false};
+    /** Zone mapping: root key, lowest / highest key, lowest / highest velocity (1..127). */
+    float zMap[kSounds][kZones][5];
 
     AAudioStream* stream = nullptr;
     int32_t deviceId = 0;
@@ -329,6 +339,11 @@ public:
 
     Engine() {
         for (int i = 0; i < kSlots; i++) { current[i] = nullptr; pending[i] = nullptr; retired[i] = nullptr; playPos[i] = -1.f; }
+        for (int i = 0; i < kSounds; i++)
+            for (int z = 0; z < kZones; z++) {
+                zCur[i][z] = nullptr; zPending[i][z] = nullptr; zRetired[i][z] = nullptr; zClear[i][z] = false;
+                zMap[i][z][0] = 60; zMap[i][z][1] = 0; zMap[i][z][2] = 127; zMap[i][z][3] = 1; zMap[i][z][4] = 127;
+            }
         for (int c = 0; c < kChains; c++)
             for (int k = 0; k < kFxSlots; k++) { fxPending[c][k] = nullptr; fxRetired[c][k] = nullptr; }
         for (auto& m : activeMask) m = 0;
@@ -770,6 +785,20 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     const bool isPoly = src == 3;
     const bool isSynth = src == 1 || isFm || isPoly;  // no sample: all use the dummy
     const SampleData* s = isSynth ? &gSynthDummy : current[slot].load(std::memory_order_acquire);
+    // zones: the first zone whose key and velocity ranges hold this note replaces the sample
+    float zoneShift = 0.f;
+    if (!isSynth && slot < kSounds) {
+        const int nn = std::clamp(note, 0, 127), vv = std::clamp(int(vel * 127.f + 0.5f), 1, 127);
+        for (int z = 0; z < kZones; z++) {
+            const SampleData* zs = zCur[slot][z].load(std::memory_order_acquire);
+            if (!zs || zs->frames <= 0) continue;
+            const float* m = zMap[slot][z];
+            if (nn < m[1] || nn > m[2] || vv < m[3] || vv > m[4]) continue;
+            s = zs;
+            zoneShift = m[0] - float(kRootNote);
+            break;
+        }
+    }
     if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
     // oldest voices of this sound beyond the limit instead of piling on their tails.
@@ -864,6 +893,7 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
     v.rnd = uint32_t(voiceAge * 2654435761u) | 1u;
+    v.zoneShift = zoneShift;
     if (isSynth) {
         v.startF = 0;
         v.endF = 1;
@@ -1384,6 +1414,21 @@ void Engine::renderChunk(float* out, int32_t frames) {
         SampleData* prev = retired[slot].exchange(old, std::memory_order_acq_rel);
         (void)prev;  // only non-null if two swaps beat one load: a tiny, bounded leak
     }
+    // 0b. zone swaps (same rules as samples)
+    if (zDirty.exchange(false, std::memory_order_acq_rel))
+    for (int slot = 0; slot < kSounds; slot++)
+        for (int z = 0; z < kZones; z++) {
+            const bool clear = zClear[slot][z].exchange(false, std::memory_order_acq_rel);
+            SampleData* p = zPending[slot][z].exchange(nullptr, std::memory_order_acq_rel);
+            if (!p && !clear) continue;
+            SampleData* old = zCur[slot][z].load(std::memory_order_relaxed);
+            if (old)
+                for (auto& v : voices)
+                    if (v.sample == old) v.sample = nullptr;
+            zCur[slot][z].store(p, std::memory_order_release);
+            SampleData* prev = zRetired[slot][z].exchange(old, std::memory_order_acq_rel);
+            (void)prev;
+        }
     // 1. pad triggers: start at the top of this callback
     int64_t now = nowNanos();
     uint32_t t = ringTail.load(std::memory_order_relaxed);
@@ -1559,7 +1604,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 default: lfo = std::sin(6.2831853f * v.lfoPhase); break;                   // sine
             }
             const float me = v.mLevel;
-            const double rate = std::pow(2.0, double(tune + bend + float(v.note - kRootNote) + me * mPitch + lfo * lPitch) / 12.0);
+            const double rate = std::pow(2.0, double(tune + bend + float(v.note - kRootNote) - v.zoneShift + me * mPitch + lfo * lPitch) / 12.0);
             const double step = v.rev ? -rate : rate;
             float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f;
             if (ftype) {
@@ -2327,6 +2372,43 @@ JNIEXPORT void JNICALL JNI_FN(nativeLoadSample)(JNIEnv* env, jobject, jint slot,
     // can never be freed while a voice still plays it. A replaced pending one was never
     // installed, so deleting it is safe.
     delete gEngine.pending[slot].exchange(s, std::memory_order_acq_rel);
+}
+
+/** Sample zone [zone] of sound [slot] (data == null clears it), with its key / velocity mapping. */
+JNIEXPORT void JNICALL JNI_FN(nativeSetZone)(JNIEnv* env, jobject, jint slot, jint zone, jfloatArray data, jint channels,
+                                             jint root, jint lo, jint hi, jint vlo, jint vhi) {
+    if (slot < 0 || slot >= kSounds || zone < 0 || zone >= Engine::kZones) return;
+    float* m = gEngine.zMap[slot][zone];
+    m[0] = float(std::clamp(int(root), 0, 127));
+    m[1] = float(std::clamp(int(lo), 0, 127));
+    m[2] = float(std::clamp(int(hi), 0, 127));
+    m[3] = float(std::clamp(int(vlo), 1, 127));
+    m[4] = float(std::clamp(int(vhi), 1, 127));
+    if (!data) {
+        delete gEngine.zPending[slot][zone].exchange(nullptr, std::memory_order_acq_rel);
+        gEngine.zClear[slot][zone].store(true, std::memory_order_release);
+        gEngine.zDirty.store(true, std::memory_order_release);
+        return;
+    }
+    auto* s = new SampleData();
+    jsize n = env->GetArrayLength(data);
+    s->data.resize(size_t(n));
+    env->GetFloatArrayRegion(data, 0, n, s->data.data());
+    s->channels = channels == 2 ? 2 : 1;
+    s->frames = int(n / s->channels);
+    delete gEngine.zRetired[slot][zone].exchange(nullptr, std::memory_order_acq_rel);
+    delete gEngine.zPending[slot][zone].exchange(s, std::memory_order_acq_rel);
+    gEngine.zDirty.store(true, std::memory_order_release);
+}
+/** Changes only the key / velocity mapping of a zone. */
+JNIEXPORT void JNICALL JNI_FN(nativeZoneMap)(JNIEnv*, jobject, jint slot, jint zone, jint root, jint lo, jint hi, jint vlo, jint vhi) {
+    if (slot < 0 || slot >= kSounds || zone < 0 || zone >= Engine::kZones) return;
+    float* m = gEngine.zMap[slot][zone];
+    m[0] = float(std::clamp(int(root), 0, 127));
+    m[1] = float(std::clamp(int(lo), 0, 127));
+    m[2] = float(std::clamp(int(hi), 0, 127));
+    m[3] = float(std::clamp(int(vlo), 1, 127));
+    m[4] = float(std::clamp(int(vhi), 1, 127));
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeSetPatternBuffer)(JNIEnv* env, jobject, jobject buf) {

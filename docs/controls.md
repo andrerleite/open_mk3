@@ -97,7 +97,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder | ✅ (sends ⬜) |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
-| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, edit, slice; zones planned) |
+| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice; SHIFT + SAMPLING: zones | ✅ |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
 | SETTINGS | Metronome on / level, count-in length (D8: LED check) | ✅ |
@@ -147,7 +147,13 @@ toggles zero-crossing snap (start, end and slice points), and a playhead follows
 | EDIT | Edits the new take, or the focused pad's sample (pads choose which) · K1 start · K2 end · K3 fade in · K4 fade out · K5 trigger of the pad (one-shot / gate) · D5 normalise · D6 reverse · D7 preview (press again to stop; with gate, only while held) · D8 save as a new WAV in `Download/<app folder>/Recordings` and load it onto the focused pad |
 | SLICE | K1 / D5 mode (GRID / DETECT transients) · K2 number of slices or detection sensitivity · pads play the slices · D7 preview · D8 apply: each slice is saved as a WAV and loaded onto pads 1, 2, 3… |
 
-Planned: ZONE tab (multi-sample mapping) together with KEYBOARD mode.
+**Zones (SHIFT + SAMPLING)**: up to 16 extra samples per sound, each played for a key range
+(transposed from its root key) and a velocity range; other notes play the pad's own sample.
+Add zones in the BROWSER: D7 adds the selected WAV to the target pad, D8 adds every WAV in the
+folder and maps them (root keys are read from file names such as `Piano C3` or `Bass_F#1`,
+60 = C3). On the ZONES page: encoder / ◀ ▶ select, K1 root, K2 / K3 lowest / highest key,
+K4 / K5 lowest / highest velocity, D5 auto-map (ranges halfway between roots), D6 delete,
+D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in projects.
 
 ## PLUG-IN (full app)
 

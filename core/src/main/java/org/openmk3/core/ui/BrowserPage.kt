@@ -18,6 +18,8 @@ import java.util.concurrent.Future
  *  ENCODER turn = move (SHIFT = page) · landing on a WAV previews it
  *  ENCODER push / RIGHT = open folder, or load the WAV onto the target pad
  *  ENCODER LEFT / PAGE LEFT = up a folder · PADS = choose the target pad (and play it)
+ *  D7 = add the WAV as a zone of the target pad · D8 = add every WAV of this folder as zones
+ *  (root keys from the file names; then auto-mapped) · SAMPLING (SHIFT) = the zones
  *  PLAY / STOP keep working · BROWSER or SETTINGS = back
  */
 class BrowserPage(ui: Ui) : Page(ui) {
@@ -217,6 +219,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.stopPressed()
             "BROWSER", "SETTINGS" -> ui.showHome()
+            "D7" -> (entries.getOrNull(sel) as? Entry.Wav)?.let { addZones(listOf(it.file)) }
+            "D8" -> addZones(entries.filterIsInstance<Entry.Wav>().map { it.file })
         }
         ui.invalidate()
     }
@@ -226,6 +230,30 @@ class BrowserPage(ui: Ui) : Page(ui) {
         l.set("PLAY", ui.engine.playing)
         l.set("SHIFT", shiftHeld)
         l.set("STOP", "PAGE LEFT", "PAGE RIGHT", "SETTINGS")
+        l.set("D7", entries.getOrNull(sel) is Entry.Wav)
+        l.set("D8", entries.any { it is Entry.Wav })
+    }
+
+    /** Adds WAVs as zones of the target pad (decoded in the background), then auto-maps. */
+    private fun addZones(files: List<File>) {
+        if (files.isEmpty()) return
+        val slot = ui.selectedIndex
+        message = "Adding ${files.size} zone(s)…"
+        worker.submit {
+            val samples = files.take(org.openmk3.core.audio.Zones.MAX).mapNotNull { f ->
+                try { WavDecoder.decode(f) } catch (ex: Exception) { AppLog.i("Zone: can't read ${f.name}"); null }
+            }
+            ui.post {
+                val z = ui.engine.zones
+                var added = 0
+                for (s in samples) if (z.add(slot, s) >= 0) added++
+                if (files.size > 1) z.autoMap(slot)
+                z.save(ui.ctx)
+                message = "${org.openmk3.core.audio.soundLabel(slot)}: $added zone(s) (${z.of(slot).size} in all)"
+                AppLog.i("Zones: $message")
+                ui.invalidate()
+            }
+        }
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
@@ -281,7 +309,9 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
         r.drawText("ENC turn: browse · push: open / load", 16f, 226f, label)
         r.drawText("◀: back · PADS: target · BROWSER: done", 16f, 246f, label)
-        r.drawText("PLAY: hear it in the beat", 16f, 266f, label)
+        r.drawText("PLAY: hear it · D7 / D8: add as zone(s)", 16f, 266f, label)
+        val zn = ui.engine.zones.of(slot).size
+        if (zn > 0) r.drawText("$zn zone(s)", 360f, 28f, label)
     }
 
     private fun ellipsize(s: String, max: Int) = if (s.length <= max) s else s.take(max - 1) + "…"

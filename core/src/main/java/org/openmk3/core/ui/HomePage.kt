@@ -550,6 +550,8 @@ class HomePage(ui: Ui) : Page(ui) {
         e.setSample(b, e.kit[a])
         for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
         e.poly.copy(a, b)
+        e.zones.copy(a, b)
+        e.zones.save(ui.ctx)
         e.poly.save(ui.ctx)
         pattern.copySound(a, b)
         e.params.save(ui.ctx)

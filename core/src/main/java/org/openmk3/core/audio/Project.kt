@@ -46,6 +46,7 @@ object Project {
             }
         })
         j.put("poly", e.poly.toJson())
+        j.put("zones", e.zones.toJson())
         j.put("colours", JSONArray(colours.toList()))
         j.put("keys", JSONObject().apply {
             put("root", keys.root); put("octave", keys.octave); put("scale", keys.scale)
@@ -86,6 +87,7 @@ object Project {
             }
         }
         e.poly.loadJson(j.optJSONArray("poly"))
+        e.zones.loadJson(j.optJSONArray("zones"))
         j.optJSONArray("colours")?.let { a -> for (g in 0 until minOf(colours.size, a.length())) colours[g] = a.getInt(g) }
         j.optJSONObject("keys")?.let { k ->
             keys.root = k.optInt("root", 0); keys.octave = k.optInt("octave", 3); keys.scale = k.optInt("scale", 0)
@@ -110,7 +112,7 @@ object Project {
     /** An empty project: no patterns, built-in kit in group A, default settings, no effects. */
     fun clear(ctx: Context, e: AudioEngine) {
         e.pattern.loadJson(JSONObject().put("version", 3).put("bpm", 120.0))
-        for (s in 0 until Pattern.SOUNDS) { e.params.reset(s); e.poly.reset(s); e.setSample(s, e.builtIn[s]) }
+        for (s in 0 until Pattern.SOUNDS) { e.params.reset(s); e.poly.reset(s); e.zones.clear(s); e.setSample(s, e.builtIn[s]) }
         for (c in 0 until FxParams.CHAINS) for (k in 0 until FxParams.SLOTS) if (e.fx.type(c, k) != FxParams.NONE) e.setFx(c, k, FxParams.NONE)
         setCurrent(ctx, null)
     }

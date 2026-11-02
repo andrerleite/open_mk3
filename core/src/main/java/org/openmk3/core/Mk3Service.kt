@@ -230,6 +230,7 @@ class Mk3Service : Service() {
                 AppLog.i("Kit: pad ${slot + 1} could not load $path: ${ex.message}")
             }
         }
+        e.zones.load(this)
         if (loaded > 0) {
             AppLog.i("Kit: $loaded sample(s) loaded")
             ui?.invalidate()

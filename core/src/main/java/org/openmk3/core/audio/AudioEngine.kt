@@ -63,6 +63,8 @@ object NativeEngine {
     external fun nativeFmLoadBank(index: Int, data: ByteArray): Boolean
     external fun nativeFmPatchName(bank: Int, program: Int): String
     external fun nativePolySet(slot: Int, index: Int, value: Float)
+    external fun nativeSetZone(slot: Int, zone: Int, data: FloatArray?, channels: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
+    external fun nativeZoneMap(slot: Int, zone: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativePolyParamCount(): Int
     external fun nativePolyParamName(i: Int): String
     external fun nativePolyParamGroup(i: Int): String
@@ -148,6 +150,8 @@ class AudioEngine(private val ctx: Context) {
     val fx: FxParams = FxParams.load(ctx)
     /** POLY source patches (OB-Xf engine), per sound. */
     val poly: PolyParams by lazy { PolyParams(n) }
+    /** Sample zones (multisamples) of every sound. */
+    val zones = Zones(n)
 
     var masterGain: Float = 0.7f
         set(v) {
