@@ -59,7 +59,12 @@ constexpr int OFF_BPM = OFF_SKIP + kSounds * kSteps;
 constexpr int OFF_SWING = OFF_BPM + 1;
 constexpr int OFF_GMUTE = OFF_SWING + 1;                  // kGroups flags
 constexpr int OFF_GSOLO = OFF_GMUTE + kGroups;            // kGroups flags
-constexpr int PATTERN_FLOATS = OFF_GSOLO + kGroups;
+constexpr int kExtraNotes = 3;                            // a step can hold up to 4 notes (chords)
+constexpr int OFF_NOTE = OFF_GSOLO + kGroups;             // kSounds x kSteps: MIDI note of the main hit
+constexpr int OFF_XVEL = OFF_NOTE + kSounds * kSteps;     // kSounds x kSteps x 3: extra notes' velocity
+constexpr int OFF_XNOTE = OFF_XVEL + kSounds * kSteps * kExtraNotes;  // and their MIDI notes
+constexpr int PATTERN_FLOATS = OFF_XNOTE + kSounds * kSteps * kExtraNotes;
+constexpr int kRootNote = 60;                             // C3: the note a pad plays in pad mode
 
 int64_t nowNanos() {
     timespec ts{};
@@ -158,6 +163,7 @@ struct Voice {
     int fadeOut = -1;     // frames left of the fade-out, -1 = not fading
     int slot = -1;
     uint64_t age = 0;
+    int note = kRootNote;
     bool fromSeq = false;
     int gate = -1;        // frames until note-off (sequencer), -1 = held until released
     bool released = false;
@@ -202,8 +208,20 @@ struct Trigger {
     int slot;
     float vel;
     int64_t tNanos;
-    int type;  // 0 note-on, 1 note-off
+    int type;   // 0 note-on, 1 note-off, 2 kill, 3 repeat hold, 4 repeat release, 5 repeat pressure
+    int note;   // MIDI note (60 = the sound as sampled)
+    int chord;  // notes started together (a chord is never cut short by its own notes)
 };
+
+/** A pad held while NOTE REPEAT / the arpeggiator is on. */
+struct Held {
+    int slot = -1;
+    int note = kRootNote;
+    float vel = 0.f;
+    int chord = 1;
+    uint64_t order = 0;
+};
+constexpr int kMaxHeld = 32;
 
 class Engine {
 public:
@@ -262,12 +280,12 @@ public:
 
     std::atomic_flag producerLock = ATOMIC_FLAG_INIT;  // input thread + browser preview
 
-    void pushTrigger(int slot, float vel, int type = 0) {
+    void pushTrigger(int slot, float vel, int type = 0, int note = kRootNote, int chord = 1) {
         while (producerLock.test_and_set(std::memory_order_acquire)) {}
         uint32_t h = ringHead.load(std::memory_order_relaxed);
         uint32_t t = ringTail.load(std::memory_order_acquire);
         if (h - t < kRing) {
-            ring[h % kRing] = {slot, vel, nowNanos(), type};
+            ring[h % kRing] = {slot, vel, nowNanos(), type, note, chord};
             ringHead.store(h + 1, std::memory_order_release);
         }
         producerLock.clear(std::memory_order_release);
@@ -310,8 +328,28 @@ private:
     float meterAcc = 0.f;
     int meterFrames = 0;
 
-    void startVoice(int slot, float vel, int offset, int gate, bool fromSeq);
-    void releaseSlot(int slot);
+    void startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note = kRootNote, int chord = 1);
+    void releaseSlot(int slot, int note = -1);
+    void runRepeat(int frames);
+    void recordEvent(float* p, int sound, double at, int note, float vel);
+    Held held[kMaxHeld];
+    uint64_t heldOrder = 0;
+    bool rpIdle = true;
+    bool rpPlayingBase = false;
+    double rpPhase = 0.0;   // free-running phase (steps) while the transport is stopped
+    double rpNext = 0.0;    // next repeat / arp tick (steps)
+    int arpIndex = 0;
+    int arpDir = 1;
+    uint32_t arpRnd = 12345;
+public:
+    // NOTE REPEAT / ARP settings (set from Kotlin)
+    std::atomic<int> repeatMode{0};      // 0 off, 1 note repeat, 2 arpeggiator
+    std::atomic<float> repeatRate{1.f};  // in 16th steps (1 = 1/16, 2 = 1/8, 2/3 = 1/16T ...)
+    std::atomic<float> repeatGate{0.5f}; // note length, fraction of the rate
+    std::atomic<int> arpType{0};         // 0 up, 1 down, 2 up-down, 3 random, 4 as played, 5 chord
+    std::atomic<int> arpOctaves{1};
+    std::atomic<bool> recording{false};  // repeat / arp hits are written into the pattern
+private:
     void killSlot(int slot);
     void renderChunk(float* out, int32_t frames);
     void freeSynth(Voice& v) {
@@ -560,9 +598,9 @@ void Engine::tune() {
     }
 }
 
-void Engine::releaseSlot(int slot) {
+void Engine::releaseSlot(int slot, int note) {
     for (auto& v : voices)
-        if (v.sample && v.slot == slot && !v.fromSeq) v.released = true;
+        if (v.sample && v.slot == slot && !v.fromSeq && (note < 0 || v.note == note)) v.released = true;
 }
 
 void Engine::killSlot(int slot) {
@@ -570,7 +608,7 @@ void Engine::killSlot(int slot) {
         if (v.sample && (slot < 0 || v.slot == slot) && v.fadeOut < 0) v.fadeOut = kFadeOut;
 }
 
-void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq) {
+void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note, int chord) {
     if (slot < 0 || slot >= kSlots) return;
     float* pb = params.load(std::memory_order_acquire);
     const float* P = pb ? pb + slot * kParams : kDefaultParams;
@@ -579,7 +617,8 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq)
     if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
     // oldest voices of this sound beyond the limit instead of piling on their tails.
-    int poly = std::clamp(int(P[P_POLY] + 0.5f), 1, 16);
+    // A chord always gets enough voices for its own notes.
+    int poly = std::max(std::clamp(int(P[P_POLY] + 0.5f), 1, 16), std::clamp(chord, 1, 8));
     while (true) {
         int count = 0;
         Voice* oldestOfSlot = nullptr;
@@ -638,6 +677,7 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq)
     v.slot = slot;
     v.age = ++voiceAge;
     v.fromSeq = fromSeq;
+    v.note = std::clamp(note, 0, 127);
     v.gate = gate;
     v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
@@ -704,19 +744,135 @@ void Engine::runSequencer(int frames) {
         if (off < 0) off = 0;
         int step = int(n % kSteps);
         for (int s = 0; s < kSounds; s++) {
-            float v = p[OFF_VEL + s * kSteps + step];
-            if (v <= 0.f) continue;
-            float& skip = p[OFF_SKIP + s * kSteps + step];
+            const int cell = s * kSteps + step;
+            float v = p[OFF_VEL + cell];
+            int extras = 0;
+            for (int x = 0; x < kExtraNotes; x++) extras += p[OFF_XVEL + cell * kExtraNotes + x] > 0.f;
+            if (v <= 0.f && extras == 0) continue;
+            float& skip = p[OFF_SKIP + cell];
             if (skip > 0.5f) { skip = 0.f; continue; }
             int g = s / kPads;
             bool audible = groupOn[g] && (soloInGroup[g] ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f);
-            if (audible) startVoice(s, v, int(off), int(stepLen), true);
+            if (!audible) continue;
+            const int chord = (v > 0.f) + extras;
+            if (v > 0.f) {
+                int note = int(p[OFF_NOTE + cell] + 0.5f);
+                startVoice(s, v, int(off), int(stepLen), true, note > 0 ? note : kRootNote, chord);
+            }
+            for (int x = 0; x < kExtraNotes; x++) {
+                float xv = p[OFF_XVEL + cell * kExtraNotes + x];
+                if (xv > 0.f) startVoice(s, xv, int(off), int(stepLen), true, int(p[OFF_XNOTE + cell * kExtraNotes + x] + 0.5f), chord);
+            }
         }
         currentStep.store(step, std::memory_order_relaxed);
         nextStep = n + 1;
     }
     seqPhase = end;
     phase.store(end, std::memory_order_relaxed);
+}
+
+/** Writes a live (repeat / arp) hit into the pattern at the nearest step. */
+void Engine::recordEvent(float* p, int sound, double at, int note, float vel) {
+    if (!p || sound < 0 || sound >= kSounds) return;
+    long long n = std::llround(at);
+    int step = int(((n % kSteps) + kSteps) % kSteps);
+    const int cell = sound * kSteps + step;
+    // main hit, or the extra note slot holding this note, or a free one
+    float& mv = p[OFF_VEL + cell];
+    int mn = int(p[OFF_NOTE + cell] + 0.5f);
+    if (mn <= 0) mn = kRootNote;
+    if (mv <= 0.f || mn == note) {
+        mv = std::max(mv, vel);
+        p[OFF_NOTE + cell] = float(note);
+    } else {
+        int free = -1;
+        bool done = false;
+        for (int x = 0; x < kExtraNotes && !done; x++) {
+            float& xv = p[OFF_XVEL + cell * kExtraNotes + x];
+            float& xn = p[OFF_XNOTE + cell * kExtraNotes + x];
+            if (xv > 0.f && int(xn + 0.5f) == note) { xv = std::max(xv, vel); done = true; }
+            else if (xv <= 0.f && free < 0) free = x;
+        }
+        if (!done && free >= 0) {
+            p[OFF_XVEL + cell * kExtraNotes + free] = vel;
+            p[OFF_XNOTE + cell * kExtraNotes + free] = float(note);
+        }
+    }
+    // already heard now: don't play it again when the playhead reaches that step this loop
+    if (double(n) >= seqPhase) p[OFF_SKIP + cell] = 1.f;
+}
+
+void Engine::runRepeat(int frames) {
+    const int mode = repeatMode.load(std::memory_order_relaxed);
+    int count = 0;
+    for (auto& hd : held) count += hd.slot >= 0;
+    if (mode == 0) for (auto& hd : held) hd.slot = -1;  // switched off: forget held pads
+    if (mode == 0 || count == 0) { rpIdle = true; arpIndex = 0; arpDir = 1; return; }
+    float* p = pattern.load(std::memory_order_acquire);
+    double bpm = p ? p[OFF_BPM] : 120.0;
+    if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
+    const double stepLen = kSampleRate * 60.0 / bpm / 4.0;
+    const double rate = std::clamp(double(repeatRate.load(std::memory_order_relaxed)), 0.25, 16.0);
+    const bool playing = wasPlaying && playRequested.load(std::memory_order_relaxed);
+    const double start = playing ? seqPhase : rpPhase;
+    if (rpIdle || playing != rpPlayingBase || rpNext < start - 1e-9 || rpNext - start > rate + 1e-9) {
+        // first press: start right away when stopped, on the next grid point when playing
+        if (!playing && rpIdle) { rpPhase = 0.0; rpNext = 0.0; }
+        else rpNext = std::ceil(start / rate - 1e-9) * rate;
+        rpIdle = false;
+        rpPlayingBase = playing;
+    }
+    const double startNow = playing ? seqPhase : rpPhase;
+    const double end = startNow + frames / stepLen;
+    const int gateFrames = std::max(32, int(rate * stepLen * std::clamp(double(repeatGate.load()), 0.05, 1.0)));
+    const bool rec = recording.load(std::memory_order_relaxed) && playing;
+    while (rpNext < end) {
+        int off = std::clamp(int(std::lround((rpNext - startNow) * stepLen)), 0, frames - 1);
+        if (mode == 1) {
+            for (auto& hd : held) {
+                if (hd.slot < 0) continue;
+                startVoice(hd.slot, hd.vel, off, gateFrames, true, hd.note, hd.chord);
+                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, hd.note, hd.vel);
+            }
+        } else {
+            // arpeggiator: the held notes (sorted, or in playing order) over 1-4 octaves
+            Held list[kMaxHeld];
+            int n = 0;
+            for (auto& hd : held) if (hd.slot >= 0) list[n++] = hd;
+            const int type = arpType.load(std::memory_order_relaxed);
+            if (type == 4) std::sort(list, list + n, [](const Held& a, const Held& b) { return a.order < b.order; });
+            else std::sort(list, list + n, [](const Held& a, const Held& b) { return a.slot * 128 + a.note < b.slot * 128 + b.note; });
+            const int oct = std::clamp(arpOctaves.load(std::memory_order_relaxed), 1, 4);
+            const int total = n * oct;
+            if (type == 5) {
+                for (int o = 0; o < oct; o++)
+                    for (int k = 0; k < n; k++)
+                        if (o == arpIndex % oct) startVoice(list[k].slot, list[k].vel, off, gateFrames, true, std::min(127, list[k].note + 12 * o), n);
+                arpIndex++;
+            } else {
+                int idx;
+                if (type == 3) {
+                    arpRnd ^= arpRnd << 13; arpRnd ^= arpRnd >> 17; arpRnd ^= arpRnd << 5;
+                    idx = int(arpRnd % uint32_t(total));
+                } else if (type == 2 && total > 1) {
+                    if (arpIndex >= total) { arpIndex = total - 2; arpDir = -1; }
+                    if (arpIndex < 0) { arpIndex = 1; arpDir = 1; }
+                    idx = arpIndex;
+                    arpIndex += arpDir;
+                } else {
+                    idx = arpIndex % total;
+                    arpIndex = (arpIndex + 1) % total;
+                    if (type == 1) idx = total - 1 - idx;
+                }
+                const Held& hd = list[idx % n];
+                const int note = std::min(127, hd.note + 12 * (idx / n));
+                startVoice(hd.slot, hd.vel, off, gateFrames, true, note, 1);
+                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, note, hd.vel);
+            }
+        }
+        rpNext += rate;
+    }
+    if (!playing) rpPhase = end;
 }
 
 void Engine::render(float* out, int32_t frames) {
@@ -756,19 +912,26 @@ void Engine::renderChunk(float* out, int32_t frames) {
     while (t != h) {
         const Trigger& tr = ring[t % kRing];
         if (tr.type == 1) {
-            releaseSlot(tr.slot);
+            releaseSlot(tr.slot, tr.note);
         } else if (tr.type == 2) {
             killSlot(tr.slot);
+        } else if (tr.type == 3) {   // a pad held for NOTE REPEAT / ARP
+            for (auto& hd : held) if (hd.slot < 0) { hd = {tr.slot, tr.note, tr.vel, tr.chord, ++heldOrder}; break; }
+        } else if (tr.type == 4) {
+            for (auto& hd : held) if (hd.slot == tr.slot && hd.note == tr.note) hd.slot = -1;
+        } else if (tr.type == 5) {   // pressure: repeat velocity follows the pad
+            for (auto& hd : held) if (hd.slot == tr.slot && hd.note == tr.note) hd.vel = tr.vel;
         } else {
             float ms = float(now - tr.tNanos) / 1e6f;
             if (ms > worstTrigMs.load(std::memory_order_relaxed)) worstTrigMs.store(ms, std::memory_order_relaxed);
-            startVoice(tr.slot, tr.vel, 0, -1, false);
+            startVoice(tr.slot, tr.vel, 0, -1, false, tr.note, tr.chord);
         }
         t++;
     }
     ringTail.store(t, std::memory_order_release);
 
-    // 2. sequencer
+    // 2. note repeat / arpeggiator (before the sequencer advances, from the same phase), sequencer
+    runRepeat(frames);
     runSequencer(frames);
 
     // 3. voices -> sound buses (sounds with effects) or group buses
@@ -888,7 +1051,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 default: lfo = std::sin(6.2831853f * v.lfoPhase); break;                   // sine
             }
             const float me = v.mLevel;
-            const double rate = std::pow(2.0, double(tune + me * mPitch + lfo * lPitch) / 12.0);
+            const double rate = std::pow(2.0, double(tune + float(v.note - kRootNote) + me * mPitch + lfo * lPitch) / 12.0);
             const double step = v.rev ? -rate : rate;
             float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f;
             if (ftype) {
@@ -908,7 +1071,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
             const int blockEnd = std::min(frames, i + kBlock);
             float blockPeak = 0.f;
             if (synth) {
-                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + tune + me * mPitch + lfo * lPitch;
+                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + me * mPitch + lfo * lPitch;
                 synthPool[v.synth]->render(sp, !v.released, synthOut, synthAux, blockEnd - i);
             }
             const int blockStart = i;
@@ -1701,7 +1864,28 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeRelease)(JNIEnv*, jobject, jint slot) {
-    gEngine.pushTrigger(slot, 0.f, 1);
+    gEngine.pushTrigger(slot, 0.f, 1, -1);
+}
+/** Note-on with a pitch ([note] 60 = as sampled) and the chord size it belongs to. */
+JNIEXPORT void JNICALL JNI_FN(nativeNoteOn)(JNIEnv*, jobject, jint slot, jint note, jfloat vel, jint chord) {
+    gEngine.pushTrigger(slot, vel, 0, note, chord);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeNoteOff)(JNIEnv*, jobject, jint slot, jint note) {
+    gEngine.pushTrigger(slot, 0.f, 1, note);
+}
+/** NOTE REPEAT / ARP: a pad (note) is held (type 3), let go (4) or its pressure changed (5). */
+JNIEXPORT void JNICALL JNI_FN(nativeRepeatHold)(JNIEnv*, jobject, jint slot, jint note, jfloat vel, jint chord, jint type) {
+    gEngine.pushTrigger(slot, vel, type, note, chord);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeRepeatConfig)(JNIEnv*, jobject, jint mode, jfloat rate, jfloat gate, jint arpType, jint octaves) {
+    gEngine.repeatMode.store(mode);
+    gEngine.repeatRate.store(rate);
+    gEngine.repeatGate.store(gate);
+    gEngine.arpType.store(arpType);
+    gEngine.arpOctaves.store(octaves);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeSetRecording)(JNIEnv*, jobject, jboolean on) {
+    gEngine.recording.store(on == JNI_TRUE);
 }
 /** Fades out every voice of [slot] (-1 = everything). */
 JNIEXPORT void JNICALL JNI_FN(nativeKill)(JNIEnv*, jobject, jint slot) {

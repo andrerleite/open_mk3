@@ -29,7 +29,7 @@ full app.
    - EVENTS mode.
    - Quantise, nudge, copy/paste (SHIFT + pads).
    - Velocity and position with SHIFT + VOLUME / SWING.
-8. **Pad modes**
+8. **Pad modes** — KEYBOARD, CHORDS, 16 VEL, NOTE REPEAT / arp done in 0.7.0 (touch strip next)
    - KEYBOARD and CHORDS, 16 velocities.
    - NOTE REPEAT / arpeggiator.
    - Touch-strip modes.

@@ -52,6 +52,11 @@ object NativeEngine {
     external fun nativeSetParamBuffer(buf: ByteBuffer)
     external fun nativeRelease(slot: Int)
     external fun nativeKill(slot: Int)
+    external fun nativeNoteOn(slot: Int, note: Int, vel: Float, chord: Int)
+    external fun nativeNoteOff(slot: Int, note: Int)
+    external fun nativeRepeatHold(slot: Int, note: Int, vel: Float, chord: Int, type: Int)
+    external fun nativeRepeatConfig(mode: Int, rate: Float, gate: Float, arpType: Int, octaves: Int)
+    external fun nativeSetRecording(on: Boolean)
     external fun nativeInitSynths()
     external fun nativeSetFxBuffer(buf: ByteBuffer)
     external fun nativeSetFx(chain: Int, slot: Int, type: Int)
@@ -308,6 +313,18 @@ class AudioEngine(private val ctx: Context) {
 
     /** Read position (frames) of the newest voice of [slot], or -1 when silent. */
     fun playPos(slot: Int): Float = n.nativePlayPos(slot)
+
+    /** Plays [note] (60 = as sampled) on [slot]; [chord] = notes started together. */
+    fun noteOn(slot: Int, note: Int, vel: Float, chord: Int = 1) = n.nativeNoteOn(slot, note, vel, chord)
+    fun noteOff(slot: Int, note: Int) = n.nativeNoteOff(slot, note)
+
+    /** NOTE REPEAT / ARP: a held note (type 3 down, 4 up, 5 pressure). */
+    fun repeatHold(slot: Int, note: Int, vel: Float, chord: Int, type: Int) = n.nativeRepeatHold(slot, note, vel, chord, type)
+    /** [mode] 0 off, 1 repeat, 2 arp; [rate] in 16th steps; [gate] fraction of the rate. */
+    fun repeatConfig(mode: Int, rate: Float, gate: Float, arpType: Int, octaves: Int) =
+        n.nativeRepeatConfig(mode, rate, gate, arpType, octaves)
+    /** While on (and playing), repeat / arp hits are recorded into the pattern by the engine. */
+    fun setRecording(on: Boolean) = n.nativeSetRecording(on)
 
     /** Puts effect [type] in a chain slot, with its default settings. */
     fun setFx(chain: Int, slot: Int, type: Int) {

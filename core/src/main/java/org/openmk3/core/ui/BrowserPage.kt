@@ -229,6 +229,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+        if (ui.padMode != Ui.PadMode.PAD) return  // KEYBOARD / CHORDS / 16 VEL: pads only play notes
         ui.selectedSound = slot
         message = ""
     }

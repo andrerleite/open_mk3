@@ -116,8 +116,13 @@ class HomePage(ui: Ui) : Page(ui) {
         dirtySince = 0L
     }
 
+    private var engineRec = false
+
     override fun tick(now: Long): Boolean {
         var redraw = false
+        val wantRec = rec && ui.engine.playing
+        if (wantRec != engineRec) { engineRec = wantRec; ui.engine.setRecording(wantRec) }
+        if (wantRec && ui.repeatActive) changed()  // engine writes repeat hits: autosave
         if (dirtySince != 0L && now - dirtySince > 1500) save()
         if (now - powerAt > 5000) {
             power = PowerMonitor.sample(ui.ctx)
@@ -144,7 +149,7 @@ class HomePage(ui: Ui) : Page(ui) {
         for (slot in 0 until 16) {
             val c = ui.soundColour(sd(slot))
             val v = when (mode) {
-                Mode.PAD -> {
+                Mode.PAD -> if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot) else {
                     val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
                     when {
                         ui.engine.kit[sd(slot)].frames == 0 -> 0
@@ -156,7 +161,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
-                    val on = p.vel[sd(selected)][s] > 0f
+                    val on = p.hasStep(sd(selected), s)
                     val sc = ui.soundColour(sd(selected))
                     when {
                         flash && s == step && on -> Mk3Colors.value(sc, 3)
@@ -181,7 +186,9 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("REC", rec)
         l.set("STOP", "RESTART", "SETTINGS", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
         l.set("STEP", mode == Mode.STEP)
-        l.set("PAD MODE", mode == Mode.PAD)
+        l.set("PAD MODE", mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD)
+        l.set("KEYBOARD", mode == Mode.PAD && ui.padMode == Ui.PadMode.KEYBOARD)
+        l.set("CHORDS", mode == Mode.PAD && ui.padMode == Ui.PadMode.CHORDS)
         l.set("ERASE", erase)
         l.set("SELECT", select)
         l.set("MUTE", mute)
@@ -208,26 +215,30 @@ class HomePage(ui: Ui) : Page(ui) {
                 AppLog.i("Erased ${ui.padLabel(slot)} ${ui.engine.kit[sd(slot)].name}")
             }
             mode == Mode.PAD -> {
-                selected = slot
-                if (rec && ui.engine.playing) record(sd(slot), velocity)
+                if (ui.padMode == Ui.PadMode.PAD) selected = slot
+                // NOTE REPEAT / ARP hits are recorded by the engine itself
+                if (rec && ui.engine.playing && !ui.repeatActive) {
+                    val v = ui.padVelocity(slot, pressure)
+                    for ((snd, note) in ui.notesForPad(slot)) record(snd, v, note)
+                }
             }
             else -> { // STEP mode
                 val s = stepForSlot(slot)
-                val row = p.vel[sd(selected)]
-                row[s] = if (erase || row[s] > 0f) 0f else velocity
+                val sound = sd(selected)
+                if (erase || p.hasStep(sound, s)) p.clearStep(sound, s) else p.recordNote(sound, s, Pattern.ROOT, velocity)
                 changed()
             }
         }
     }
 
     /** Quantise a live hit to the nearest step of what the player actually heard. */
-    private fun record(slot: Int, velocity: Float) {
+    private fun record(slot: Int, velocity: Float, note: Int = Pattern.ROOT) {
         val e = ui.engine
         val heard = e.phase - e.outputLatencySteps()
         val n = heard.roundToLong()
         val step = ((n % Pattern.STEPS + Pattern.STEPS) % Pattern.STEPS).toInt()
         val p = pattern
-        p.vel[slot][step] = maxOf(p.vel[slot][step], velocity)
+        p.recordNote(slot, step, note, velocity)
         // Not yet played this loop: the live hit already sounded, don't play it twice.
         if (n >= e.phase) p.skipOnce[slot][step] = true
         changed()
@@ -256,6 +267,7 @@ class HomePage(ui: Ui) : Page(ui) {
             "RESTART" -> e.transportRestart()
             "REC" -> { rec = !rec; if (rec && !e.playing) e.transportPlay() }
             "STEP" -> mode = if (mode == Mode.STEP) Mode.PAD else Mode.STEP
+            "KEYBOARD", "CHORDS" -> mode = Mode.PAD  // leave STEP: pads play notes / chords
             "PAD MODE" -> if (shift) {
                 flash = !flash
                 AppLog.i("Pad LED flashing ${if (flash) "on" else "OFF"}")
@@ -269,7 +281,33 @@ class HomePage(ui: Ui) : Page(ui) {
         }
     }
 
+    private var keyAcc = 0
+
+    /** KEYBOARD / CHORDS knobs: K1 root, K2 scale, K3 octave; CHORDS: K5 mode, K6 type / set. */
+    private fun keysKnob(knob: Int, delta: Int): Boolean {
+        if (mode == Mode.STEP || (ui.padMode != Ui.PadMode.KEYBOARD && ui.padMode != Ui.PadMode.CHORDS)) return false
+        keyAcc += delta
+        if (kotlin.math.abs(keyAcc) < 25) return true
+        val d = if (keyAcc > 0) 1 else -1
+        keyAcc = 0
+        val k = ui.keys
+        when (knob) {
+            0 -> k.root = Math.floorMod(k.root + d, 12)
+            1 -> k.scale = (k.scale + d).coerceIn(0, org.openmk3.core.audio.Keys.SCALES.size - 1)
+            2 -> k.octave = (k.octave + d).coerceIn(-1, 7)
+            4 -> if (ui.padMode == Ui.PadMode.CHORDS) k.chordMode = (k.chordMode + d).coerceIn(0, 1)
+            5 -> if (ui.padMode == Ui.PadMode.CHORDS) {
+                if (k.chordMode == 0) k.chordType = (k.chordType + d).coerceIn(0, org.openmk3.core.audio.Keys.CHORD_TYPES.size - 1)
+                else k.chordSet = (k.chordSet + d).coerceIn(0, org.openmk3.core.audio.Keys.CHORD_SETS.size - 1)
+            }
+            else -> return true
+        }
+        k.save(ui.ctx)
+        return true
+    }
+
     override fun onKnob(knob: Int, delta: Int) {
+        if (keysKnob(knob, delta)) return
         val e = ui.engine
         when (knob) {
             0 -> e.masterGain = (e.masterGain + delta / 300f).coerceIn(0f, 1.5f)
@@ -290,7 +328,84 @@ class HomePage(ui: Ui) : Page(ui) {
     // screens
     // =====================================================================================
 
+    private val keyCell = Theme.fill(Color.rgb(36, 36, 46))
+    private val keyName = Theme.text(15f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+    private val keyDim = Theme.text(12f, Theme.DIM, align = Paint.Align.CENTER)
+    private val knobName = Theme.text(13f, Theme.DIM, align = Paint.Align.CENTER)
+    private val knobVal = Theme.text(16f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+
+    private fun knobLabel(c: Canvas, i: Int, name: String, v: String) {
+        val x = 60f + (i % 4) * 120f
+        c.drawText(name, x, 238f, knobName)
+        c.drawText(v, x, 260f, knobVal)
+    }
+
+    /** KEYBOARD / CHORDS / 16 VEL: settings on the left, the pads' notes on the right. */
+    private fun drawKeys(l: Canvas, r: Canvas) {
+        val k = ui.keys
+        val K = org.openmk3.core.audio.Keys
+        val e = ui.engine
+        l.drawColor(Theme.BG)
+        r.drawColor(Theme.BG)
+        val modeName = when (ui.padMode) {
+            Ui.PadMode.KEYBOARD -> "KEYBOARD"
+            Ui.PadMode.CHORDS -> "CHORDS"
+            else -> "16 VELOCITIES"
+        }
+        l.drawText(modeName, 16f, 30f, title)
+        l.drawText(if (e.playing) "▶ PLAY" else "■ STOP", 330f, 30f, value)
+        if (rec) l.drawText("● REC", 410f, 30f, Theme.text(17f, Theme.WARN, bold = true))
+        l.drawRoundRect(RectF(16f, 46f, 40f, 70f), 4f, 4f, colourPaint)
+        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 66f, value)
+        if (ui.padMode != Ui.PadMode.VEL16) {
+            l.drawText("Base ${K.noteName(k.baseNote)} · ${K.SCALES[k.scale].first}", 16f, 104f, value)
+            l.drawText("SHIFT + pad 13/14: semitone −/+ · 15/16: octave −/+", 16f, 134f, label)
+            if (ui.padMode == Ui.PadMode.CHORDS)
+                l.drawText(if (k.chordMode == 0) "Harmonizer: chords built from the scale" else "Chord set: ${K.CHORD_SETS[k.chordSet].first}", 16f, 160f, label)
+        } else {
+            l.drawText("Pads play the focused sound at 16 velocities", 16f, 104f, label)
+        }
+        if (ui.repeatActive) l.drawText(if (ui.repeatKind == Ui.RepeatKind.ARP) "ARP ${Ui.REPEAT_RATES[ui.repeatRate]}" else "NOTE REPEAT ${Ui.REPEAT_RATES[ui.repeatRate]}", 16f, 190f, hint)
+        if (ui.padMode != Ui.PadMode.VEL16) {
+            knobLabel(l, 0, "ROOT", K.NOTE_NAMES[k.root])
+            knobLabel(l, 1, "SCALE", K.SCALES[k.scale].first)
+            knobLabel(l, 2, "OCTAVE", "${k.octave}")
+            if (ui.padMode == Ui.PadMode.CHORDS) {
+                knobLabel(r, 4, "CHORD MODE", if (k.chordMode == 0) "HARMONIZER" else "CHORD SET")
+                if (k.chordMode == 0) knobLabel(r, 5, "TYPE", K.CHORD_TYPES[k.chordType].first)
+                else knobLabel(r, 5, "SET", K.CHORD_SETS[k.chordSet].first)
+            }
+        }
+        // the 16 pads, laid out like the hardware (pad 13–16 on top)
+        val w = 112f
+        val h = 44f
+        val gc = Mk3Colors.rgb(ui.soundColour(sd(selected)))
+        val hot = Theme.fill(gc)
+        val rootFill = Theme.fill(mix(gc, 0.5f))
+        for (slot in 0 until 16) {
+            val col = slot % 4
+            val row = 3 - slot / 4
+            val x = 8f + col * (w + 4f)
+            val y = 8f + row * (h + 4f)
+            val (main, sub) = when (ui.padMode) {
+                Ui.PadMode.KEYBOARD -> K.noteName(k.noteFor(slot)) to ""
+                Ui.PadMode.CHORDS -> k.chordName(slot) to k.chordFor(slot).joinToString(" ") { K.noteName(it) }
+                else -> "${((slot + 1) * 100 / 16)}%" to "vel"
+            }
+            val isRoot = when (ui.padMode) {
+                Ui.PadMode.KEYBOARD -> k.isRoot(k.noteFor(slot))
+                Ui.PadMode.CHORDS -> k.isRoot(k.chordFor(slot)[0])
+                else -> false
+            }
+            val fill = if (ui.padPressure[slot] > 0) hot else if (isRoot) rootFill else keyCell
+            r.drawRoundRect(RectF(x, y, x + w, y + h), 5f, 5f, fill)
+            r.drawText(main, x + w / 2, y + 21f, keyName)
+            if (sub.isNotEmpty()) r.drawText(sub, x + w / 2, y + 37f, keyDim)
+        }
+    }
+
     override fun draw(l: Canvas, r: Canvas, now: Long) {
+        if (mode != Mode.STEP && ui.padMode != Ui.PadMode.PAD) { drawKeys(l, r); return }
         drawLeft(l)
         drawGrid(r)
     }

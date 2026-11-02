@@ -29,7 +29,12 @@ class Pattern {
         private const val OFF_SWING = OFF_BPM + 1
         private const val OFF_GMUTE = OFF_SWING + 1
         private const val OFF_GSOLO = OFF_GMUTE + GROUPS
-        private const val FLOATS = OFF_GSOLO + GROUPS
+        const val EXTRA = 3                                     // extra notes per step (chords)
+        private const val OFF_NOTE = OFF_GSOLO + GROUPS
+        private const val OFF_XVEL = OFF_NOTE + SOUNDS * STEPS
+        private const val OFF_XNOTE = OFF_XVEL + SOUNDS * STEPS * EXTRA
+        private const val FLOATS = OFF_XNOTE + SOUNDS * STEPS * EXTRA
+        const val ROOT = 60
     }
 
     /** Shared with the native engine. */
@@ -56,6 +61,40 @@ class Pattern {
 
     /** Velocity 0..1 per sound and step; 0 = step off. */
     val vel = Array(SOUNDS) { Row(OFF_VEL + it * STEPS) }
+    /** MIDI note of each step's main hit (60 = the sound as sampled). */
+    val note = Array(SOUNDS) { Row(OFF_NOTE + it * STEPS) }
+
+    private fun xIdx(sound: Int, step: Int, x: Int) = (sound * STEPS + step) * EXTRA + x
+    fun xVel(sound: Int, step: Int, x: Int) = f.get(OFF_XVEL + xIdx(sound, step, x))
+    fun xNote(sound: Int, step: Int, x: Int) = f.get(OFF_XNOTE + xIdx(sound, step, x)).toInt()
+    private fun setX(sound: Int, step: Int, x: Int, v: Float, n: Int) {
+        f.put(OFF_XVEL + xIdx(sound, step, x), v)
+        f.put(OFF_XNOTE + xIdx(sound, step, x), n.toFloat())
+    }
+
+    /** True if the step has any note. */
+    fun hasStep(sound: Int, step: Int) = vel[sound][step] > 0f || (0 until EXTRA).any { xVel(sound, step, it) > 0f }
+
+    /** Writes a (chord) note into a step: the main hit, the slot holding that note, or a free one. */
+    fun recordNote(sound: Int, step: Int, n: Int, v: Float) {
+        val mv = vel[sound][step]
+        val mn = note[sound][step].toInt().let { if (it <= 0) ROOT else it }
+        if (mv <= 0f || mn == n) {
+            vel[sound][step] = maxOf(mv, v)
+            note[sound][step] = n.toFloat()
+            return
+        }
+        for (x in 0 until EXTRA) if (xVel(sound, step, x) > 0f && xNote(sound, step, x) == n) {
+            setX(sound, step, x, maxOf(v, xVel(sound, step, x)), n); return
+        }
+        for (x in 0 until EXTRA) if (xVel(sound, step, x) <= 0f) { setX(sound, step, x, v, n); return }
+    }
+
+    fun clearStep(sound: Int, step: Int) {
+        vel[sound][step] = 0f
+        note[sound][step] = ROOT.toFloat()
+        for (x in 0 until EXTRA) setX(sound, step, x, 0f, 0)
+    }
     val mute = Flags(OFF_MUTE, SOUNDS)
     val solo = Flags(OFF_SOLO, SOUNDS)
     val groupMute = Flags(OFF_GMUTE, GROUPS)
@@ -74,6 +113,7 @@ class Pattern {
 
     init {
         bpm = 120.0
+        for (s in 0 until SOUNDS) note[s].fill(ROOT.toFloat())
     }
 
     /** Same rule as the engine: group mute/solo, then sound mute/solo within the group. */
@@ -90,9 +130,9 @@ class Pattern {
 
     fun groupIsEmpty(g: Int) = (g * PADS until (g + 1) * PADS).all { isEmpty(it) }
 
-    fun isEmpty(sound: Int) = vel[sound].all { it == 0f }
+    fun isEmpty(sound: Int) = (0 until STEPS).none { hasStep(sound, it) }
 
-    fun clear(sound: Int) = vel[sound].fill(0f)
+    fun clear(sound: Int) { for (t in 0 until STEPS) clearStep(sound, t) }
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("version", 2)
@@ -101,6 +141,11 @@ class Pattern {
         put("vel", JSONArray().apply { for (s in vel) put(JSONArray(s.toList().map { it.toDouble() })) })
         put("mute", JSONArray(mute.toList()))
         put("solo", JSONArray(solo.toList()))
+        put("notes", JSONArray().apply { for (s in note) put(JSONArray(s.toList().map { it.toDouble() })) })
+        put("extra", JSONArray().apply {
+            for (s in 0 until SOUNDS) for (t in 0 until STEPS) for (x in 0 until EXTRA)
+                if (xVel(s, t, x) > 0f) put(JSONArray(listOf(s, t, x, xVel(s, t, x).toDouble(), xNote(s, t, x))))
+        })
         put("groupMute", JSONArray(groupMute.toList()))
         put("groupSolo", JSONArray(groupSolo.toList()))
     }
@@ -116,6 +161,20 @@ class Pattern {
         }
         j.optJSONArray("mute")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) mute[s] = a.getBoolean(s) }
         j.optJSONArray("solo")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) solo[s] = a.getBoolean(s) }
+        j.optJSONArray("notes")?.let { a ->
+            for (s in 0 until minOf(SOUNDS, a.length())) {
+                val row = a.getJSONArray(s)
+                for (t in 0 until minOf(STEPS, row.length())) note[s][t] = row.getDouble(t).toFloat().coerceIn(0f, 127f)
+            }
+        }
+        j.optJSONArray("extra")?.let { a ->
+            for (i in 0 until a.length()) {
+                val e = a.getJSONArray(i)
+                val s = e.getInt(0); val t = e.getInt(1); val x = e.getInt(2)
+                if (s in 0 until SOUNDS && t in 0 until STEPS && x in 0 until EXTRA)
+                    setX(s, t, x, e.getDouble(3).toFloat().coerceIn(0f, 1f), e.getInt(4).coerceIn(0, 127))
+            }
+        }
         j.optJSONArray("groupMute")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) groupMute[g] = a.getBoolean(g) }
         j.optJSONArray("groupSolo")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) groupSolo[g] = a.getBoolean(g) }
         updateSolo()

@@ -34,11 +34,11 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | PAD MODE | Pads play the 16 sounds of the focused group | ✅ |
-| KEYBOARD | Pads play the focused sound chromatically | ⬜ |
-| CHORDS | Pads play chords of the focused sound | ⬜ |
+| KEYBOARD | Pads play the focused sound as notes: chromatic or in a scale, from a root note. Press again for pad mode. | ✅ |
+| CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
 | FIXED VEL | Pads ignore pressure (full velocity), on every page | ✅ |
-| SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities | ⬜ |
+| SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities | ✅ |
 
 ## Pattern and arrangement buttons (left of the pads)
 
@@ -82,10 +82,10 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | 10 | Clear automation | ⬜ |
 | 11 | Copy | ⬜ |
 | 12 | Paste | ⬜ |
-| 13 | Semitone down | ⬜ |
-| 14 | Semitone up | ⬜ |
-| 15 | Octave down | ⬜ |
-| 16 | Octave up | ⬜ |
+| 13 | Semitone down (KEYBOARD / CHORDS) | ✅ |
+| 14 | Semitone up (KEYBOARD / CHORDS) | ✅ |
+| 15 | Octave down (KEYBOARD / CHORDS) | ✅ |
+| 16 | Octave up (KEYBOARD / CHORDS) | ✅ |
 
 ## Upper-left block
 
@@ -115,7 +115,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | VOLUME (Velocity) | Encoder adjusts master or focused volume. SHIFT: note velocity. | ⬜ |
 | SWING (Position) | Encoder adjusts swing. SHIFT: event position. | ⬜ (knob 4 today) |
 | TEMPO (Tune) | Encoder adjusts tempo. SHIFT: tune. | ⬜ (encoder always tempo today) |
-| NOTE REPEAT (Arp) | Hold or latch: pads repeat at the chosen rate. SHIFT: arpeggiator. | ⬜ |
+| NOTE REPEAT (Arp) | Hold (momentary) or quick press (latch): pads repeat at the chosen rate, velocity follows pressure. SHIFT: arpeggiator. | ✅ |
 | LOCK (Ext Lock) | Snapshot / lock parameter states | ⬜ |
 
 ## Touch strip
@@ -197,6 +197,35 @@ fades with RELEASE). Sequencer notes last one step.
 | Chorus | Rate, depth, mix, delay, feedback, width |
 | Delay | Time (ms, or note values when synced), sync, feedback, mix, ping-pong, low cut, high cut, modulation |
 | Reverb | Character (DENSE / LUSH / VAST), pre-delay, size, decay, high cut, low cut, diffusion, modulation, mix, freeze, width |
+
+## KEYBOARD, CHORDS and 16 VEL
+
+Pad 1 (bottom-left) is the lowest note. Pad modes work on every page; the home screen shows
+the pads' notes or chords and these knobs:
+
+| Mode | K1 | K2 | K3 | K5 | K6 |
+|---|---|---|---|---|---|
+| KEYBOARD | Root | Scale (chromatic, major, minor, harmonic / melodic minor, modes, pentatonics, blues, whole tone) | Octave | | |
+| CHORDS | Root | Scale | Octave | Chord mode (harmonizer / chord set) | Chord type (harmonizer) or chord set (pop, minor, jazz, neo soul, house, cinematic) |
+
+Root pads light brighter. Notes and chords played while recording are written into the
+pattern (up to 4 notes per step). A chord always gets the voices it needs, even when the
+sound's polyphony is 1. 60 (C3) plays a sample at its own pitch; for a synth, NOTE sets what C3
+plays.
+
+## NOTE REPEAT and arpeggiator
+
+| Control | Function |
+|---|---|
+| NOTE REPEAT (hold) | Momentary: held pads repeat |
+| NOTE REPEAT (quick press) | Latch on / off |
+| SHIFT + NOTE REPEAT | Arpeggiator instead of repeat (hold or latch the same way) |
+| While NOTE REPEAT is held: D1–D8 | Rate: 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/32T |
+| While held: K1 / K2 / K3 | Gate (note length) / arp type (up, down, up-down, random, as played, chord) / arp octaves (1–4) |
+
+Repeats follow the transport grid while playing (free-running when stopped) and the pad's
+pressure sets their velocity. While recording, repeat and arp notes at 1/16 or slower are
+written into the pattern.
 
 ## Button lights
 
