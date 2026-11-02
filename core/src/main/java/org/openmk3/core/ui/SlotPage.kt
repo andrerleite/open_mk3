@@ -109,6 +109,12 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
             }
             else -> {
                 if (!has(i)) { p.captureScene(i); message = "New scene ${name(i)} (patterns playing now)" }
+                else if (p.songMode && i in p.song) {
+                    // song mode: jump to that scene's section (at the end of the playing one)
+                    val sec = p.song.indexOf(i)
+                    if (playing) p.songJump = sec else p.songPos = sec
+                    message = "Section ${sec + 1} (scene ${i + 1})"
+                }
                 else { p.launchScene(i, playing); message = "Scene ${i + 1}" }
             }
         }

@@ -72,7 +72,10 @@ constexpr int OFF_GFILT = OFF_GPAN + kGroups;             // kGroups: performanc
 constexpr int OFF_METROVOL = OFF_GFILT + kGroups;        // metronome level 0..1
 constexpr int OFF_COUNTBARS = OFF_METROVOL + 1;           // count-in length in bars (1, 2, 4)
 constexpr int OFF_GSWING = OFF_GFILT + kGroups + 6;       // kGroups: extra swing per group (CHANNEL groove)
-constexpr int OFF_BANKS = OFF_GSWING + kGroups;
+constexpr int OFF_GORIGIN = OFF_GSWING + kGroups;         // kGroups: global step where the group's pattern started
+constexpr int OFF_SWITCHAT = OFF_GORIGIN + kGroups;       // global step where every queued pattern switches (-1 none)
+constexpr int OFF_NOW = OFF_SWITCHAT + 1;                 // engine: global step playing now
+constexpr int OFF_BANKS = OFF_NOW + 1;
 // per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
 constexpr int B_VEL = 0;
 constexpr int B_NOTE = B_VEL + kPads * kSteps;
@@ -817,6 +820,7 @@ void Engine::runSequencer(int frames) {
         }
         seqPhase = double(nextStep);
         pendCount = 0;
+        for (int g = 0; g < kGroups; g++) p[OFF_GORIGIN + g] = 0.f;
         for (int g = 0; g < kGroups; g++)
             for (int b = 0; b < 2; b++) {
                 float* bk = bankOf(p, g, b);
@@ -872,13 +876,19 @@ void Engine::runSequencer(int frames) {
         }
         if (n < 0) { nextStep = n + 1; continue; }  // counting in
         if (n == 0) p[OFF_COUNTING] = 0.f;
+        p[OFF_NOW] = float(n);
+        // song sections: every queued pattern starts together at this step
+        const bool switchAll = p[OFF_SWITCHAT] >= 0.f && int64_t(p[OFF_SWITCHAT]) <= n;
+        if (switchAll) p[OFF_SWITCHAT] = -1.f;
         for (int g = 0; g < kGroups; g++) {
             // queued pattern: switch when this group's pattern starts over
             int ab = activeBank(p, g);
             float* bk = bankOf(p, g, ab);
             int len = bankLen(bk);
-            if (n % len == 0) {
+            const int64_t origin = int64_t(p[OFF_GORIGIN + g]);
+            if (switchAll || (n - origin) % len == 0) {
                 int pend = int(p[OFF_PENDING + g]);
+                p[OFF_GORIGIN + g] = float(n);
                 if (pend >= 0) {
                     p[OFF_ACTIVE + g] = float(pend);
                     p[OFF_PENDING + g] = -1.f;
@@ -887,7 +897,7 @@ void Engine::runSequencer(int frames) {
                     len = bankLen(bk);
                 }
             }
-            const int step = int(n % len);
+            const int step = int((((n - int64_t(p[OFF_GORIGIN + g])) % len) + len) % len);
             p[OFF_GSTEP + g] = float(step);
             // automation: set the recorded parameter values for this step
             if (float* pb = params.load(std::memory_order_relaxed)) {

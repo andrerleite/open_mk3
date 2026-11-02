@@ -20,8 +20,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | REC | Toggle recording while playing (starts playback if stopped) | ✅ |
 | SHIFT + REC (Count-in) | Record with a one-bar count-in (clicks) | ✅ |
 | STOP | Stop. Pressed again while stopped: every sound fades out (stops long samples and tails). | ✅ |
-| RESTART | Restart playback from the beginning of the loop | ✅ |
-| SHIFT + RESTART (Loop) | Loop on / off | ⬜ |
+| RESTART | Restart playback from the beginning of the loop (song mode: from section 1) | ✅ |
+| SHIFT + RESTART (Loop) | Loop the playing song section on / off | ✅ |
 | ERASE + pad | Erase that sound's events in the pattern | ✅ |
 | SHIFT + ERASE (Replace) | Recording replaces existing events instead of adding | ⬜ |
 | TAP | Tap tempo | ✅ |
@@ -45,7 +45,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | SCENE | Hold: scenes on the pads (select / launch; empty pad = new scene from the patterns playing). Hold + D1 pins the mode. | ✅ |
-| SHIFT + SCENE (Section) | Arranger sections | ⬜ |
+| SHIFT + SCENE (Section) | Song view (same as ARRANGER) | ✅ |
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Hold (D1 pins): pads add / remove a sound's notes from the selection (dim: has notes, lit: selected), D5 all, D6 none, ERASE + pad erases; K1 position, K2 note, K3 velocity, K4 length (SHIFT: fine); ◀ ▶ pages | ✅ |
 | VARIATION | Hold (D1 pins): HUMANIZE varies the focused sound's velocity (K1, K2 probability) and timing (K3); RANDOM writes new random notes (density, velocity, note range); D8 applies | ✅ |
@@ -93,7 +93,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 |---|---|---|
 | CHANNEL (MIDI) | Channel properties. D1 MASTER / D2 GROUP / D3 SOUND, ◀ ▶ OUTPUT / GROOVE. OUTPUT: K1 volume, K2 pan. GROOVE: K1 swing (master: the project swing; group: extra swing added for that group) | ✅ |
 | PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound | ✅ (full app) |
-| ARRANGER | Arranger view (scenes / sections / song) | ⬜ |
+| ARRANGER | Song view: a list of sections, each playing a scene. D1 song mode on / off, D2 loop, D3 jump to the selected section, D5 duplicate, D6 delete; encoder or ◀ ▶ select, K1 moves a section; scene pads add a section after the selected one (SHIFT + pad replaces it). A section lasts as long as its scene's longest pattern, and all groups start their patterns together at each section. In song mode, a scene pad in SCENE mode jumps to that scene's section | ✅ |
 | MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder | ✅ (sends ⬜) |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |

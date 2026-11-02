@@ -418,6 +418,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             val now = SystemClock.uptimeMillis()
             if (page.tick(now)) dirty = true
             if (lock.tick(now)) dirty = true
+            engine.pattern.songTick(engine.playing)
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
             if (page !is WizardPage) {
@@ -599,6 +600,14 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "MIXER" -> { if (page is MixerPage) showHome() else show(MixerPage(this)); return@post }
+                "ARRANGER" -> { if (page is ArrangerPage) showHome() else show(ArrangerPage(this)); return@post }
+                "RESTART" -> if (shiftHeld) {  // SHIFT + RESTART: loop the playing section
+                    engine.pattern.loop = !engine.pattern.loop
+                    engine.pattern.save(ctx)
+                    AppLog.i("Loop ${if (engine.pattern.loop) "on" else "off"}")
+                    dirty = true
+                    return@post
+                }
                 "CHANNEL" -> { if (page is ChannelPage) showHome() else show(ChannelPage(this)); return@post }
                 "MACRO" -> { if (page is MacroPage) showHome() else show(MacroPage(this, shiftHeld)); return@post }
                 "FILE" -> {
@@ -614,6 +623,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "PATTERN", "SCENE" -> {
+                    if (name == "SCENE" && shiftHeld) {  // SHIFT + SCENE: song view
+                        if (page is ArrangerPage) showHome() else show(ArrangerPage(this))
+                        return@post
+                    }
                     modeHeld = name
                     val kind = if (name == "PATTERN") SlotPage.Kind.PATTERN else SlotPage.Kind.SCENE
                     val cur = page
@@ -725,6 +738,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("TAP", engine.pattern.metronome)
         lights.set("AUTO", autoActive)
         lights.set("CHANNEL", page is ChannelPage)
+        lights.set("ARRANGER", page is ArrangerPage)
         lights.set("MACRO", page is MacroPage || macroLearn >= 0)
         lights.set("PITCH", stripMode == StripMode.PITCH)
         lights.set("MOD", stripMode == StripMode.MOD)

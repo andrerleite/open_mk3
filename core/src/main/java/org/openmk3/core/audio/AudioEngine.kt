@@ -381,7 +381,7 @@ class AudioEngine(private val ctx: Context) {
 
     /** Note-off for a pad (ends ADSR sustain). */
     fun release(slot: Int) = n.nativeRelease(slot)
-    fun transportRestart() { n.nativeTransport(2); playing = true }
+    fun transportRestart() { pattern.songRestart(); n.nativeTransport(2); playing = true }
 
     /** Steps of latency between the playhead and what the player hears. */
     fun outputLatencySteps(): Double = bufferFrames / (SR * 60.0 / bpm / 4.0)

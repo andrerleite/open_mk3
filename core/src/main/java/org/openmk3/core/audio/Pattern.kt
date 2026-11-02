@@ -137,7 +137,10 @@ class Pattern {
         private const val OFF_METROVOL = OFF_GFILT + GROUPS
         private const val OFF_COUNTBARS = OFF_METROVOL + 1
         private const val OFF_GSWING = OFF_GFILT + GROUPS + 6
-        private const val OFF_BANKS = OFF_GSWING + GROUPS
+        private const val OFF_GORIGIN = OFF_GSWING + GROUPS
+        private const val OFF_SWITCHAT = OFF_GORIGIN + GROUPS
+        private const val OFF_NOW = OFF_SWITCHAT + 1
+        private const val OFF_BANKS = OFF_NOW + 1
         private const val B_VEL = 0
         private const val B_NOTE = B_VEL + PADS * STEPS
         private const val B_XVEL = B_NOTE + PADS * STEPS
@@ -231,6 +234,7 @@ class Pattern {
         bpm = 120.0
         metronomeLevel = 0.7f
         countInBars = 1
+        f.put(OFF_SWITCHAT, -1f)
         for (g in 0 until GROUPS) {
             f.put(OFF_PENDING + g, -1f)
             for (b in 0..1) { f.put(bankBase(g, b) + B_LEN, 16f); clearBank(g, b) }
@@ -650,6 +654,113 @@ class Pattern {
     fun deleteScene(idx: Int) {
         scenes[idx] = null
         if (currentScene == idx) currentScene = -1
+        song.removeAll { it == idx }
+        songPos = songPos.coerceIn(0, maxOf(0, song.size - 1))
+    }
+
+    // ---- song (arranger): a list of scenes played in order ----
+    /** Sections of the song: scene indices. */
+    val song = mutableListOf<Int>()
+    /** Song mode: scenes follow the song list; off, scenes and patterns loop as launched. */
+    var songMode = false
+    /** Loop the playing section (SHIFT + RESTART). */
+    var loop = false
+    /** Section playing (or starting at the next PLAY). */
+    var songPos = 0
+    /** Section to jump to at the end of the playing one (-1: the next one). */
+    var songJump = -1
+    private var secStart = 0
+    private var secLen = 16
+    private var queuedSec = -1
+    private var queuedAt = -1
+
+    /** Length of scene [idx] in steps: its longest pattern. */
+    fun sceneLength(idx: Int): Int {
+        val sc = scenes.getOrNull(idx) ?: return 16
+        var len = 0
+        for (g in 0 until GROUPS) sc[g].takeIf { it >= 0 }?.let { patterns[g][it] }?.let { len = maxOf(len, it.length) }
+        return if (len == 0) 16 else len
+    }
+
+    private fun sectionScene(pos: Int) = song.getOrNull(pos)?.takeIf { scenes[it] != null }
+
+    private fun nextSection(): Int = when {
+        songJump in song.indices -> songJump
+        loop -> songPos
+        else -> if (songPos + 1 < song.size) songPos + 1 else 0
+    }
+
+    /** Puts section [pos]'s patterns in place now (stopped) or at global step [at] (playing). */
+    private fun queueSection(pos: Int, at: Int, playing: Boolean) {
+        val sc = scenes[sectionScene(pos) ?: return]!!
+        if (!playing) {
+            for (g in 0 until GROUPS) selectPattern(g, sc[g], false, create = false)
+        } else {
+            for (g in 0 until GROUPS) {
+                val idx = sc[g]
+                val d = if (idx >= 0) patterns[g][idx] else null
+                val other = 1 - active(g)
+                writeBank(g, other, d)
+                queued[g] = idx
+                f.put(OFF_PENDING + g, other.toFloat())
+            }
+            f.put(OFF_SWITCHAT, at.toFloat())
+        }
+        queuedSec = pos
+        queuedAt = at
+    }
+
+    /** RESTART in song mode: the song starts again from section 1. */
+    fun songRestart() {
+        if (!songMode || song.isEmpty()) return
+        songPos = 0; songJump = -1
+        queueSection(0, 0, playing = true)
+        secStart = 0; secLen = sceneLength(song[0])
+    }
+
+    private var wasPlaying = false
+
+    /** Drives song mode; call from the UI thread often (every frame). */
+    fun songTick(playing: Boolean) {
+        if (!songMode || song.isEmpty()) { wasPlaying = playing; return }
+        songPos = songPos.coerceIn(0, song.size - 1)
+        if (!playing) {
+            // stopped: the section that PLAY will start is in place
+            val sc = sectionScene(songPos)
+            if (sc != null) {
+                val want = scenes[sc]!!
+                if ((0 until GROUPS).any { current[it] != want[it] }) queueSection(songPos, 0, playing = false)
+                currentScene = sc
+            }
+            secStart = 0; secLen = sc?.let { sceneLength(it) } ?: 16
+            queuedSec = -1; queuedAt = -1
+            wasPlaying = false
+            return
+        }
+        val now = f.get(OFF_NOW).toInt()
+        if (!wasPlaying) { secStart = 0; secLen = sectionScene(songPos)?.let { sceneLength(it) } ?: 16; queuedSec = -1; queuedAt = -1 }
+        wasPlaying = true
+        if (now < secStart) { secStart = 0; queuedSec = -1; queuedAt = -1 }  // restarted
+        val end = secStart + secLen
+        if (queuedAt >= 0 && now >= queuedAt && f.get(OFF_SWITCHAT) < 0f) {
+            // the queued section started
+            songPos = queuedSec
+            if (songJump == songPos) songJump = -1
+            sectionScene(songPos)?.let { currentScene = it }
+            secStart = queuedAt
+            secLen = sectionScene(songPos)?.let { sceneLength(it) } ?: 16
+            queuedSec = -1; queuedAt = -1
+            sectionScene(songPos)?.let { sc -> for (g in 0 until GROUPS) { current[g] = scenes[sc]!![g]; queued[g] = -1 } }
+            return
+        }
+        val next = nextSection()
+        if (now >= secStart && now < end - 1 && (queuedSec != next || queuedAt != end)) queueSection(next, end, playing = true)
+    }
+
+    /** Progress through the playing section (0..1), or -1. */
+    fun sectionProgress(): Float {
+        if (!songMode || !wasPlaying) return -1f
+        return ((f.get(OFF_NOW) - secStart) / secLen).coerceIn(0f, 1f)
     }
 
     // ---- mute / solo ----
@@ -693,6 +804,9 @@ class Pattern {
             for (i in 0 until SLOTS) scenes[i]?.let { put(JSONObject().put("slot", i).put("patterns", JSONArray(it.toList()))) }
         })
         put("currentScene", currentScene)
+        put("song", JSONArray(song.toList()))
+        put("songMode", songMode)
+        put("loop", loop)
     }
 
     fun loadJson(j: JSONObject) {
@@ -710,6 +824,7 @@ class Pattern {
         j.optJSONArray("groupSwing")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupSwing(g, a.getDouble(g).toFloat()) }
         for (g in 0 until GROUPS) { patterns[g].fill(null); current[g] = -1; queued[g] = -1 }
         scenes.fill(null)
+        song.clear(); songMode = false; songPos = 0; songJump = -1
         if (j.optInt("version", 1) >= 3) {
             val gs = j.optJSONArray("groups") ?: JSONArray()
             for (g in 0 until minOf(GROUPS, gs.length())) {
@@ -730,6 +845,11 @@ class Pattern {
                 if (slot in 0 until SLOTS) scenes[slot] = IntArray(GROUPS) { if (it < a.length()) a.getInt(it) else -1 }
             }
             currentScene = j.optInt("currentScene", -1)
+            song.clear()
+            j.optJSONArray("song")?.let { a -> for (i in 0 until a.length()) a.getInt(i).takeIf { it in 0 until SLOTS }?.let { song.add(it) } }
+            songMode = j.optBoolean("songMode", false)
+            loop = j.optBoolean("loop", false)
+            songPos = 0; songJump = -1
         } else {
             // version 1 / 2: one 16-step pattern for each group (sound rows of 16 velocities)
             val va = j.optJSONArray("vel")
