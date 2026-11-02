@@ -63,7 +63,9 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 |---|---|---|
 | GROUP A–H | Focus a group. Pads then play its 16 sounds; every group's pattern plays together. | ✅ |
 | MUTE / SOLO + group | Mute / solo a whole group | ✅ |
-| SHIFT + group | Group colour (pick on the pads) | 🟡 (colour; copy / clear planned) |
+| SHIFT + group | Group colour (pick on the pads) | ✅ |
+| DUPLICATE + group + group | Copy a whole group (sounds, samples, synth patches, zones, patterns, mixer) to another | ✅ |
+| ERASE + group | Clear a group: built-in sounds, no patterns (UNDO brings it back) | ✅ |
 | SHIFT + SELECT | Colour of the focused sound (or AUTO = group colour) | ✅ |
 
 ## SHIFT + pad shortcuts (printed on the pads)

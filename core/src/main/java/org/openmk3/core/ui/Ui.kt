@@ -274,6 +274,48 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     /** e.g. "B7" for the focused pad. */
     fun padLabel(slot: Int = selectedSound) = "$groupLetter${slot + 1}"
 
+    @Volatile var dupHeld = false
+    private var dupGroup = -1
+
+    /** Copies a whole group: sounds (samples, settings, synth patches, zones) and patterns. */
+    fun groupCopy(from: Int, to: Int) {
+        if (from == to) return
+        val e = engine
+        for (k in 0 until 16) {
+            val a = from * 16 + k; val b = to * 16 + k
+            e.setSample(b, e.kit[a])
+            for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
+            e.poly.copy(a, b)
+            e.zones.copy(a, b)
+        }
+        e.pattern.copyGroup(from, to)
+        Colours.group[to] = Colours.group[from]
+        saveAll()
+        AppLog.i("Group ${'A' + from} copied to ${'A' + to}")
+    }
+
+    /** Clears a group: its sounds go back to the built-in kit and its patterns are removed. */
+    fun groupClear(g: Int) {
+        val e = engine
+        for (k in 0 until 16) {
+            val s = g * 16 + k
+            e.resetSlot(s)
+            e.params.reset(s)
+            e.poly.reset(s)
+            e.zones.clear(s)
+        }
+        e.pattern.removeGroup(g)
+        saveAll()
+        AppLog.i("Group ${'A' + g} cleared")
+    }
+
+    private fun saveAll() {
+        val e = engine
+        e.params.save(ctx); e.poly.save(ctx); e.zones.save(ctx); e.pattern.save(ctx)
+        org.openmk3.core.audio.KitStore.save(ctx, e.kit)
+        checkpoint()
+    }
+
     fun selectGroup(g: Int) {
         group = g.coerceIn(0, 7)
         AppLog.i("Group ${'A' + group}")
@@ -526,7 +568,19 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             dirty = true
             return@post
         }
-        if (name != null && name.startsWith("GROUP ") && name.length == 7) heldGroup = if (down) name[6] - 'A' else -1
+        if (name == "DUPLICATE") { dupHeld = down; if (!down) dupGroup = -1 }
+        if (name != null && name.startsWith("GROUP ") && name.length == 7) {
+            heldGroup = if (down) name[6] - 'A' else -1
+            // DUPLICATE + group + group: copy a group · ERASE + group: clear it (UNDO brings it back)
+            if (down && !page.customLeds && (dupHeld || eraseHeld) && !shiftHeld) {
+                val g = name[6] - 'A'
+                if (eraseHeld) groupClear(g)
+                else if (dupGroup < 0) { dupGroup = g; AppLog.i("Duplicate group ${'A' + g} to… (press the target group)") }
+                else { groupCopy(dupGroup, g); dupGroup = -1 }
+                dirty = true
+                return@post
+            }
+        }
         // Mode buttons are momentary; holding one and pressing D1 pins it (and it stays
         // pinned on later presses until unpinned the same way).
         if (down && name == "D1" && modeHeld != null && !page.customLeds) {

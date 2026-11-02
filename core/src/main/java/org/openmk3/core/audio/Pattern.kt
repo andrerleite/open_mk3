@@ -648,6 +648,28 @@ class Pattern {
         for (s in scenes) if (s != null && s[g] == idx) s[g] = -1
     }
 
+    /** Copies group [from]'s patterns and mixer settings to group [to]. */
+    fun copyGroup(from: Int, to: Int) {
+        for (i in 0 until SLOTS) patterns[to][i] = patterns[from][i]?.copy()
+        current[to] = current[from]
+        queued[to] = -1
+        f.put(OFF_PENDING + to, -1f)
+        setGroupVolume(to, groupVolume(from)); setGroupPan(to, groupPan(from)); setGroupSwing(to, groupSwing(from))
+        for (a in 0..1) setGroupSend(to, a, groupSend(from, a))
+        writeBank(to, active(to), cur(to))
+    }
+
+    /** Removes group [g]'s patterns (its mixer settings go back to the defaults). */
+    fun removeGroup(g: Int) {
+        patterns[g].fill(null)
+        current[g] = -1
+        queued[g] = -1
+        f.put(OFF_PENDING + g, -1f)
+        setGroupVolume(g, 0f); setGroupPan(g, 0f); setGroupSwing(g, 0f)
+        for (a in 0..1) setGroupSend(g, a, 0f)
+        writeBank(g, active(g), null)
+    }
+
     fun duplicatePattern(g: Int, from: Int, to: Int) {
         val src = patterns[g][from] ?: return
         patterns[g][to] = src.copy()
