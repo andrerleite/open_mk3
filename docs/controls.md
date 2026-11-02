@@ -114,8 +114,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Knobs 1–8 | Parameters shown on the screen above each knob. Touching a knob shows its value. | 🟡 (fixed: volume, sensitivity, tempo, swing) |
 | 4D encoder turn | Context value: list scrolling, or the selected encoder mode | 🟡 (tempo on home, scroll in browser) |
 | 4D encoder push / tilt | Confirm / navigate | ✅ (browser) |
-| VOLUME (Velocity) | Encoder adjusts the master volume; hold a pad or group button for just that one | 🟡 (event velocity ⬜) |
-| SWING (Position) | Encoder adjusts swing | 🟡 (position ⬜) |
+| VOLUME (Velocity) | Encoder adjusts the master volume; hold a pad or group button for just that one. SHIFT + VOLUME: the encoder changes the velocity of the focused sound's notes (SHIFT: fine) | ✅ |
+| SWING (Position) | Encoder adjusts swing. SHIFT + SWING: the encoder moves the focused sound's notes by the nudge grid (SHIFT: fine) | ✅ |
 | TEMPO (Tune) | Encoder adjusts tempo (SHIFT: fine). SHIFT + TEMPO: encoder tunes the focused sound. | ✅ |
 | NOTE REPEAT (Arp) | Hold: pads repeat (arpeggiator in KEYBOARD / CHORDS). Hold + D1 pins it. SHIFT + NOTE REPEAT: KEYBOARD with the arpeggiator. | ✅ |
 | LOCK (Ext Lock) | LOCK: quick snapshot of every sound / effect / mixer setting, press again to recall. SHIFT + LOCK: 16 snapshots on the pads (empty pad stores, pad recalls, ERASE + pad deletes, D5 updates), K1 morph on / off, K2 morph time in bars | ✅ |

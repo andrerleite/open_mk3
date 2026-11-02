@@ -246,8 +246,8 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("MUTE", mute)
         l.set("SOLO", solo)
         l.set("SHIFT", shift)
-        l.set("VOLUME", encMode == Enc.VOLUME)
-        l.set("SWING", encMode == Enc.SWING)
+        l.set("VOLUME", encMode == Enc.VOLUME || encMode == Enc.VELOCITY)
+        l.set("SWING", encMode == Enc.SWING || encMode == Enc.POSITION)
         l.set("TEMPO", encMode == Enc.TEMPO || encMode == Enc.TUNE)
         l.set("DUPLICATE", duplicate)
         if (Edition.full) l.set("PLUG-IN")
@@ -385,8 +385,9 @@ class HomePage(ui: Ui) : Page(ui) {
                 rec = true
                 if (e.playing) e.transportRestart() else e.transportPlay()
             } else { rec = !rec; if (rec && !e.playing) e.transportPlay() }
-            "VOLUME" -> encMode = if (encMode == Enc.VOLUME) Enc.TEMPO else Enc.VOLUME
-            "SWING" -> encMode = if (encMode == Enc.SWING) Enc.TEMPO else Enc.SWING
+            // SHIFT + VOLUME = velocity, SHIFT + SWING = position of the focused sound's notes
+            "VOLUME" -> encMode = if (shift) (if (encMode == Enc.VELOCITY) Enc.TEMPO else Enc.VELOCITY) else if (encMode == Enc.VOLUME) Enc.TEMPO else Enc.VOLUME
+            "SWING" -> encMode = if (shift) (if (encMode == Enc.POSITION) Enc.TEMPO else Enc.POSITION) else if (encMode == Enc.SWING) Enc.TEMPO else Enc.SWING
             "TEMPO" -> encMode = if (shift) Enc.TUNE else Enc.TEMPO
             "STEP" -> mode = Mode.STEP  // PAD MODE / KEYBOARD / CHORDS leave it
             "KEYBOARD", "CHORDS" -> mode = Mode.PAD  // leave STEP: pads play notes / chords
@@ -488,7 +489,7 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     /** What the encoder adjusts (VOLUME / SWING / TEMPO buttons; SHIFT + TEMPO = tune). */
-    private enum class Enc { TEMPO, VOLUME, SWING, TUNE }
+    private enum class Enc { TEMPO, VOLUME, SWING, TUNE, VELOCITY, POSITION }
     private var encMode = Enc.TEMPO
 
     override fun onEncoder(delta: Int) {
@@ -530,6 +531,8 @@ class HomePage(ui: Ui) : Page(ui) {
                 else (Math.round(e.bpm) + delta).toDouble().coerceIn(40.0, 240.0)
             Enc.VOLUME -> e.masterGain = (e.masterGain + delta * 0.02f).coerceIn(0f, 1.5f)
             Enc.SWING -> pattern.swing = (pattern.swing + delta * 0.01f).coerceIn(0f, 0.5f)
+            Enc.VELOCITY -> pattern.addVelocity(setOf(sd(selected)), delta * (if (shift) 0.005f else 0.03f))
+            Enc.POSITION -> pattern.move(setOf(sd(selected)), delta * (if (shift) 0.05f else ui.nudgeGrid))
             Enc.TUNE -> {
                 val sp = e.params
                 val snd = sd(selected)
@@ -723,6 +726,8 @@ class HomePage(ui: Ui) : Page(ui) {
             shift && mode == Mode.PAD -> "SHIFT + pad: 1 undo · 2 redo · 7/8 nudge · 9 clear · 11/12 copy/paste"
             encMode == Enc.VOLUME -> "Encoder: master volume"
             encMode == Enc.SWING -> "Encoder: swing"
+            encMode == Enc.VELOCITY -> "Encoder: velocity of ${ui.padLabel()}'s notes"
+            encMode == Enc.POSITION -> "Encoder: move ${ui.padLabel()}'s notes (nudge grid)"
             encMode == Enc.TUNE -> "Encoder: tune ${ui.padLabel()}"
             shift && erase -> "Pattern cleared"
             erase -> if (mode == Mode.STEP) "ERASE: hit steps to clear them" else "ERASE: hit a pad to clear that sound"
