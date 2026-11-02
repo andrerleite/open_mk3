@@ -28,6 +28,7 @@ import kotlin.math.roundToInt
  *  SLICE   K1 mode (GRID / DETECT) · K2 slices or sensitivity · pads play the slices
  *          D8 apply: each slice is saved and loaded onto pads 1, 2, 3…
  *
+ *  EDIT / SLICE: ENCODER turn = zoom · ENCODER left / right = scroll · D4 = zero-crossing snap
  *  ENCODER push = start / stop recording · SHIFT = fine knob steps · SAMPLING = back
  */
 class SamplingPage(ui: Ui) : Page(ui) {
@@ -75,8 +76,14 @@ class SamplingPage(ui: Ui) : Page(ui) {
     private var fadeOutMs = 0f
     private var normalise = false
     private var reverse = false
-    private var envMin = FloatArray(0)
-    private var envMax = FloatArray(0)
+    private val wave = WaveView()
+    // Marker positions as turned; trimStart / trimEnd are these, snapped when zero-crossing snap is on.
+    private var rawStart = 0
+    private var rawEnd = 0
+    /** The frame the zoom centres on: the marker edited last. */
+    private var focus = 0
+    // What the preview slot is playing, to draw its playhead on the take.
+    private var previewBase = -1
     private var slices = IntArray(0)   // slice start frames within the edited region
 
     private val tabText = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
@@ -125,44 +132,36 @@ class SamplingPage(ui: Ui) : Page(ui) {
         takeName = name
         trimStart = 0
         trimEnd = takeFrames
+        rawStart = 0
+        rawEnd = takeFrames
+        focus = 0
+        previewBase = -1
         fadeInMs = 0f
         fadeOutMs = 0f
         normalise = false
         reverse = false
-        buildEnvelope()
+        wave.set(data, 2)
         computeSlices()
     }
 
-    /** Opens the sample on [slot] in the editor (mono becomes stereo). */
-    private fun loadFromPad(slot: Int) {
-        val s = ui.engine.kit[slot]
-        if (s.frames < 2) return
-        val st = if (s.channels == 2) s.data.copyOf() else FloatArray(s.frames * 2) { s.data[it / 2] }
-        setTake(st, s.name)
-        message = "Editing pad ${slot + 1}: ${s.name}"
+    /** Applies zero-crossing snap to the raw marker positions. */
+    private fun snapTrim() {
+        val d = take ?: return
+        trimStart = if (ui.zeroSnap) WaveView.zeroCross(d, 2, rawStart) else rawStart
+        trimEnd = if (ui.zeroSnap && rawEnd < takeFrames) WaveView.zeroCross(d, 2, rawEnd) else rawEnd
+        if (trimEnd <= trimStart) trimEnd = min(takeFrames, trimStart + 48)
     }
 
-    private fun buildEnvelope() {
-        val d = take ?: return
-        val cols = 448
-        envMin = FloatArray(cols)
-        envMax = FloatArray(cols)
-        for (c in 0 until cols) {
-            val a = (c.toLong() * takeFrames / cols).toInt()
-            val b = max(a + 1, ((c + 1).toLong() * takeFrames / cols).toInt())
-            var lo = 0f
-            var hi = 0f
-            val stride = max(1, (b - a) / 64)
-            var f = a
-            while (f < min(b, takeFrames)) {
-                val v = (d[f * 2] + d[f * 2 + 1]) * 0.5f
-                if (v < lo) lo = v
-                if (v > hi) hi = v
-                f += stride
-            }
-            envMin[c] = lo
-            envMax[c] = hi
-        }
+    /** Edited-sample frame -> frame of the take (for drawing). */
+    private fun editedToTake(e: Int) = if (reverse) trimEnd - 1 - e else trimStart + e
+
+    /** Opens the sample on [slot] in the editor (mono becomes stereo). */
+    private fun loadFromPad(slot: Int) {
+        val s = ui.engine.kit[ui.snd(slot)]
+        if (s.frames < 2) { message = "${ui.padLabel(slot)} is empty"; return }
+        val st = if (s.channels == 2) s.data.copyOf() else FloatArray(s.frames * 2) { s.data[it / 2] }
+        setTake(st, s.name)
+        message = "Editing ${ui.padLabel(slot)}: ${s.name}"
     }
 
     /** The edited sample: trimmed, reversed, normalised, faded. */
@@ -234,10 +233,14 @@ class SamplingPage(ui: Ui) : Page(ui) {
     private fun computeSlices() {
         val len = trimEnd - trimStart
         if (take == null || len <= 0) { slices = IntArray(0); return }
-        slices = if (!sliceDetect) {
+        val raw = if (!sliceDetect) {
             val k = GRID[gridIdx]
             IntArray(k) { (it.toLong() * len / k).toInt() }
         } else detectOnsets()
+        val d = if (ui.zeroSnap) edited() else null
+        slices = if (d == null) raw else IntArray(raw.size) { i ->
+            if (i == 0) raw[0] else WaveView.zeroCross(d, 2, raw[i], 1200).coerceIn(raw[i - 1] + 1, len - 1)
+        }
     }
 
     /** Transient detection on the edited region: energy jumps between 5 ms hops. */
@@ -301,12 +304,12 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 }
                 ui.post {
                     for ((i, s) in samples) {
-                        ui.engine.setSample(i, s)
-                        ui.engine.params.resetRange(i)
+                        ui.engine.setSample(ui.snd(i), s)
+                        ui.engine.params.resetRange(ui.snd(i))
                     }
                     ui.engine.params.save(ui.ctx)
                     KitStore.save(ui.ctx, ui.engine.kit)
-                    message = "${samples.size} slices → pads 1–${samples.size}"
+                    message = "${samples.size} slices → ${ui.groupLetter}1–${ui.groupLetter}${samples.size}"
                     AppLog.i("Sampling: ${samples.size} slices saved in ${dir.absolutePath}")
                     ui.invalidate()
                 }
@@ -330,14 +333,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
         return d
     }
 
-    private fun preview(data: FloatArray?) {
+    private fun preview(data: FloatArray?, base: Int = 0) {
         val e = data ?: return
+        previewBase = base
         ui.engine.preview(Sample("Preview", e, 0, 2, null, ""))
     }
 
     private fun save() {
         val e = edited() ?: run { message = "Record or open something first"; return }
-        val slot = ui.selectedSound
+        val slot = ui.selectedIndex
+        val label = ui.padLabel()
         message = "Saving…"
         worker.execute {
             try {
@@ -353,8 +358,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     ui.engine.params.resetRange(slot)
                     ui.engine.params.save(ui.ctx)
                     KitStore.save(ui.ctx, ui.engine.kit)
-                    message = "Saved ${f.name} → pad ${slot + 1}"
-                    AppLog.i("Sampling: saved ${f.absolutePath} to pad ${slot + 1}")
+                    message = "Saved ${f.name} → $label"
+                    AppLog.i("Sampling: saved ${f.absolutePath} to $label")
                     ui.engine.trigger(slot, 0.8f)
                     ui.invalidate()
                 }
@@ -390,6 +395,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
             "D2" -> { tab = Tab.EDIT; if (take == null) loadFromPad(ui.selectedSound) }
             "D3" -> { tab = Tab.SLICE; if (take == null) loadFromPad(ui.selectedSound); computeSlices() }
             "ENCODER PUSH" -> startStop()
+            "ENCODER LEFT" -> if (tab != Tab.RECORD) wave.scroll(-1)
+            "ENCODER RIGHT" -> if (tab != Tab.RECORD) wave.scroll(1)
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.transportStop()
             "SAMPLING" -> ui.showHome()
@@ -409,14 +416,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 "D8" -> startStop()
             }
             Tab.EDIT -> when (name) {
+                "D4" -> toggleSnap()
                 "D5" -> { normalise = !normalise; computeSlices() }
                 "D6" -> { reverse = !reverse; computeSlices() }
-                "D7" -> preview(edited())
+                "D7" -> preview(edited(), 0)
                 "D8" -> save()
             }
             Tab.SLICE -> when (name) {
+                "D4" -> toggleSnap()
                 "D5" -> { sliceDetect = !sliceDetect; computeSlices() }
-                "D7" -> preview(edited())
+                "D7" -> preview(edited(), 0)
                 "D8" -> applySlices()
             }
         }
@@ -438,11 +447,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 l.set("D8", state != IDLE)
             }
             Tab.EDIT -> {
+                l.set("D4", ui.zeroSnap)
                 l.set("D5", normalise)
                 l.set("D6", reverse)
                 l.set("D7", "D8")
             }
             Tab.SLICE -> {
+                l.set("D4", ui.zeroSnap)
                 l.set("D5", sliceDetect)
                 l.set("D7", "D8")
             }
@@ -455,13 +466,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
             Tab.EDIT -> { ui.selectedSound = slot; loadFromPad(slot) }
             Tab.SLICE -> {
                 // pad 1 = bottom-left = slot 0 plays slice 1
-                sliceData(slot)?.let { preview(it) }
+                if (slot < slices.size) sliceData(slot)?.let { preview(it, slices[slot]) }
             }
         }
     }
 
     override fun onKnob(knob: Int, delta: Int) {
-        val step = if (shift) max(1, takeFrames / 20000) else max(1, takeFrames / 1000)
+        val step = wave.knobStep(shift)
         when (tab) {
             Tab.RECORD -> when (knob) {
                 0 -> threshold = (threshold + delta / 1000f).coerceIn(0.002f, 0.9f)
@@ -469,8 +480,14 @@ class SamplingPage(ui: Ui) : Page(ui) {
             }
             Tab.EDIT -> {
                 when (knob) {
-                    0 -> trimStart = (trimStart + delta * step).coerceIn(0, max(0, trimEnd - 48))
-                    1 -> trimEnd = (trimEnd + delta * step).coerceIn(min(takeFrames, trimStart + 48), takeFrames)
+                    0 -> {
+                        rawStart = (rawStart + delta * step).coerceIn(0, max(0, rawEnd - 48))
+                        snapTrim(); focus = trimStart; wave.follow(trimStart)
+                    }
+                    1 -> {
+                        rawEnd = (rawEnd + delta * step).coerceIn(min(takeFrames, rawStart + 48), takeFrames)
+                        snapTrim(); focus = trimEnd; wave.follow(trimEnd)
+                    }
                     2 -> fadeInMs = (fadeInMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
                     3 -> fadeOutMs = (fadeOutMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
                 }
@@ -496,7 +513,22 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     override fun onEncoder(delta: Int) {
-        if (tab == Tab.EDIT) onKnob(1, delta)
+        if (tab != Tab.RECORD) wave.zoom(delta, focus)
+    }
+
+    private fun toggleSnap() {
+        ui.zeroSnap = !ui.zeroSnap
+        snapTrim()
+        computeSlices()
+    }
+
+    /** SLICE tab: pads with a slice are lit (bright while it plays); the rest are dark. */
+    override fun padLight(slot: Int, now: Long): Int? {
+        if (tab != Tab.SLICE) return null
+        if (slot >= min(16, slices.size)) return 0
+        val c = org.openmk3.core.mk3.Mk3Colors.BLUE
+        val playing = ui.padPressure[slot] > 0
+        return org.openmk3.core.mk3.Mk3Colors.value(c, if (playing) 3 else 1)
     }
 
     // =====================================================================================
@@ -564,20 +596,21 @@ class SamplingPage(ui: Ui) : Page(ui) {
         knob(l, 0, "THRESHOLD", "${(threshold * 100).toInt()}%")
         knob(l, 1, "MAX LENGTH", "$maxSeconds s")
         drawWave(r, showTrim = false)
-        knob(r, 7, "TARGET", "PAD ${ui.selectedSound + 1}")
+        knob(r, 7, "TARGET", ui.padLabel())
     }
 
     private fun drawEdit(l: Canvas, r: Canvas) {
         dButton(r, 4, "LEVEL", if (normalise) "NORMALISED" else "NORMALISE", normalise)
         dButton(r, 5, "DIRECTION", if (reverse) "REVERSED" else "REVERSE", reverse)
         dButton(r, 6, "PREVIEW", "PLAY")
-        dButton(r, 7, "SAVE TO", "PAD ${ui.selectedSound + 1}")
+        dButton(r, 7, "SAVE TO", ui.padLabel())
+        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
         l.drawText("EDIT", 16f, 72f, title)
         l.drawText(ellipsize(takeName, 26), 80f, 72f, value)
         if (take != null) {
             l.drawText("Length ${secs(trimEnd - trimStart)} of ${secs(takeFrames)}", 16f, 106f, value)
             l.drawText("Pads open a pad's sample · D8 saves a new WAV", 16f, 136f, label)
-            l.drawText("(the original file is kept)", 16f, 156f, label)
+            l.drawText("(the original file is kept) · Encoder: zoom, tilt: scroll", 16f, 156f, label)
         }
         knob(l, 0, "START", secs(trimStart))
         knob(l, 1, "END", secs(trimEnd))
@@ -590,46 +623,39 @@ class SamplingPage(ui: Ui) : Page(ui) {
         dButton(r, 4, "MODE", if (sliceDetect) "DETECT" else "GRID")
         dButton(r, 6, "PREVIEW", "PLAY")
         dButton(r, 7, "APPLY", "TO PADS")
+        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
         l.drawText("SLICE", 16f, 72f, title)
         l.drawText(ellipsize(takeName, 26), 90f, 72f, value)
-        l.drawText("${slices.size} slices → pads 1–${min(16, slices.size)}", 16f, 106f, value)
-        l.drawText("Pads play the slices · D8 replaces pads 1–${min(16, slices.size)}", 16f, 136f, label)
+        val g = ui.groupLetter
+        l.drawText("${slices.size} slices → $g" + "1–$g${min(16, slices.size)}", 16f, 106f, value)
+        l.drawText("Pads play the slices · D8 replaces $g" + "1–$g${min(16, slices.size)}", 16f, 136f, label)
+        l.drawText("Encoder: zoom · tilt ◀ ▶: scroll", 16f, 160f, label)
         knob(l, 0, "MODE", if (sliceDetect) "DETECT" else "GRID")
         if (sliceDetect) knob(l, 1, "SENSITIVITY", "${(sensitivity * 100).roundToInt()}%")
         else knob(l, 1, "SLICES", "${GRID[gridIdx]}")
-        drawWave(r, showTrim = true)
-        // slice markers over the trimmed region
-        if (take != null && takeFrames > 0) {
-            for (s in slices) {
-                val f = trimStart + if (reverse) (trimEnd - trimStart - s) else s
-                val x = 16f + f.toFloat() * 448f / takeFrames
-                r.drawRect(x - 1f, 52f, x + 1f, 208f, sliceLine)
-            }
-        }
+        drawWave(r, showTrim = true, sliceMarks = true)
     }
 
-    private fun drawWave(r: Canvas, showTrim: Boolean) {
+    private fun drawWave(r: Canvas, showTrim: Boolean, sliceMarks: Boolean = false) {
         val top = 60f
         val bot = 200f
-        val mid = (top + bot) / 2
-        val half = (bot - top) / 2
         if (take == null) {
-            r.drawText("Nothing recorded yet", 16f, mid, label)
+            r.drawText("Nothing recorded yet", 16f, (top + bot) / 2, label)
             return
         }
-        val cols = envMin.size
-        val sCol = (trimStart.toLong() * cols / takeFrames).toInt()
-        val eCol = (trimEnd.toLong() * cols / takeFrames).toInt()
-        for (c in 0 until cols) {
-            val x = 16f + c
-            val y0 = mid - envMax[c].coerceIn(-1f, 1f) * half
-            val y1 = mid - envMin[c].coerceIn(-1f, 1f) * half
-            r.drawRect(x, y0, x + 1f, max(y1, y0 + 1f), if (!showTrim || c in sCol until eCol) waveIn else waveOut)
+        // playhead: the editor preview, or (EDIT tab) the focused pad when its sample is open
+        var head = -1
+        val pp = ui.engine.playPos(AudioEngine.PREVIEW_SLOT)
+        if (pp >= 0f && previewBase >= 0) head = editedToTake(previewBase + pp.toInt())
+        else if (tab == Tab.EDIT) {
+            val ps = ui.engine.playPos(ui.selectedIndex)
+            if (ps >= 0f && ui.engine.kit[ui.selectedIndex].frames == takeFrames) head = ps.toInt()
         }
-        if (showTrim) {
-            r.drawRect(16f + sCol - 1f, top - 6f, 16f + sCol + 1f, bot + 6f, marker)
-            r.drawRect(16f + eCol - 1f, top - 6f, 16f + eCol + 1f, bot + 6f, marker)
-        }
+        val marks = if (showTrim) intArrayOf(trimStart, trimEnd) else IntArray(0)
+        val sl = if (sliceMarks) IntArray(slices.size) { editedToTake(slices[it]) } else IntArray(0)
+        wave.draw(r, 16f, top, bot,
+            selA = if (showTrim) trimStart else -1, selB = trimEnd,
+            markers = marks, slices = sl, playhead = head)
     }
 
     private fun ellipsize(s: String, max: Int) = if (s.length <= max) s else s.take(max - 1) + "…"

@@ -71,6 +71,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("VELOCITY", intArrayOf(VVOL, VCUT, -1, -1, -1, -1, -1, -1)),
         )
         var lastPage = 0
+        val MARKERS = setOf(START, END, LSTART, LEND)
     }
 
     private var pageIdx = lastPage
@@ -78,7 +79,12 @@ class SoundPage(ui: Ui) : Page(ui) {
     private var shift = false
     private var dirtySince = 0L
     private val params = ui.engine.params
-    private val slot get() = ui.selectedSound
+    /** Sound index (0..127) of the focused pad. */
+    private val slot get() = ui.selectedIndex
+    private val waveView = WaveView()
+    /** Unsnapped marker positions while zero-crossing snap is on (param index -> fraction). */
+    private val rawMarker = HashMap<Int, Float>()
+    private var focusFrame = 0
 
     // waveform cache of the focused sample
     private var waveOf: Sample? = null
@@ -120,8 +126,13 @@ class SoundPage(ui: Ui) : Page(ui) {
         dirtySince = 0L
     }
 
+    private var lastHead = -2f
+
     override fun tick(now: Long): Boolean {
         if (dirtySince != 0L && now - dirtySince > 1500) save()
+        // redraw while the playhead moves
+        val h = if (pageIdx <= 1) ui.engine.playPos(slot) else -1f
+        if (h != lastHead) { lastHead = h; return true }
         return false
     }
 
@@ -130,6 +141,9 @@ class SoundPage(ui: Ui) : Page(ui) {
         if (!down) return
         val e = ui.engine
         when (name) {
+            "ENCODER LEFT" -> if (pageIdx <= 1) waveView.scroll(-1)
+            "ENCODER RIGHT" -> if (pageIdx <= 1) waveView.scroll(1)
+            "D8" -> if (pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
             "PAGE LEFT" -> pageIdx = (pageIdx + PAGES.size - 1) % PAGES.size
             "PAGE RIGHT" -> pageIdx = (pageIdx + 1) % PAGES.size
             "D1", "D2", "D3", "D4", "D5", "D6", "D7" -> pageIdx = name[1] - '1'
@@ -148,16 +162,33 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.set("SHIFT", shift)
         l.set("STOP", "RESTART", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
         for (i in PAGES.indices) l.set("D${i + 1}", i == pageIdx)
+        if (pageIdx == 1) l.set("D8", ui.zeroSnap)
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         ui.selectedSound = slot
+        rawMarker.clear()
     }
 
     override fun onKnob(knob: Int, delta: Int) {
         val p = page.knobs.getOrNull(knob) ?: return
         if (p < 0) return
-        params.nudge(slot, p, delta, shift)
+        val frames = ui.engine.kit[slot].frames
+        if (p in MARKERS && frames > 0) {
+            // Markers move relative to the zoomed view, and can snap to zero crossings.
+            val raw = rawMarker[p] ?: params[slot, p]
+            val next = (raw + delta * waveView.knobStep(shift).toFloat() / frames).coerceIn(0f, 1f)
+            rawMarker[p] = next
+            val s = ui.engine.kit[slot]
+            var f = (next * frames).toInt()
+            if (ui.zeroSnap && f in 1 until frames) f = WaveView.zeroCross(s.data, s.channels, f)
+            params[slot, p] = f.toFloat() / frames
+            params.nudge(slot, p, 0, false)  // keeps start < end and loop start < loop end
+            focusFrame = (params[slot, p] * frames).toInt()
+            waveView.follow(focusFrame)
+        } else {
+            params.nudge(slot, p, delta, shift)
+        }
         changed()
     }
 
@@ -170,6 +201,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     override fun onEncoder(delta: Int) {
+        if (pageIdx <= 1) { waveView.zoom(delta, focusFrame); return }  // VOICE / SAMPLE: zoom
         val d = if (delta > 0) 1 else PAGES.size - 1
         pageIdx = (pageIdx + d) % PAGES.size
     }
@@ -199,8 +231,8 @@ class SoundPage(ui: Ui) : Page(ui) {
             c.drawText(pg.name, 60f + (i % 4) * 120f, 26f, if (i == pageIdx) tabOn else tab)
         }
         l.drawRect(0f, 40f, 480f, 41f, sep)
-        l.drawText("SAMPLER · PAD ${slot + 1}", 16f, 74f, title)
-        l.drawText(ellipsize(ui.engine.kit[slot].name, 30), 16f, 106f, big)
+        l.drawText("SAMPLER · ${ui.padLabel()}", 16f, 74f, title)
+        l.drawText(ellipsize(ui.engine.kit[slot].name.ifEmpty { "(empty)" }, 30), 16f, 106f, big)
         l.drawText(ellipsize(ui.engine.kit[slot].info, 54), 16f, 130f, label)
         l.drawText(pageHint(), 16f, 166f, label)
         l.drawText("◀ ▶ / D1–D7 pages · SHIFT fine · SHIFT + touch resets", 16f, 196f, label)
@@ -223,34 +255,23 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private fun drawWave(c: Canvas) {
         val s = ui.engine.kit[slot]
-        if (s !== waveOf) {
-            waveOf = s
-            val n = s.frames
-            for (col in wave.indices) {
-                val a = (col.toLong() * n / wave.size).toInt()
-                val b = max(a + 1, ((col + 1).toLong() * n / wave.size).toInt())
-                var pk = 0f
-                val stride = max(1, (b - a) / 64)
-                var f = a
-                while (f < min(b, n)) { pk = max(pk, abs(s.data[f * s.channels])); f += stride }
-                wave[col] = pk
-            }
+        if (s.frames == 0) { c.drawText("Empty pad: load a sample (BROWSER) or record one (SAMPLING)", 16f, 130f, label); return }
+        waveView.set(s.data, s.channels)
+        val n = s.frames
+        fun fr(p: Int) = (params[slot, p] * n).toInt()
+        val loop = if (params[slot, LOOP] > 0.5f && params[slot, ENV] > 0.5f) intArrayOf(fr(LSTART), fr(LEND)) else null
+        val head = ui.engine.playPos(slot)
+        waveView.draw(c, 16f, 60f, 196f, selA = fr(START), selB = fr(END),
+            markers = intArrayOf(fr(START), fr(END)), loop = loop, playhead = if (head >= 0f) head.toInt() else -1)
+        val notes = buildList {
+            if (params[slot, REV] > 0.5f) add("REVERSE")
+            if (pageIdx == 1) add("encoder: zoom · tilt: scroll")
         }
-        val top = 56f; val bot = 196f; val mid = (top + bot) / 2; val half = (bot - top) / 2
-        val sc = (params[slot, START] * wave.size).toInt()
-        val ec = (params[slot, END] * wave.size).toInt()
-        for (col in wave.indices) {
-            val h = max(1f, wave[col].coerceAtMost(1f) * half)
-            c.drawRect(16f + col, mid - h, 17f + col, mid + h, if (col in sc until ec) waveIn else waveOut)
+        c.drawText(notes.joinToString("  ·  "), 16f, 210f, label)
+        if (pageIdx == 1) {
+            c.drawText("SNAP", 420f, 16f, kName)
+            c.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", 420f, 34f, if (ui.zeroSnap) tabOn else kOff)
         }
-        c.drawRect(15f + sc, top - 6f, 17f + sc, bot + 6f, marker)
-        c.drawRect(15f + ec, top - 6f, 17f + ec, bot + 6f, marker)
-        if (params[slot, LOOP] > 0.5f) {
-            val ls = (params[slot, LSTART] * wave.size).toInt()
-            val le = (params[slot, LEND] * wave.size).toInt()
-            c.drawRect(16f + ls, top - 8f, 16f + le, top - 4f, loopFill)
-        }
-        if (params[slot, REV] > 0.5f) c.drawText("REVERSE", 16f, 210f, label)
     }
 
     private fun drawEnvelope(c: Canvas) {

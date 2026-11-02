@@ -44,8 +44,32 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     // Per-pad state, indexed by physical slot (0 = bottom-left).
     val padPressure = IntArray(16)
     val padFlash = LongArray(16)
-    /** The pad being edited / loaded into (slot, 0 = bottom-left). */
+    /** The pad being edited / loaded into (slot, 0 = bottom-left), within the focused group. */
     @Volatile var selectedSound = 0
+    /** Focused group, 0..7 = A..H. Pads play and edit its 16 sounds. */
+    @Volatile var group = 0
+        private set
+    /** FIXED VEL: pads play at full velocity (global, like the hardware workflow). */
+    @Volatile var fixedVel = false
+    /** Snap sample markers (start, end, loop, slices) to zero crossings. */
+    @Volatile var zeroSnap = false
+
+    /** Sound index (0..127) of pad [slot] in the focused group. */
+    fun snd(slot: Int) = group * org.openmk3.core.audio.Pattern.PADS + slot
+    /** Sound index of the focused pad. */
+    val selectedIndex get() = snd(selectedSound)
+    val groupLetter get() = 'A' + group
+    /** e.g. "B7" for the focused pad. */
+    fun padLabel(slot: Int = selectedSound) = "$groupLetter${slot + 1}"
+
+    fun selectGroup(g: Int) {
+        group = g.coerceIn(0, 7)
+        AppLog.i("Group ${'A' + group}")
+        dirty = true
+    }
+
+    /** The sound each physical pad started, so its note-off reaches it even after a group change. */
+    private val heldSound = IntArray(16) { -1 }
 
     fun start() {
         if (!map.padsMapped || !map.buttonsMapped) {
@@ -98,6 +122,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             val now = SystemClock.uptimeMillis()
             if (page.tick(now)) dirty = true
             if (!page.customLeds) applyLights()
+            if (!page.customPads) applyPadLights(now)
             if (!dirty) return
             dirty = false
             page.draw(left.canvas, right.canvas, now)
@@ -117,13 +142,19 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     // =====================================================================================
 
     fun velocityFor(pressure: Int): Float =
-        (pressure.toFloat() / padFullScale).coerceIn(0f, 1f).pow(0.6f).coerceAtLeast(0.05f)
+        if (fixedVel) 1f
+        else (pressure.toFloat() / padFullScale).coerceIn(0f, 1f).pow(0.6f).coerceAtLeast(0.05f)
 
     override fun onPadHit(pad: Int, pressure: Int) {
         val slot = map.hidPadToSlot(pad)
         val vel = velocityFor(pressure)
+        val sound = snd(slot)
         // Sound first, straight from the input thread: no UI-thread hop on the audio path.
-        if (page.playsPads) engine.trigger(slot, vel)
+        if (page.playsPads) {
+            engine.trigger(sound, vel)
+            heldSound[slot] = sound
+        }
+        AppLog.i("Pad ${padLabel(slot)} hit (pressure $pressure, vel ${"%.2f".format(vel)})")
         post {
             padPressure[slot] = pressure
             padFlash[slot] = SystemClock.uptimeMillis()
@@ -139,14 +170,32 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     override fun onPadRelease(pad: Int) {
         val slot = map.hidPadToSlot(pad)
-        engine.release(slot)  // always: a missed note-off would leave a sustained sound hanging
+        // always: a missed note-off would leave a sustained sound hanging
+        val held = heldSound[slot]
+        heldSound[slot] = -1
+        engine.release(if (held >= 0) held else snd(slot))
         post { padPressure[slot] = 0; page.onPadRelease(slot, pad); dirty = true }
     }
 
     override fun onButton(bit: Int, down: Boolean) = post {
         // Touch sensors are learned by the wizard; the wizard itself sees them to do that.
         if (bit in map.touchBits && page !is WizardPage) return@post
-        page.onButton(map.nameForBit(bit), bit, down)
+        val name = map.nameForBit(bit)
+        if (!page.customLeds && down && name != null) {
+            // Global buttons, the same on every page.
+            if (name == "FIXED VEL" && !page.handlesFixedVel) {
+                fixedVel = !fixedVel
+                AppLog.i("Fixed velocity ${if (fixedVel) "on" else "off"}")
+                dirty = true
+                return@post
+            }
+            if (name.startsWith("GROUP ") && name.length == 7) {
+                page.onGroup(name[6] - 'A')
+                dirty = true
+                return@post
+            }
+        }
+        page.onButton(name, bit, down)
         dirty = true
     }
 
@@ -168,9 +217,43 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private fun applyLights() {
         lights.clear()
         page.lights(lights)
+        // global: FIXED VEL and the group buttons
+        lights.set("FIXED VEL", fixedVel)
+        val p = engine.pattern
+        for (g in 0 until 8) {
+            val c = groupColour(g)
+            val v = when {
+                g == group -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+                !p.groupAudible(g) -> 0
+                else -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
+            }
+            lights.raw("GROUP ${'A' + g}", v)
+        }
         for ((name, idx) in map.buttonLeds) {
             val v = lights.values[name] ?: 0
             dev.setButtonLed(idx, v)
+        }
+    }
+
+    /**
+     * Pads on pages that don't draw their own: the focused group's colour, dim for sounds
+     * that have a sample, brighter for the focused one, bright while playing.
+     */
+    private fun applyPadLights(now: Long) {
+        val c = groupColour(group)
+        for (slot in 0 until 16) {
+            val custom = page.padLight(slot, now)
+            val v = custom ?: run {
+                val sound = snd(slot)
+                val hot = now - engine.lastTrigMs[sound] in 0..120 || padPressure[slot] > 0
+                when {
+                    hot -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+                    slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 2)
+                    engine.kit[sound].frames > 0 -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
+                    else -> 0
+                }
+            }
+            padLed(slot, v)
         }
     }
 
@@ -183,6 +266,18 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         val idx = map.padLeds[hid]
         if (idx >= 0) dev.setPadLed(idx, value)
     }
+}
+
+/** Default colour of each group A..H (pads and group buttons). */
+fun groupColour(g: Int): Int = when (g) {
+    0 -> org.openmk3.core.mk3.Mk3Colors.RED
+    1 -> org.openmk3.core.mk3.Mk3Colors.ORANGE
+    2 -> org.openmk3.core.mk3.Mk3Colors.YELLOW
+    3 -> org.openmk3.core.mk3.Mk3Colors.GREEN
+    4 -> org.openmk3.core.mk3.Mk3Colors.CYAN
+    5 -> org.openmk3.core.mk3.Mk3Colors.BLUE
+    6 -> org.openmk3.core.mk3.Mk3Colors.VIOLET
+    else -> org.openmk3.core.mk3.Mk3Colors.MAGENTA
 }
 
 /** Button lights requested by a page (see [Page.lights]). */
@@ -210,6 +305,14 @@ abstract class Page(val ui: Ui) {
     open val customLeds = false
     /** Declare the buttons this page handles and which are active (called every frame). */
     open fun lights(l: Lights) {}
+    /** Pages that drive the pad LEDs themselves set this. */
+    open val customPads = false
+    /** Override one pad's LED on a page with default pad lights (null = default). */
+    open fun padLight(slot: Int, now: Long): Int? = null
+    /** A page that gives FIXED VEL its own meaning sets this (none do yet). */
+    open val handlesFixedVel = false
+    /** GROUP A–H pressed: focus that group (pages may add MUTE / SOLO + group). */
+    open fun onGroup(g: Int) { ui.selectGroup(g) }
     /** If true, pad hits play sounds directly from the input thread. */
     open val playsPads = false
     open fun onEnter() {}

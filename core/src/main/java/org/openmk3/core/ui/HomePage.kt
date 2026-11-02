@@ -33,7 +33,6 @@ class HomePage(ui: Ui) : Page(ui) {
     @Volatile private var mute = false
     @Volatile private var solo = false
     private var rec = false
-    private var fixedVel = false
     /** Pad LEDs flash on every trigger. SHIFT + PAD MODE toggles it (to test LED-related audio noise). */
     private var flash = true
     /** Shared with the browser, so it opens on the pad you were working on. */
@@ -50,18 +49,29 @@ class HomePage(ui: Ui) : Page(ui) {
     private val pattern get() = ui.engine.pattern
 
     /** Pads only make sound in pad mode with no modifier held. Read from the input thread. */
+    override val customPads = true
+
+    /** MUTE / SOLO + group button mutes / solos the whole group; otherwise focuses it. */
+    override fun onGroup(g: Int) {
+        val p = pattern
+        when {
+            mute -> { p.groupMute[g] = !p.groupMute[g]; changed(); AppLog.i("Group ${'A' + g} ${if (p.groupMute[g]) "muted" else "unmuted"}") }
+            solo -> { p.groupSolo[g] = !p.groupSolo[g]; changed(); AppLog.i("Group ${'A' + g} solo ${if (p.groupSolo[g]) "on" else "off"}") }
+            else -> { ui.selectGroup(g); lastLed.fill(-1) }
+        }
+    }
+
     override val playsPads: Boolean
         get() = mode == Mode.PAD && !erase && !select && !mute && !solo
 
     // ---- look ----
-    private val slotColour = intArrayOf(
-        Mk3Colors.RED, Mk3Colors.ORANGE, Mk3Colors.YELLOW, Mk3Colors.WARM_YELLOW,
-        Mk3Colors.MAGENTA, Mk3Colors.GREEN, Mk3Colors.LIME, Mk3Colors.MINT,
-        Mk3Colors.CYAN, Mk3Colors.TURQUOISE, Mk3Colors.LIGHT_ORANGE, Mk3Colors.YELLOW,
-        Mk3Colors.BLUE, Mk3Colors.VIOLET, Mk3Colors.PURPLE, Mk3Colors.PLUM,
-    )
-    private val colourPaint = Array(16) { Theme.fill(Mk3Colors.rgb(slotColour[it])) }
-    private val dimPaint = Array(16) { Theme.fill(mix(Mk3Colors.rgb(slotColour[it]), 0.35f)) }
+    // Pads and rows use the focused group's colour.
+    private val groupPaint = Array(8) { Theme.fill(Mk3Colors.rgb(groupColour(it))) }
+    private val groupDim = Array(8) { Theme.fill(mix(Mk3Colors.rgb(groupColour(it)), 0.35f)) }
+    private val gc get() = groupColour(ui.group)
+    private val colourPaint get() = groupPaint[ui.group]
+    private val dimPaint get() = groupDim[ui.group]
+    private fun sd(slot: Int) = ui.snd(slot)
     private val title = Theme.text(22f, Theme.ACCENT, bold = true)
     private val label = Theme.text(15f, Theme.DIM)
     private val value = Theme.text(17f)
@@ -131,12 +141,13 @@ class HomePage(ui: Ui) : Page(ui) {
         val p = pattern
         val step = ui.engine.currentStep
         for (slot in 0 until 16) {
-            val c = slotColour[slot]
+            val c = gc
             val v = when (mode) {
                 Mode.PAD -> {
-                    val hot = flash && (now - ui.engine.lastTrigMs[slot] in 0..120 || ui.padPressure[slot] > 0)
+                    val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
                     when {
-                        !p.audible(slot) -> if (hot) Mk3Colors.value(c, 0) else 0
+                        ui.engine.kit[sd(slot)].frames == 0 -> 0
+                        !p.audible(sd(slot)) -> if (hot) Mk3Colors.value(c, 0) else 0
                         hot -> Mk3Colors.value(c, 2)
                         slot == selected -> Mk3Colors.value(c, 1)
                         else -> Mk3Colors.value(c, 0)
@@ -144,12 +155,12 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
-                    val on = p.vel[selected][s] > 0f
-                    val sc = slotColour[selected]
+                    val on = p.vel[sd(selected)][s] > 0f
+                    val sc = gc
                     when {
                         flash && s == step && on -> Mk3Colors.value(sc, 3)
                         flash && s == step -> Mk3Colors.value(Mk3Colors.WHITE, 0)
-                        on -> Mk3Colors.value(sc, if (p.vel[selected][s] > 0.7f) 2 else 1)
+                        on -> Mk3Colors.value(sc, if (p.vel[sd(selected)][s] > 0.7f) 2 else 1)
                         else -> 0
                     }
                 }
@@ -170,14 +181,12 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("STOP", "RESTART", "SETTINGS", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
         l.set("STEP", mode == Mode.STEP)
         l.set("PAD MODE", mode == Mode.PAD)
-        l.set("FIXED VEL", fixedVel)
         l.set("ERASE", erase)
         l.set("SELECT", select)
         l.set("MUTE", mute)
         l.set("SOLO", solo)
         l.set("SHIFT", shift)
         if (Edition.full) l.set("PLUG-IN")
-        l.set("GROUP A", true)  // the only group so far, and it's selected
     }
 
     /** Step i (0 = top-left, reading order) <-> pad slot (0 = bottom-left). Self-inverse. */
@@ -191,20 +200,20 @@ class HomePage(ui: Ui) : Page(ui) {
         val p = pattern
         when {
             select -> selected = slot
-            mute -> { p.mute[slot] = !p.mute[slot]; changed() }
-            solo -> { p.solo[slot] = !p.solo[slot]; p.updateSolo(); changed() }
+            mute -> { p.mute[sd(slot)] = !p.mute[sd(slot)]; changed() }
+            solo -> { p.solo[sd(slot)] = !p.solo[sd(slot)]; changed() }
             mode == Mode.PAD && erase -> {
-                p.clear(slot); changed()
-                AppLog.i("Erased ${ui.engine.kit[slot].name}")
+                p.clear(sd(slot)); changed()
+                AppLog.i("Erased ${ui.padLabel(slot)} ${ui.engine.kit[sd(slot)].name}")
             }
             mode == Mode.PAD -> {
                 selected = slot
-                if (rec && ui.engine.playing) record(slot, if (fixedVel) 1f else velocity)
+                if (rec && ui.engine.playing) record(sd(slot), velocity)
             }
             else -> { // STEP mode
                 val s = stepForSlot(slot)
-                val row = p.vel[selected]
-                row[s] = if (erase || row[s] > 0f) 0f else if (fixedVel) 1f else velocity
+                val row = p.vel[sd(selected)]
+                row[s] = if (erase || row[s] > 0f) 0f else velocity
                 changed()
             }
         }
@@ -229,7 +238,7 @@ class HomePage(ui: Ui) : Page(ui) {
             "ERASE" -> {
                 erase = down
                 if (down && shift) {
-                    for (s in 0 until Pattern.SOUNDS) pattern.clear(s)
+                    for (k in 0 until Pattern.PADS) pattern.clear(sd(k))
                     changed()
                     AppLog.i("Pattern cleared")
                 }
@@ -250,7 +259,6 @@ class HomePage(ui: Ui) : Page(ui) {
                 flash = !flash
                 AppLog.i("Pad LED flashing ${if (flash) "on" else "OFF"}")
             } else mode = Mode.PAD
-            "FIXED VEL" -> fixedVel = !fixedVel
             "PAGE LEFT" -> selected = (selected + 15) % 16
             "PAGE RIGHT" -> selected = (selected + 1) % 16
             "SETTINGS" -> ui.show(PalettePage(ui))
@@ -299,16 +307,17 @@ class HomePage(ui: Ui) : Page(ui) {
 
         l.drawText(if (mode == Mode.STEP) "STEP MODE" else "PAD MODE", 16f, 108f, value)
         l.drawText("swing ${(pattern.swing * 200).toInt()}%", 170f, 108f, value)
-        if (fixedVel) l.drawText("FIXED VEL", 300f, 108f, value)
+        if (ui.fixedVel) l.drawText("FIXED VEL", 300f, 108f, value)
         if (!flash) l.drawText("no flash", 400f, 108f, label)
 
         // selected sound
-        l.drawRoundRect(RectF(16f, 122f, 40f, 146f), 4f, 4f, colourPaint[selected])
-        l.drawText(e.kit[selected].name, 50f, 142f, value.apply { textSize = 20f })
+        l.drawRoundRect(RectF(16f, 122f, 40f, 146f), 4f, 4f, colourPaint)
+        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 142f, value.apply { textSize = 20f })
         value.textSize = 17f
         val flags = buildString {
-            if (pattern.mute[selected]) append("  muted")
-            if (pattern.solo[selected]) append("  solo")
+            if (pattern.mute[sd(selected)]) append("  muted")
+            if (pattern.solo[sd(selected)]) append("  solo")
+            if (!pattern.groupAudible(ui.group)) append("  group muted")
         }
         if (flags.isNotEmpty()) l.drawText(flags, 200f, 142f, label)
 
@@ -318,7 +327,7 @@ class HomePage(ui: Ui) : Page(ui) {
             select -> "SELECT: hit a pad to choose a sound"
             mute -> "MUTE: hit pads to mute / unmute"
             solo -> "SOLO: hit pads to solo / unsolo"
-            mode == Mode.STEP -> "Pads = steps of ${e.kit[selected].name} · ◀ ▶ sound"
+            mode == Mode.STEP -> "Pads = steps of ${ui.padLabel()} · ◀ ▶ sound"
             rec -> "Recording: play the pads"
             else -> "K1 vol · K2 sens · K3 tempo · K4 swing"
         }
@@ -361,23 +370,24 @@ class HomePage(ui: Ui) : Page(ui) {
             val x = x0 + step * cw
             c.drawRect(x + 1f, 3f, x + cw - 1f, 13f, playheadFill)
         }
-        for (s in 0 until Pattern.SOUNDS) {
-            val y = top + s * rowH
+        for (row in 0 until Pattern.PADS) {
+            val s = sd(row)
+            val y = top + row * rowH
             val audible = p.audible(s)
-            if (s == selected) c.drawRect(0f, y, 480f, y + rowH, selRow)
-            c.drawRect(2f, y + 3f, 7f, y + rowH - 3f, colourPaint[s])
+            if (row == selected) c.drawRect(0f, y, 480f, y + rowH, selRow)
+            c.drawRect(2f, y + 3f, 7f, y + rowH - 3f, colourPaint)
             if (p.solo[s]) c.drawRect(9f, y + 3f, 12f, y + rowH - 3f, soloMark)
             // Clip to the label column; keep the end of long names (the distinctive part).
             c.save()
             c.clipRect(0f, y, x0 - 2f, y + rowH)
             val lp = if (audible) rowLabel else rowLabelDim
-            c.drawText(fitEnd(ui.engine.kit[s].name, lp, x0 - 18f), 15f, y + 12f, lp)
+            c.drawText(fitEnd(ui.engine.kit[s].name.ifEmpty { "—" }, lp, x0 - 18f), 15f, y + 12f, lp)
             c.restore()
             for (t in 0 until Pattern.STEPS) {
                 val x = x0 + t * cw
                 val v = p.vel[s][t]
                 val paint = when {
-                    v > 0f && audible -> if (v > 0.5f) colourPaint[s] else dimPaint[s]
+                    v > 0f && audible -> if (v > 0.5f) colourPaint else dimPaint
                     v > 0f -> cellOffBeat
                     (t / 4) % 2 == 0 -> cellOffBeat
                     else -> cellOff

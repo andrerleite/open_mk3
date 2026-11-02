@@ -39,21 +39,24 @@
 
 namespace {
 
-constexpr int kSounds = 16;
+constexpr int kGroups = 8;
+constexpr int kPads = 16;
+constexpr int kSounds = kGroups * kPads;  // 8 groups x 16 sounds
 constexpr int kSteps = 16;
-constexpr int kMaxVoices = 32;
+constexpr int kMaxVoices = 64;
 constexpr int kSampleRate = 48000;
 constexpr int kRing = 256;
 
 // Shared pattern buffer layout (floats); must match Pattern.kt.
-constexpr int OFF_VEL = 0;
-constexpr int OFF_MUTE = 256;
-constexpr int OFF_SOLO = 272;
-constexpr int OFF_SKIP = 288;
-constexpr int OFF_BPM = 544;
-constexpr int OFF_SWING = 545;
-constexpr int OFF_ANYSOLO = 546;
-constexpr int PATTERN_FLOATS = 548;
+constexpr int OFF_VEL = 0;                                // kSounds x kSteps velocities
+constexpr int OFF_MUTE = OFF_VEL + kSounds * kSteps;      // kSounds flags
+constexpr int OFF_SOLO = OFF_MUTE + kSounds;              // kSounds flags
+constexpr int OFF_SKIP = OFF_SOLO + kSounds;              // kSounds x kSteps flags
+constexpr int OFF_BPM = OFF_SKIP + kSounds * kSteps;
+constexpr int OFF_SWING = OFF_BPM + 1;
+constexpr int OFF_GMUTE = OFF_SWING + 1;                  // kGroups flags
+constexpr int OFF_GSOLO = OFF_GMUTE + kGroups;            // kGroups flags
+constexpr int PATTERN_FLOATS = OFF_GSOLO + kGroups;
 
 int64_t nowNanos() {
     timespec ts{};
@@ -68,7 +71,7 @@ struct SampleData {
     int choke = 0;
 };
 
-constexpr int kSlots = kSounds + 1;  // 16 pads + 1 browser preview slot
+constexpr int kSlots = kSounds + 1;  // 128 sounds + 1 browser / editor preview slot
 
 // Short ramps that remove clicks without dulling the attack:
 // fade-in over ~0.3 ms when a voice starts, fade-out over ~2 ms when it is choked or stolen.
@@ -209,7 +212,8 @@ public:
     std::mutex streamLock;
 
     Engine() {
-        for (int i = 0; i < kSlots; i++) { current[i] = nullptr; pending[i] = nullptr; retired[i] = nullptr; }
+        for (int i = 0; i < kSlots; i++) { current[i] = nullptr; pending[i] = nullptr; retired[i] = nullptr; playPos[i] = -1.f; }
+        for (auto& m : activeMask) m = 0;
     }
 
     // ---- single-producer / single-consumer trigger ring ----
@@ -250,7 +254,8 @@ private:
     void startVoice(int slot, float vel, int offset, int gate, bool fromSeq);
     void releaseSlot(int slot);
 public:
-    std::atomic<uint32_t> activeSlots{0};  // bit per sound with a voice playing (diagnostics)
+    std::atomic<uint32_t> activeMask[(kSlots + 31) / 32];  // bit per slot with a voice playing
+    std::atomic<float> playPos[kSlots];                    // newest voice's read position (frames), -1 = silent
 private:
     void runSequencer(int frames);
 };
@@ -560,7 +565,17 @@ void Engine::runSequencer(int frames) {
     if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
     double swing = p[OFF_SWING];
     if (!(swing >= 0.0 && swing <= 0.5)) swing = 0.0;
-    bool anySolo = p[OFF_ANYSOLO] > 0.5f;
+    // Audibility: group mute/solo, then sound mute/solo within the group (a solo only
+    // silences the other sounds of its own group).
+    bool groupOn[kGroups];
+    bool anyGroupSolo = false;
+    for (int g = 0; g < kGroups; g++) anyGroupSolo |= p[OFF_GSOLO + g] > 0.5f;
+    bool soloInGroup[kGroups];
+    for (int g = 0; g < kGroups; g++) {
+        groupOn[g] = p[OFF_GMUTE + g] < 0.5f && (!anyGroupSolo || p[OFF_GSOLO + g] > 0.5f);
+        soloInGroup[g] = false;
+        for (int k = 0; k < kPads; k++) soloInGroup[g] |= p[OFF_SOLO + g * kPads + k] > 0.5f;
+    }
     double stepLen = kSampleRate * 60.0 / bpm / 4.0;
     double start = seqPhase;
     double end = start + frames / stepLen;
@@ -578,7 +593,8 @@ void Engine::runSequencer(int frames) {
             if (v <= 0.f) continue;
             float& skip = p[OFF_SKIP + s * kSteps + step];
             if (skip > 0.5f) { skip = 0.f; continue; }
-            bool audible = anySolo ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f;
+            int g = s / kPads;
+            bool audible = groupOn[g] && (soloInGroup[g] ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f);
             if (audible) startVoice(s, v, int(off), int(stepLen), true);
         }
         currentStep.store(step, std::memory_order_relaxed);
@@ -624,7 +640,10 @@ void Engine::render(float* out, int32_t frames) {
     // 3. voices
     std::memset(out, 0, sizeof(float) * frames * 2);
     float* pb = params.load(std::memory_order_acquire);
-    uint32_t active = 0;
+    uint32_t active[(kSlots + 31) / 32] = {};
+    uint64_t newest[kSlots] = {};
+    float newestPos[kSlots];
+    for (int k = 0; k < kSlots; k++) newestPos[k] = -1.f;
     constexpr int kBlock = 16;  // control rate: modulation and filter coefficients per 16 frames
     constexpr float kSr = float(kSampleRate);
     for (auto& v : voices) {
@@ -827,10 +846,15 @@ void Engine::render(float* out, int32_t frames) {
                 v.lfoHeld = float(v.rnd & 0xFFFF) / 32767.5f - 1.f;
             }
         }
-        if (done) v.sample = nullptr;
-        else if (v.slot < 32) active |= 1u << v.slot;
+        if (done) {
+            v.sample = nullptr;
+        } else {
+            active[v.slot / 32] |= 1u << (v.slot % 32);
+            if (v.age > newest[v.slot]) { newest[v.slot] = v.age; newestPos[v.slot] = float(v.pos); }
+        }
     }
-    activeSlots.store(active, std::memory_order_relaxed);
+    for (int k = 0; k < (kSlots + 31) / 32; k++) activeMask[k].store(active[k], std::memory_order_relaxed);
+    for (int k = 0; k < kSlots; k++) playPos[k].store(newestPos[k], std::memory_order_relaxed);
 
     // 4. master gain, soft clip, meter
     float g = masterGain.load(std::memory_order_relaxed);
@@ -1456,8 +1480,13 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
 JNIEXPORT void JNICALL JNI_FN(nativeRelease)(JNIEnv*, jobject, jint slot) {
     gEngine.pushTrigger(slot, 0.f, 1);
 }
-JNIEXPORT jint JNICALL JNI_FN(nativeActiveSlots)(JNIEnv*, jobject) {
-    return jint(gEngine.activeSlots.load());
+JNIEXPORT jint JNICALL JNI_FN(nativeActiveSlots)(JNIEnv*, jobject, jint word) {
+    if (word < 0 || word >= (kSlots + 31) / 32) return 0;
+    return jint(gEngine.activeMask[word].load());
+}
+JNIEXPORT jfloat JNICALL JNI_FN(nativePlayPos)(JNIEnv*, jobject, jint slot) {
+    if (slot < 0 || slot >= kSlots) return -1.f;
+    return gEngine.playPos[slot].load(std::memory_order_relaxed);
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeSetParamBuffer)(JNIEnv* env, jobject, jobject buf) {

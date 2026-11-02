@@ -25,7 +25,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
     override val playsPads = true
 
     private sealed class Entry(val label: String) {
-        class BuiltIn : Entry("‹ built-in sound ›")
+        class BuiltIn : Entry("‹ built-in sound / clear ›")
         class Up : Entry("‹ back ›")
         class Folder(val file: File) : Entry(file.name + "/")
         class Wav(val file: File) : Entry(file.nameWithoutExtension)
@@ -141,12 +141,12 @@ class BrowserPage(ui: Ui) : Page(ui) {
     private fun activate() {
         when (val e = entries.getOrNull(sel)) {
             is Entry.BuiltIn -> {
-                val slot = ui.selectedSound
+                val slot = ui.selectedIndex
                 ui.engine.resetSlot(slot)
                 ui.engine.params.resetRange(slot)
                 ui.engine.params.save(ui.ctx)
                 KitStore.save(ui.ctx, ui.engine.kit)
-                message = "Pad ${slot + 1}: built-in ${ui.engine.kit[slot].name}"
+                message = "${ui.padLabel()}: ${ui.engine.kit[slot].name.ifEmpty { "empty" }}"
                 AppLog.i("Kit: $message")
             }
             is Entry.Up -> up()
@@ -158,7 +158,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
     }
 
     private fun load(e: Entry.Wav) {
-        val slot = ui.selectedSound
+        val slot = ui.selectedIndex
         val ready = previewed?.takeIf { it.path == e.file.absolutePath }
         if (ready != null) {
             assign(slot, ready)
@@ -180,9 +180,9 @@ class BrowserPage(ui: Ui) : Page(ui) {
         ui.engine.params.resetRange(slot)
         ui.engine.params.save(ui.ctx)
         KitStore.save(ui.ctx, ui.engine.kit)
-        message = "Pad ${slot + 1} ← ${s.name}"
+        message = "${org.openmk3.core.audio.soundLabel(slot)} ← ${s.name}"
         info = s.info
-        AppLog.i("Kit: pad ${slot + 1} = ${s.path} (${s.info})")
+        AppLog.i("Kit: ${org.openmk3.core.audio.soundLabel(slot)} = ${s.path} (${s.info})")
         ui.engine.trigger(slot, 0.8f)
         ui.invalidate()
     }
@@ -266,10 +266,10 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
         // right: target pad + selection info
         r.drawColor(Theme.BG)
-        val slot = ui.selectedSound
+        val slot = ui.selectedIndex
         r.drawText("TARGET PAD", 16f, 28f, label)
         r.drawRoundRect(RectF(16f, 38f, 44f, 66f), 5f, 5f, Theme.fill(Theme.ACCENT))
-        r.drawText("${slot + 1}  ${ui.engine.kit[slot].name}", 56f, 60f, big)
+        r.drawText("${ui.padLabel()}  ${ui.engine.kit[slot].name.ifEmpty { "(empty)" }}", 56f, 60f, big)
         r.drawText(ellipsize(ui.engine.kit[slot].info, 50), 16f, 86f, label)
 
         r.drawText("SELECTED", 16f, 120f, label)

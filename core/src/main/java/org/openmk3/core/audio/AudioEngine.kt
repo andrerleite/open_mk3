@@ -51,7 +51,8 @@ object NativeEngine {
     external fun nativeUsbStats(): String
     external fun nativeSetParamBuffer(buf: ByteBuffer)
     external fun nativeRelease(slot: Int)
-    external fun nativeActiveSlots(): Int
+    external fun nativeActiveSlots(word: Int): Int
+    external fun nativePlayPos(slot: Int): Float
     external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
     external fun nativeRecStop()
     external fun nativeRecState(): Int
@@ -65,18 +66,25 @@ object NativeEngine {
  * Kotlin face of the native engine. Same API the pages used with the old AudioTrack engine;
  * all real-time work (voices, mixing, sequencer) happens in C++ (engine.cpp).
  */
+/** "A1".."H16": group letter and pad number of a sound index. */
+fun soundLabel(sound: Int) = "${'A' + sound / Pattern.PADS}${sound % Pattern.PADS + 1}"
+
 class AudioEngine(private val ctx: Context) {
 
     companion object {
         const val SR = 48000
-        const val PREVIEW_SLOT = 16
+        const val PREVIEW_SLOT = Pattern.SOUNDS
+        /** An empty sound slot (new groups start empty). */
+        fun empty() = Sample("", FloatArray(0), info = "empty")
     }
 
     private val n = NativeEngine
 
     /** Generated sounds, kept for "built-in" resets. Choke groups belong to the pad. */
-    val builtIn: Array<Sample> = DrumKit.build(SR)
-    /** What each pad plays now (built-in or a loaded WAV). */
+    val builtIn: Array<Sample> = DrumKit.build(SR).let { drums ->
+        Array(Pattern.SOUNDS) { if (it < drums.size) drums[it] else empty() }
+    }
+    /** What each sound plays now (built-in, a loaded WAV, or empty), 8 groups x 16. */
     val kit: Array<Sample> = builtIn.copyOf()
 
     /** Puts [s] on pad [slot] (safe while playing; the audio thread swaps it in). */
@@ -102,7 +110,7 @@ class AudioEngine(private val ctx: Context) {
         private val l = buf.asLongBuffer()
         operator fun get(i: Int): Long = l.get(i)
     }
-    private val trigBuf: ByteBuffer = ByteBuffer.allocateDirect(16 * 8).order(ByteOrder.nativeOrder())
+    private val trigBuf: ByteBuffer = ByteBuffer.allocateDirect(Pattern.SOUNDS * 8).order(ByteOrder.nativeOrder())
     val lastTrigMs = TrigTimes(trigBuf)
 
     var pattern: Pattern = Pattern()
@@ -267,17 +275,23 @@ class AudioEngine(private val ctx: Context) {
         n.nativeTransport(0)
         playing = false
         // Diagnostics for sounds heard after stopping: which pads are still sounding, and why.
-        val now = n.nativeActiveSlots()
-        if (now != 0) AppLog.i("Stop: still sounding (tails / release): ${slotsOf(now)}")
+        val now = sounding()
+        if (now.isNotEmpty()) AppLog.i("Stop: still sounding (tails / release): $now")
         Thread {
             Thread.sleep(400)
-            val later = n.nativeActiveSlots()
-            if (later != 0) AppLog.i("Stop +400 ms: still sounding: ${slotsOf(later)}")
+            val later = sounding()
+            if (later.isNotEmpty()) AppLog.i("Stop +400 ms: still sounding: $later")
         }.start()
     }
 
-    private fun slotsOf(mask: Int) = (0 until 17).filter { mask and (1 shl it) != 0 }
-        .joinToString { if (it == PREVIEW_SLOT) "preview" else "pad ${it + 1} (${kit[it].name})" }
+    /** Sounds with a voice playing right now, e.g. "A4 (Clap)". */
+    private fun sounding(): String = (0..PREVIEW_SLOT).filter { isSounding(it) }
+        .joinToString { if (it == PREVIEW_SLOT) "preview" else "${soundLabel(it)} (${kit[it].name})" }
+
+    fun isSounding(slot: Int) = n.nativeActiveSlots(slot / 32) and (1 shl (slot % 32)) != 0
+
+    /** Read position (frames) of the newest voice of [slot], or -1 when silent. */
+    fun playPos(slot: Int): Float = n.nativePlayPos(slot)
 
     /** Note-off for a pad (ends ADSR sustain). */
     fun release(slot: Int) = n.nativeRelease(slot)

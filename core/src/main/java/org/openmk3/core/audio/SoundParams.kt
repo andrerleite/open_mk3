@@ -33,7 +33,7 @@ class SoundParams {
     )
 
     companion object {
-        const val SLOTS = 17
+        const val SLOTS = Pattern.SOUNDS + 1
         const val COUNT = 48
 
         // Indices match P_* in engine.cpp and are stable (saved settings depend on them).
@@ -134,7 +134,7 @@ class SoundParams {
             if (!f.exists()) return p
             try {
                 val a = JSONArray(f.readText())
-                for (s in 0 until minOf(16, a.length())) {
+                for (s in 0 until minOf(Pattern.SOUNDS, a.length())) {
                     val row = a.getJSONArray(s)
                     for (i in 0 until minOf(COUNT, row.length())) {
                         val d = DEFS[i] ?: continue
@@ -204,7 +204,7 @@ class SoundParams {
 
     fun save(ctx: Context) {
         val a = JSONArray()
-        for (s in 0 until 16) {
+        for (s in 0 until Pattern.SOUNDS) {
             val row = JSONArray()
             for (i in 0 until COUNT) row.put(this[s, i].toDouble())
             a.put(row)

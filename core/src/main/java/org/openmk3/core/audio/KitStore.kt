@@ -10,12 +10,13 @@ object KitStore {
     private fun file(ctx: Context) = File(ctx.filesDir, "kit.json")
 
     fun load(ctx: Context): Array<String?> {
-        val paths = arrayOfNulls<String>(16)
+        val paths = arrayOfNulls<String>(Pattern.SOUNDS)
         val f = file(ctx)
         if (!f.exists()) return paths
         try {
             val a = JSONArray(f.readText())
-            for (i in 0 until minOf(16, a.length())) paths[i] = if (a.isNull(i)) null else a.getString(i)
+            // Older files have 16 entries: they become group A.
+            for (i in 0 until minOf(Pattern.SOUNDS, a.length())) paths[i] = if (a.isNull(i)) null else a.getString(i)
         } catch (e: Exception) {
             AppLog.i("kit.json unreadable: $e")
         }
@@ -24,7 +25,7 @@ object KitStore {
 
     fun save(ctx: Context, kit: Array<Sample>) {
         val a = JSONArray()
-        for (s in kit) a.put(s.path ?: JSONObjectNull)
+        for (i in 0 until Pattern.SOUNDS) a.put(kit[i].path ?: JSONObjectNull)
         file(ctx).writeText(a.toString())
     }
 
