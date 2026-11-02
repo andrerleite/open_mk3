@@ -33,6 +33,7 @@ import org.openmk3.core.mk3.Mk3Device
 class MainActivity : Activity() {
 
     companion object {
+        private const val REQ_CAPTURE = 7
         private const val ACTION_USB_PERMISSION = "org.openmk3.core.USB_PERMISSION"
     }
 
@@ -64,6 +65,18 @@ class MainActivity : Activity() {
         handleIntent(intent)
     }
 
+    @Deprecated("Simple one-off result; no AndroidX in this project")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_CAPTURE) return
+        if (resultCode == RESULT_OK && data != null) {
+            Mk3Service.instance?.onCaptureGranted(resultCode, data) ?: AppLog.i("Phone capture: no MK3 session")
+        } else {
+            AppLog.i("Phone capture: declined")
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val i = permissions.indexOf(Manifest.permission.RECORD_AUDIO)
@@ -80,6 +93,12 @@ class MainActivity : Activity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (intent?.action == Mk3Service.ACTION_REQUEST_CAPTURE) {
+            val mpm = getSystemService(android.media.projection.MediaProjectionManager::class.java)!!
+            @Suppress("DEPRECATION")
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+            return
+        }
         if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
         val d = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java) ?: return
         AppLog.i("MK3 plugged in: ${d.productName}")

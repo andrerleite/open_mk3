@@ -49,6 +49,13 @@ object NativeEngine {
     external fun nativeUsbGuessed(): Int
     external fun nativeUsbClockPpm(): Double
     external fun nativeUsbStats(): String
+    external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
+    external fun nativeRecStop()
+    external fun nativeRecState(): Int
+    external fun nativeRecFrames(): Int
+    external fun nativeRecTakePeak(source: Int): Float
+    external fun nativeRecTake(): FloatArray
+    external fun nativeRecFeedPhone(data: FloatArray, frames: Int)
 }
 
 /**

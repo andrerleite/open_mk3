@@ -177,6 +177,80 @@ private:
 
 Engine gEngine;
 
+// =========================================================================================
+// Sample recorder: fed by the controller's input (USB or AAudio path) and by phone playback
+// capture (pushed from Java). Only the selected source writes; buffers are allocated on arm
+// (Java thread), never in the audio path.
+// =========================================================================================
+
+class Recorder {
+public:
+    enum { IDLE = 0, ARMED = 1, RECORDING = 2 };
+    enum { SRC_INPUT = 0, SRC_PHONE = 1 };
+    std::atomic<int> state{IDLE};
+    std::atomic<int> source{SRC_INPUT};
+    std::atomic<int> frames{0};
+    std::atomic<float> threshold{0.02f};
+    std::atomic<float> peakInput{0.f};
+    std::atomic<float> peakPhone{0.f};
+    std::vector<float> buf;  // stereo interleaved
+    int maxFrames = 0;
+    std::atomic<int> writers{0};  // feed() calls currently past the state check
+
+    /** Waits until no audio thread is inside feed(), so buf can be touched safely. */
+    void quiesce() {
+        state.store(IDLE);
+        while (writers.load(std::memory_order_acquire) > 0) std::this_thread::yield();
+    }
+
+    void arm(int src, bool waitForThreshold, float thr, int seconds) {
+        quiesce();
+        source.store(src);
+        threshold.store(thr);
+        maxFrames = std::max(1, seconds) * kSampleRate;
+        buf.assign(size_t(maxFrames) * 2, 0.f);
+        frames.store(0);
+        state.store(waitForThreshold ? ARMED : RECORDING);
+    }
+
+    void stop() { quiesce(); }
+
+    /** Audio-thread safe: no allocation, no locks. */
+    void feed(const float* st, int n, int src) {
+        std::atomic<float>& pk = src == SRC_INPUT ? peakInput : peakPhone;
+        float peak = pk.load(std::memory_order_relaxed);
+        for (int i = 0; i < n * 2; i++) {
+            float a = std::fabs(st[i]);
+            if (a > peak) peak = a;
+        }
+        pk.store(peak, std::memory_order_relaxed);
+        if (source.load(std::memory_order_relaxed) != src) return;
+        writers.fetch_add(1, std::memory_order_acq_rel);
+        struct Exit { std::atomic<int>& w; ~Exit() { w.fetch_sub(1, std::memory_order_release); } } exitGuard{writers};
+        int s = state.load(std::memory_order_acquire);
+        int start = 0;
+        if (s == ARMED) {
+            float thr = threshold.load(std::memory_order_relaxed);
+            for (; start < n; start++)
+                if (std::fabs(st[start * 2]) >= thr || std::fabs(st[start * 2 + 1]) >= thr) break;
+            if (start >= n) return;
+            state.store(RECORDING, std::memory_order_release);
+        } else if (s != RECORDING) {
+            return;
+        }
+        int f = frames.load(std::memory_order_relaxed);
+        int take = std::min(n - start, maxFrames - f);
+        if (take > 0) {
+            std::memcpy(&buf[size_t(f) * 2], st + start * 2, sizeof(float) * size_t(take) * 2);
+            frames.store(f + take, std::memory_order_release);
+        }
+        if (f + take >= maxFrames) state.store(IDLE, std::memory_order_release);  // full
+    }
+};
+
+Recorder gRec;
+
+
 aaudio_data_callback_result_t dataCallback(AAudioStream*, void* user, void* audio, int32_t frames) {
     static_cast<Engine*>(user)->render(static_cast<float*>(audio), frames);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -191,6 +265,7 @@ aaudio_data_callback_result_t inputCallback(AAudioStream*, void* user, void* aud
         if (a > peak) peak = a;
     }
     e->inPeak.store(peak, std::memory_order_relaxed);
+    gRec.feed(in, frames, Recorder::SRC_INPUT);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -652,10 +727,17 @@ void UsbAudio::handleIn(Urb& u) {
         packetsIn.fetch_add(1, std::memory_order_relaxed);
         framesIn.fetch_add(f, std::memory_order_relaxed);
         const uint8_t* p = base + size_t(i) * size_t(inMax_);
-        for (int s = 0; s < f * inCh_; s += 7) {  // sparse peak meter is plenty
-            float a = std::fabs(getSample(p + s * subslot_));
+        float st[2 * 16];
+        int nf = std::min(f, 16);
+        for (int k = 0; k < nf; k++) {
+            float l = getSample(p + size_t(k * inCh_) * size_t(subslot_));
+            float r = inCh_ > 1 ? getSample(p + size_t(k * inCh_ + 1) * size_t(subslot_)) : l;
+            st[k * 2] = l;
+            st[k * 2 + 1] = r;
+            float a = std::max(std::fabs(l), std::fabs(r));
             if (a > peak) peak = a;
         }
+        if (nf > 0) gRec.feed(st, nf, Recorder::SRC_INPUT);
         u.u->iso_frame_desc[i].length = unsigned(inMax_);
         u.u->iso_frame_desc[i].actual_length = 0;
         u.u->iso_frame_desc[i].status = 0;
@@ -1065,6 +1147,30 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
     long long p = gUsb.packetsIn.load(), f = gUsb.framesIn.load();
     if (p < 8000) return 0.0;
     return (double(f) / double(p) / (kSampleRate / 8000.0) - 1.0) * 1e6;
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeRecArm)(JNIEnv*, jobject, jint source, jboolean threshold, jfloat thr, jint seconds) {
+    gRec.arm(source, threshold == JNI_TRUE, thr, seconds);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeRecStop)(JNIEnv*, jobject) { gRec.stop(); }
+JNIEXPORT jint JNICALL JNI_FN(nativeRecState)(JNIEnv*, jobject) { return gRec.state.load(); }
+JNIEXPORT jint JNICALL JNI_FN(nativeRecFrames)(JNIEnv*, jobject) { return gRec.frames.load(); }
+JNIEXPORT jfloat JNICALL JNI_FN(nativeRecTakePeak)(JNIEnv*, jobject, jint source) {
+    return (source == Recorder::SRC_INPUT ? gRec.peakInput : gRec.peakPhone).exchange(0.f);
+}
+/** Copies the recorded frames (stereo interleaved); call after stopping. */
+JNIEXPORT jfloatArray JNICALL JNI_FN(nativeRecTake)(JNIEnv* env, jobject) {
+    int n = gRec.frames.load();
+    jfloatArray a = env->NewFloatArray(n * 2);
+    if (a && n > 0) env->SetFloatArrayRegion(a, 0, n * 2, gRec.buf.data());
+    return a;
+}
+/** Phone playback capture: interleaved stereo float frames from the capture thread. */
+JNIEXPORT void JNICALL JNI_FN(nativeRecFeedPhone)(JNIEnv* env, jobject, jfloatArray data, jint frames) {
+    jfloat* p = env->GetFloatArrayElements(data, nullptr);
+    if (!p) return;
+    gRec.feed(p, frames, Recorder::SRC_PHONE);
+    env->ReleaseFloatArrayElements(data, p, JNI_ABORT);
 }
 
 JNIEXPORT jfloat JNICALL JNI_FN(nativeTakeWorstTrigMs)(JNIEnv*, jobject) {

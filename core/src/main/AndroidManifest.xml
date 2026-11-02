@@ -14,6 +14,8 @@
     <!-- Read WAV samples from the Download/<storage folder>. -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Sampling what other apps play on the phone (playback capture). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:allowBackup="false"
@@ -40,6 +42,6 @@
         <service
             android:name="org.openmk3.core.Mk3Service"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|microphone" />
+            android:foregroundServiceType="connectedDevice|microphone|mediaProjection" />
     </application>
 </manifest>

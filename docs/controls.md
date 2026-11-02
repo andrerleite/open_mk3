@@ -95,7 +95,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | MIXER | Mixer: levels, pan, sends per sound or group | ⬜ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
-| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | ⬜ |
+| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, trim, normalise, save to pad; slicing planned) |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (step through sounds today) |
 | FILE (Save) | Project menu. SHIFT + FILE saves. | ⬜ (pattern and kit autosave today) |
 | SETTINGS | Settings | 🟡 (LED palette page today) |
@@ -106,7 +106,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| D1–D8 (buttons above the screens) | Context functions shown on the screen under each button | ⬜ |
+| D1–D8 (buttons above the screens) | Context functions shown on the screen under each button | 🟡 (sampling page) |
 | Knobs 1–8 | Parameters shown on the screen above each knob. Touching a knob shows its value. | 🟡 (fixed: volume, sensitivity, tempo, swing) |
 | 4D encoder turn | Context value: list scrolling, or the selected encoder mode | 🟡 (tempo on home, scroll in browser) |
 | 4D encoder push / tilt | Confirm / navigate | ✅ (browser) |
@@ -129,8 +129,22 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Source | Status |
 |---|---|
-| Controller audio inputs | ⬜ (the input stream already runs; recording UI planned) |
-| Phone playback, i.e. whatever another app plays | ⬜ (Android playback capture: needs a one-time confirmation per session; some apps block capture) |
+| Controller audio inputs | ✅ |
+| Phone playback, i.e. whatever another app plays | ✅ (Android playback capture: confirm once per session via the notification on the phone; apps that block capture record as silence) |
+
+## Sampling page
+
+| Control | Function |
+|---|---|
+| D1 | Source: controller INPUT / PHONE playback |
+| D2 | Start: MANUAL / THRESHOLD (starts when the signal crosses K1) |
+| D4 or encoder push | Start / stop recording |
+| D6 | Normalise on / off |
+| D7 | Preview the edited sample |
+| D8 | Save to `Download/<app folder>/Recordings` and load onto the focused pad |
+| K1 / K2 | Threshold / maximum length (up to 30 s) |
+| K5 / K6 (or encoder) | Trim start / end. Hold SHIFT for fine steps. |
+| Pads | Choose the target pad |
 
 ## Open MK3–specific controls
 

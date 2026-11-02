@@ -7,7 +7,7 @@ full app.
    - Shared core with the two apps.
    - Default control map.
    - Release pipeline.
-2. **Sampling** (V)
+2. **Sampling** (V) — done in 0.2.0 (slicing later)
    - Record from the controller's inputs.
    - Record from phone playback.
    - Trim, normalise, assign to a pad.

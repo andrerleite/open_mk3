@@ -39,6 +39,8 @@ class Mk3Service : Service() {
         const val ACTION_WIZARD = "org.openmk3.core.WIZARD"
         const val ACTION_PALETTE = "org.openmk3.core.PALETTE"
         const val ACTION_HOME = "org.openmk3.core.HOME"
+        const val ACTION_REQUEST_CAPTURE = "org.openmk3.core.REQUEST_CAPTURE"
+        private const val CAPTURE_NOTIF_ID = 2
         const val EXTRA_MODE = "mode"
         private const val HEARTBEAT_MS = 30_000L
 
@@ -235,7 +237,70 @@ class Mk3Service : Service() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         }
+        if (captureConsent) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         return t
+    }
+
+    // ---- phone playback capture (sampling what other apps play) ----
+
+    private var projection: android.media.projection.MediaProjection? = null
+    /** The user confirmed capture; the service may (and must) carry the mediaProjection type. */
+    private var captureConsent = false
+    private var phoneCapture: org.openmk3.core.audio.PhoneCapture? = null
+    val phoneCaptureActive get() = phoneCapture != null
+
+    /**
+     * Android needs the user's confirmation on the phone screen once per session. The MK3
+     * can't show that dialog, so a notification opens it.
+     */
+    fun requestPhoneCapture() = handler.post {
+        if (phoneCapture != null) return@post
+        val pi = PendingIntent.getActivity(
+            this, 2, Intent(this, MainActivity::class.java).setAction(ACTION_REQUEST_CAPTURE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle("Allow sampling phone audio")
+            .setContentText("Tap, then choose \"Entire screen\" and Start")
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)!!.notify(CAPTURE_NOTIF_ID, n)
+        AppLog.i("Phone capture: waiting for the user to confirm on the phone")
+    }
+
+    /** Called by MainActivity with the result of the system capture dialog. */
+    fun onCaptureGranted(resultCode: Int, data: Intent) = handler.post {
+        try {
+            val mpm = getSystemService(android.media.projection.MediaProjectionManager::class.java)!!
+            // Android 14+: the FGS must have the mediaProjection type before the projection is obtained.
+            captureConsent = true
+            startForeground(NOTIF_ID, notification("Running · phone audio sampling on"), fgsTypes())
+            projection = mpm.getMediaProjection(resultCode, data)
+            projection?.registerCallback(object : android.media.projection.MediaProjection.Callback() {
+                override fun onStop() { handler.post { stopPhoneCapture() } }
+            }, handler)
+            val pc = org.openmk3.core.audio.PhoneCapture(projection!!)
+            if (pc.start()) phoneCapture = pc else stopPhoneCapture()
+        } catch (e: Exception) {
+            AppLog.i("Phone capture: could not start: $e")
+            stopPhoneCapture()
+        }
+        getSystemService(NotificationManager::class.java)!!.cancel(CAPTURE_NOTIF_ID)
+        ui?.invalidate()
+    }
+
+    private fun stopPhoneCapture() {
+        phoneCapture?.stop()
+        phoneCapture = null
+        try { projection?.stop() } catch (_: Exception) {}
+        val had = captureConsent
+        projection = null
+        captureConsent = false
+        if (had && instance != null && ui != null) {
+            try { startForeground(NOTIF_ID, notification("Running"), fgsTypes()) } catch (_: Exception) {}
+        }
     }
 
     /** Called after the user grants RECORD_AUDIO while running: reopen audio with the input. */
@@ -270,6 +335,7 @@ class Mk3Service : Service() {
     }
 
     private fun shutdownSession() {
+        stopPhoneCapture()
         ui?.stop()
         ui = null
         dev?.close()

@@ -256,6 +256,7 @@ class HomePage(ui: Ui) : Page(ui) {
             "PAGE RIGHT" -> selected = (selected + 1) % 16
             "SETTINGS" -> ui.show(PalettePage(ui))
             "BROWSER" -> ui.show(BrowserPage(ui))
+            "SAMPLING" -> ui.show(SamplingPage(ui))
         }
     }
 
