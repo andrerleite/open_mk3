@@ -10,7 +10,7 @@ import kotlin.random.Random
  *  D2 HUMANIZE · D3 RANDOM · D8 APPLY (undo with SHIFT + pad 1)
  *  HUMANIZE: K1 velocity range, K2 probability (how many notes change)
  *  RANDOM: K1 density (hits per step), K2 velocity range, K3 note range (KEYBOARD: in scale)
- * Timing variations need off-grid notes (planned with EVENTS editing).
+ * HUMANIZE K3 time shift: moves notes by up to that fraction of a step (never before the grid).
  */
 class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
 
@@ -22,6 +22,7 @@ class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
         var probability = 0.5f
         var density = 0.3f
         var noteRange = 0
+        var timeShift = 0.1f
     }
 
     private var message = ""
@@ -61,6 +62,7 @@ class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
         if (!random) when (knob) {
             0 -> velRange = (velRange + d).coerceIn(0f, 1f)
             1 -> probability = (probability + d).coerceIn(0f, 1f)
+            2 -> timeShift = (timeShift + d).coerceIn(0f, 0.5f)
         } else when (knob) {
             0 -> density = (density + d).coerceIn(0f, 1f)
             1 -> velRange = (velRange + d).coerceIn(0f, 1f)
@@ -78,6 +80,8 @@ class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
                 val v = p.vel(snd, t)
                 if (v <= 0f || rnd.nextFloat() > probability) continue
                 p.setVelocity(snd, t, (v + (rnd.nextFloat() * 2f - 1f) * velRange * 0.5f).coerceIn(0.05f, 1f))
+                // timing: late (and back towards the grid) by up to TIME SHIFT of a step
+                if (timeShift > 0f) p.editStep(snd, t, posDelta = (rnd.nextFloat() * 2f - 1f) * timeShift)
                 n++
             }
             message = "Humanized $n notes of ${ui.padLabel()}"
@@ -111,7 +115,7 @@ class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
         l.drawText("RANDOM", 300f, 24f, if (random) dOn else dLabel)
         r.drawText("APPLY", 420f, 24f, dLabel)
         l.drawText("VARIATION · ${ui.padLabel()}", 16f, 60f, title)
-        l.drawText(if (!random) "Changes the velocity of existing notes" else "Replaces the sound's notes with random ones", 16f, 92f, label)
+        l.drawText(if (!random) "Changes velocity and timing of existing notes" else "Replaces the sound's notes with random ones", 16f, 92f, label)
         l.drawText("D8 applies · SHIFT + pad 1 undoes", 16f, 114f, label)
         if (message.isNotEmpty()) l.drawText(message, 16f, 150f, ok)
         fun knob(c: Canvas, i: Int, n: String, v: String) {
@@ -121,6 +125,7 @@ class VariationPage(ui: Ui, private val back: Page) : Page(ui) {
         if (!random) {
             knob(l, 0, "VELOCITY", "±${(velRange * 50).toInt()}%")
             knob(l, 1, "PROBABILITY", "${(probability * 100).toInt()}%")
+            knob(l, 2, "TIME SHIFT", "±${(timeShift * 100).toInt()}%")
         } else {
             knob(l, 0, "DENSITY", "${(density * 100).toInt()}%")
             knob(l, 1, "VELOCITY", "${(velRange * 100).toInt()}%")

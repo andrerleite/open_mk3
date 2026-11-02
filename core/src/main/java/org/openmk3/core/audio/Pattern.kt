@@ -14,14 +14,30 @@ class PatternData(var length: Int = 16) {
     val note = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) { Pattern.ROOT.toFloat() } }
     val xvel = Array(Pattern.PADS) { FloatArray(Pattern.STEPS * Pattern.EXTRA) }
     val xnote = Array(Pattern.PADS) { FloatArray(Pattern.STEPS * Pattern.EXTRA) }
+    /** Note length in steps (shared by a step's chord notes). */
+    val len = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) { 1f } }
+    /** Start within the step, 0..1 (notes off the grid). */
+    val off = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) }
 
     fun copy(): PatternData {
         val c = PatternData(length)
         for (p in 0 until Pattern.PADS) {
             vel[p].copyInto(c.vel[p]); note[p].copyInto(c.note[p])
             xvel[p].copyInto(c.xvel[p]); xnote[p].copyInto(c.xnote[p])
+            len[p].copyInto(c.len[p]); off[p].copyInto(c.off[p])
         }
         return c
+    }
+
+    /** Moves everything in a step to another step (overwriting it). */
+    fun moveCell(pad: Int, from: Int, to: Int, newOff: Float) {
+        if (from == to) { off[pad][to] = newOff; return }
+        val v = vel[pad][from]; val n = note[pad][from]; val l = len[pad][from]
+        val xv = FloatArray(Pattern.EXTRA) { xvel[pad][from * Pattern.EXTRA + it] }
+        val xn = FloatArray(Pattern.EXTRA) { xnote[pad][from * Pattern.EXTRA + it] }
+        clearStep(pad, from)
+        vel[pad][to] = v; note[pad][to] = n; len[pad][to] = l; off[pad][to] = newOff
+        for (x in 0 until Pattern.EXTRA) { xvel[pad][to * Pattern.EXTRA + x] = xv[x]; xnote[pad][to * Pattern.EXTRA + x] = xn[x] }
     }
 
     fun has(pad: Int, step: Int) = vel[pad][step] > 0f || (0 until Pattern.EXTRA).any { xvel[pad][step * Pattern.EXTRA + it] > 0f }
@@ -30,6 +46,8 @@ class PatternData(var length: Int = 16) {
     fun clearStep(pad: Int, step: Int) {
         vel[pad][step] = 0f
         note[pad][step] = Pattern.ROOT.toFloat()
+        len[pad][step] = 1f
+        off[pad][step] = 0f
         for (x in 0 until Pattern.EXTRA) { xvel[pad][step * Pattern.EXTRA + x] = 0f; xnote[pad][step * Pattern.EXTRA + x] = 0f }
     }
 
@@ -37,7 +55,7 @@ class PatternData(var length: Int = 16) {
         put("length", length)
         val ev = JSONArray()
         for (p in 0 until Pattern.PADS) for (t in 0 until Pattern.STEPS) {
-            if (vel[p][t] > 0f) ev.put(JSONArray(listOf(p, t, -1, vel[p][t].toDouble(), note[p][t].toInt())))
+            if (vel[p][t] > 0f) ev.put(JSONArray(listOf(p, t, -1, vel[p][t].toDouble(), note[p][t].toInt(), len[p][t].toDouble(), off[p][t].toDouble())))
             for (x in 0 until Pattern.EXTRA) {
                 val v = xvel[p][t * Pattern.EXTRA + x]
                 if (v > 0f) ev.put(JSONArray(listOf(p, t, x, v.toDouble(), xnote[p][t * Pattern.EXTRA + x].toInt())))
@@ -55,7 +73,10 @@ class PatternData(var length: Int = 16) {
                 val p = e.getInt(0); val t = e.getInt(1); val x = e.getInt(2)
                 val v = e.getDouble(3).toFloat().coerceIn(0f, 1f); val n = e.getInt(4).coerceIn(0, 127)
                 if (p !in 0 until Pattern.PADS || t !in 0 until Pattern.STEPS) continue
-                if (x < 0) { d.vel[p][t] = v; d.note[p][t] = n.toFloat() }
+                if (x < 0) {
+                    d.vel[p][t] = v; d.note[p][t] = n.toFloat()
+                    if (e.length() > 6) { d.len[p][t] = e.getDouble(5).toFloat().coerceIn(0.05f, 64f); d.off[p][t] = e.getDouble(6).toFloat().coerceIn(0f, 0.999f) }
+                }
                 else if (x < Pattern.EXTRA) { d.xvel[p][t * Pattern.EXTRA + x] = v; d.xnote[p][t * Pattern.EXTRA + x] = n.toFloat() }
             }
             return d
@@ -103,7 +124,9 @@ class Pattern {
         private const val B_XVEL = B_NOTE + PADS * STEPS
         private const val B_XNOTE = B_XVEL + PADS * STEPS * EXTRA
         private const val B_SKIP = B_XNOTE + PADS * STEPS * EXTRA
-        private const val B_LEN = B_SKIP + PADS * STEPS
+        private const val B_NLEN = B_SKIP + PADS * STEPS
+        private const val B_OFF = B_NLEN + PADS * STEPS
+        private const val B_LEN = B_OFF + PADS * STEPS
         private const val BANK = B_LEN + 1
         private const val FLOATS = OFF_BANKS + GROUPS * 2 * BANK
     }
@@ -191,7 +214,10 @@ class Pattern {
 
     private fun clearBank(g: Int, b: Int) {
         val base = bankBase(g, b)
-        for (i in 0 until PADS * STEPS) { f.put(base + B_VEL + i, 0f); f.put(base + B_NOTE + i, ROOT.toFloat()); f.put(base + B_SKIP + i, 0f) }
+        for (i in 0 until PADS * STEPS) {
+            f.put(base + B_VEL + i, 0f); f.put(base + B_NOTE + i, ROOT.toFloat()); f.put(base + B_SKIP + i, 0f)
+            f.put(base + B_NLEN + i, 1f); f.put(base + B_OFF + i, 0f)
+        }
         for (i in 0 until PADS * STEPS * EXTRA) { f.put(base + B_XVEL + i, 0f); f.put(base + B_XNOTE + i, 0f) }
     }
 
@@ -204,6 +230,7 @@ class Pattern {
         for (p in 0 until PADS) for (t in 0 until STEPS) {
             val c = p * STEPS + t
             f.put(base + B_VEL + c, d.vel[p][t]); f.put(base + B_NOTE + c, d.note[p][t])
+            f.put(base + B_NLEN + c, d.len[p][t]); f.put(base + B_OFF + c, d.off[p][t])
             for (x in 0 until EXTRA) {
                 f.put(base + B_XVEL + c * EXTRA + x, d.xvel[p][t * EXTRA + x])
                 f.put(base + B_XNOTE + c * EXTRA + x, d.xnote[p][t * EXTRA + x])
@@ -263,10 +290,11 @@ class Pattern {
     fun hasStep(sound: Int, step: Int): Boolean = cur(sound / PADS)?.has(sound % PADS, step) ?: false
 
     /** Writes a (chord) note into a step: the main hit, the slot holding that note, or a free one. */
-    fun recordNote(sound: Int, step: Int, n: Int, v: Float) {
+    fun recordNote(sound: Int, step: Int, n: Int, v: Float, offset: Float = 0f, length: Float = 1f) {
         val g = sound / PADS
         val pad = sound % PADS
         val d = editable(g)
+        if (!d.has(pad, step)) { d.off[pad][step] = offset.coerceIn(0f, 0.999f); d.len[pad][step] = length.coerceIn(0.05f, 64f) }
         val mv = d.vel[pad][step]
         val mn = d.note[pad][step].toInt().let { if (it <= 0) ROOT else it }
         if (mv <= 0f || mn == n) {
@@ -282,6 +310,118 @@ class Pattern {
             }
         }
         writeCell(g, pad, step, d)
+    }
+
+    /** Note length (steps) of a step's notes. */
+    fun noteLength(sound: Int, step: Int): Float = cur(sound / PADS)?.len?.get(sound % PADS)?.get(step) ?: 1f
+    fun noteOffset(sound: Int, step: Int): Float = cur(sound / PADS)?.off?.get(sound % PADS)?.get(step) ?: 0f
+
+    fun setNoteLength(sound: Int, step: Int, l: Float) {
+        val g = sound / PADS
+        val d = cur(g) ?: return
+        d.len[sound % PADS][step] = l.coerceIn(0.05f, STEPS.toFloat())
+        writeCell(g, sound % PADS, step, d)
+    }
+
+    /** Steps (of the playing pattern) that hold notes of [sound]. */
+    fun stepsOf(sound: Int): List<Int> {
+        val d = cur(sound / PADS) ?: return emptyList()
+        return (0 until d.length).filter { d.has(sound % PADS, it) }
+    }
+
+    /**
+     * Moves the notes of [sounds] by [steps] (fractional; they wrap around the pattern).
+     * Notes landing on the same step merge (the moved one wins).
+     */
+    fun move(sounds: Collection<Int>, steps: Float) {
+        for (snd in sounds) {
+            val g = snd / PADS
+            val d = cur(g) ?: continue
+            val pad = snd % PADS
+            val l = d.length
+            val src = (0 until l).filter { d.has(pad, it) }
+            val moved = src.map { t ->
+                val pos = ((t + d.off[pad][t] + steps) % l + l) % l
+                Triple(t, pos.toInt().coerceIn(0, l - 1), pos - pos.toInt())
+            }
+            // order matters: move into a copy so earlier moves don't overwrite later sources
+            val copy = d.copy()
+            for (t in src) d.clearStep(pad, t)
+            for ((from, to, o) in moved) {
+                d.vel[pad][to] = copy.vel[pad][from]; d.note[pad][to] = copy.note[pad][from]
+                d.len[pad][to] = copy.len[pad][from]; d.off[pad][to] = o.coerceIn(0f, 0.999f)
+                for (x in 0 until EXTRA) {
+                    d.xvel[pad][to * EXTRA + x] = copy.xvel[pad][from * EXTRA + x]
+                    d.xnote[pad][to * EXTRA + x] = copy.xnote[pad][from * EXTRA + x]
+                }
+            }
+            refreshGroup(g)
+        }
+    }
+
+    /** Quantise [sounds]: [amount] 1 = onto the grid, 0.5 = half way. */
+    fun quantize(sounds: Collection<Int>, amount: Float) {
+        for (snd in sounds) {
+            val g = snd / PADS
+            val d = cur(g) ?: continue
+            val pad = snd % PADS
+            val l = d.length
+            for (t in (0 until l).filter { d.has(pad, it) && d.off[pad][it] > 0f }) {
+                val o = d.off[pad][t]
+                val target = if (o >= 0.5f) 1f else 0f        // nearest grid line
+                val newPos = t + o + (target - o) * amount
+                val to = (newPos.toInt() % l + l) % l
+                val no = (newPos - newPos.toInt()).coerceIn(0f, 0.999f)
+                if (to != t && d.has(pad, to)) { d.clearStep(pad, t); continue }  // merge into the note already there
+                d.moveCell(pad, t, to, no)
+            }
+            refreshGroup(g)
+        }
+    }
+
+    /** Adds [delta] to every velocity of [sounds] (keeping their differences). */
+    fun addVelocity(sounds: Collection<Int>, delta: Float) {
+        for (snd in sounds) {
+            val g = snd / PADS
+            val d = cur(g) ?: continue
+            val pad = snd % PADS
+            for (t in 0 until STEPS) {
+                if (d.vel[pad][t] > 0f) d.vel[pad][t] = (d.vel[pad][t] + delta).coerceIn(0.01f, 1f)
+                for (x in 0 until EXTRA) if (d.xvel[pad][t * EXTRA + x] > 0f)
+                    d.xvel[pad][t * EXTRA + x] = (d.xvel[pad][t * EXTRA + x] + delta).coerceIn(0.01f, 1f)
+            }
+            refreshGroup(g)
+        }
+    }
+
+    /** Adds [delta] steps to every note length of [sounds]. */
+    fun addLength(sounds: Collection<Int>, delta: Float) {
+        for (snd in sounds) {
+            val g = snd / PADS
+            val d = cur(g) ?: continue
+            val pad = snd % PADS
+            for (t in 0 until STEPS) if (d.has(pad, t)) d.len[pad][t] = (d.len[pad][t] + delta).coerceIn(0.05f, STEPS.toFloat())
+            refreshGroup(g)
+        }
+    }
+
+    /** STEP mode edits of one step's notes: velocity, position (fraction of a step), pitch. */
+    fun editStep(sound: Int, step: Int, velDelta: Float = 0f, posDelta: Float = 0f, semis: Int = 0) {
+        val g = sound / PADS
+        val d = cur(g) ?: return
+        val pad = sound % PADS
+        if (!d.has(pad, step)) return
+        if (velDelta != 0f) {
+            if (d.vel[pad][step] > 0f) d.vel[pad][step] = (d.vel[pad][step] + velDelta).coerceIn(0.01f, 1f)
+            for (x in 0 until EXTRA) if (d.xvel[pad][step * EXTRA + x] > 0f) d.xvel[pad][step * EXTRA + x] = (d.xvel[pad][step * EXTRA + x] + velDelta).coerceIn(0.01f, 1f)
+        }
+        if (semis != 0) {
+            d.note[pad][step] = (d.note[pad][step] + semis).coerceIn(0f, 127f)
+            for (x in 0 until EXTRA) if (d.xvel[pad][step * EXTRA + x] > 0f) d.xnote[pad][step * EXTRA + x] = (d.xnote[pad][step * EXTRA + x] + semis).coerceIn(0f, 127f)
+        }
+        // position stays within its step here (the pad is that step)
+        if (posDelta != 0f) d.off[pad][step] = (d.off[pad][step] + posDelta).coerceIn(0f, 0.999f)
+        refreshGroup(g)
     }
 
     /** Sets the main note's velocity of a step (0 removes it). */
@@ -316,6 +456,7 @@ class Pattern {
         val base = bankBase(g, active(g))
         val c = pad * STEPS + step
         f.put(base + B_VEL + c, d.vel[pad][step]); f.put(base + B_NOTE + c, d.note[pad][step])
+        f.put(base + B_NLEN + c, d.len[pad][step]); f.put(base + B_OFF + c, d.off[pad][step])
         for (x in 0 until EXTRA) {
             f.put(base + B_XVEL + c * EXTRA + x, d.xvel[pad][step * EXTRA + x])
             f.put(base + B_XNOTE + c * EXTRA + x, d.xnote[pad][step * EXTRA + x])
@@ -330,6 +471,7 @@ class Pattern {
             for (p in 0 until PADS) for (t in 0 until STEPS) {
                 val c = p * STEPS + t
                 d.vel[p][t] = f.get(base + B_VEL + c); d.note[p][t] = f.get(base + B_NOTE + c)
+                d.len[p][t] = f.get(base + B_NLEN + c).let { if (it <= 0f) 1f else it }; d.off[p][t] = f.get(base + B_OFF + c)
                 for (x in 0 until EXTRA) {
                     d.xvel[p][t * EXTRA + x] = f.get(base + B_XVEL + c * EXTRA + x)
                     d.xnote[p][t * EXTRA + x] = f.get(base + B_XNOTE + c * EXTRA + x)
@@ -351,6 +493,7 @@ class Pattern {
         val l = d.length
         for (p in 0 until PADS) for (t in 0 until l) {
             d.vel[p][t + l] = d.vel[p][t]; d.note[p][t + l] = d.note[p][t]
+            d.len[p][t + l] = d.len[p][t]; d.off[p][t + l] = d.off[p][t]
             for (x in 0 until EXTRA) { d.xvel[p][(t + l) * EXTRA + x] = d.xvel[p][t * EXTRA + x]; d.xnote[p][(t + l) * EXTRA + x] = d.xnote[p][t * EXTRA + x] }
         }
         d.length = l * 2
@@ -366,9 +509,10 @@ class Pattern {
         val l = d.length
         val v = FloatArray(l) { d.vel[p][it] }; val n = FloatArray(l) { d.note[p][it] }
         val xv = FloatArray(l * EXTRA) { d.xvel[p][it] }; val xn = FloatArray(l * EXTRA) { d.xnote[p][it] }
+        val ln = FloatArray(l) { d.len[p][it] }; val of = FloatArray(l) { d.off[p][it] }
         for (t in 0 until l) {
             val to = Math.floorMod(t + steps, l)
-            d.vel[p][to] = v[t]; d.note[p][to] = n[t]
+            d.vel[p][to] = v[t]; d.note[p][to] = n[t]; d.len[p][to] = ln[t]; d.off[p][to] = of[t]
             for (x in 0 until EXTRA) { d.xvel[p][to * EXTRA + x] = xv[t * EXTRA + x]; d.xnote[p][to * EXTRA + x] = xn[t * EXTRA + x] }
         }
         refreshGroup(g)
@@ -402,6 +546,7 @@ class Pattern {
         val a = from % PADS; val b = to % PADS
         d.vel[a].copyInto(d.vel[b]); d.note[a].copyInto(d.note[b])
         d.xvel[a].copyInto(d.xvel[b]); d.xnote[a].copyInto(d.xnote[b])
+        d.len[a].copyInto(d.len[b]); d.off[a].copyInto(d.off[b])
         refreshGroup(g)
     }
 

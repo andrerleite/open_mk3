@@ -252,31 +252,57 @@ class HomePage(ui: Ui) : Page(ui) {
                 // NOTE REPEAT / ARP hits are recorded by the engine itself
                 if (rec && ui.engine.playing && !ui.repeatActive) {
                     val v = ui.padVelocity(slot, pressure)
-                    for ((snd, note) in ui.notesForPad(slot)) record(snd, v, note)
+                    for ((snd, note) in ui.notesForPad(slot)) record(snd, v, note, slot)
                 }
             }
             else -> { // STEP mode
                 val s = viewPage * 16 + stepForSlot(slot)
                 if (s >= pattern.length(ui.group)) return
                 val sound = sd(selected)
-                if (erase || p.hasStep(sound, s)) p.clearStep(sound, s) else p.recordNote(sound, s, Pattern.ROOT, velocity)
-                changed()
+                stepEdited = false
+                when {
+                    erase -> { p.clearStep(sound, s); changed() }
+                    // an existing step goes on release, unless it was edited while held
+                    p.hasStep(sound, s) -> stepRemove[slot] = s
+                    else -> { p.recordNote(sound, s, Pattern.ROOT, velocity); changed() }
+                }
             }
         }
     }
 
     /** Quantise a live hit to the nearest step of what the player actually heard. */
-    private fun record(slot: Int, velocity: Float, note: Int = Pattern.ROOT) {
+    /** Notes being recorded per pad: sound, step and when they started (for their length). */
+    private val recHeld = Array(16) { mutableListOf<Triple<Int, Int, Double>>() }
+
+    /** Records a live hit where it was heard (off-grid; SHIFT + pad 5 quantises). */
+    private fun record(slot: Int, velocity: Float, note: Int = Pattern.ROOT, pad: Int = -1) {
         val e = ui.engine
         val heard = e.phase - e.outputLatencySteps()
-        val n = heard.roundToLong()
-        if (n < 0) return  // counting in
+        if (heard < 0) return  // counting in
         val len = pattern.length(slot / Pattern.PADS)
-        val step = ((n % len + len) % len).toInt()
+        val whole = kotlin.math.floor(heard)
+        val step = ((whole.toLong() % len + len) % len).toInt()
         val p = pattern
-        p.recordNote(slot, step, note, velocity)
-        // Not yet played this loop: the live hit already sounded, don't play it twice.
-        if (n >= e.phase) p.skipOnce(slot, step)
+        p.recordNote(slot, step, note, velocity, (heard - whole).toFloat(), 1f)
+        if (pad >= 0) recHeld[pad].add(Triple(slot, step, heard))
+        changed()
+    }
+
+    private val stepRemove = IntArray(16) { -1 }
+
+    override fun onPadRelease(slot: Int, hid: Int) {
+        val rm = stepRemove[slot]
+        if (rm >= 0) {
+            stepRemove[slot] = -1
+            if (!stepEdited) { pattern.clearStep(sd(selected), rm); changed() }
+        }
+        // a recorded note lasts as long as the pad was held
+        val held = recHeld[slot]
+        if (held.isEmpty()) return
+        val e = ui.engine
+        val now = e.phase - e.outputLatencySteps()
+        for ((snd, step, start) in held) pattern.setNoteLength(snd, step, (now - start).toFloat().coerceAtLeast(0.1f))
+        held.clear()
         changed()
     }
 
@@ -372,6 +398,20 @@ class HomePage(ui: Ui) : Page(ui) {
 
     override fun onEncoder(delta: Int) {
         val e = ui.engine
+        // STEP mode: hold a step and turn: VOLUME = velocity, SWING = position, TEMPO = pitch
+        val heldStep = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
+        if (mode == Mode.STEP && heldStep != null) {
+            val st = viewPage * 16 + stepForSlot(heldStep)
+            val snd = sd(selected)
+            when (encMode) {
+                Enc.VOLUME -> pattern.editStep(snd, st, velDelta = delta * 0.03f)
+                Enc.SWING -> pattern.editStep(snd, st, posDelta = delta * 0.05f)
+                else -> pattern.editStep(snd, st, semis = delta)
+            }
+            stepEdited = true
+            changed()
+            return
+        }
         // hold a pad or a group button: VOLUME / TEMPO change that sound or group only
         val heldPad = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
         val sp = e.params
@@ -406,6 +446,8 @@ class HomePage(ui: Ui) : Page(ui) {
         changed()
     }
 
+    private var stepEdited = false
+
     // ---- DUPLICATE in pad mode, SHIFT + pad edits ----
     private var duplicate = false
     private var dupSource = -1
@@ -439,7 +481,13 @@ class HomePage(ui: Ui) : Page(ui) {
         when (slot) {
             0, 2 -> message(if (ui.undo()) "Undo" else "Nothing to undo")
             1, 3 -> message(if (ui.redo()) "Redo" else "Nothing to redo")
-            4, 5 -> message("Quantise: notes are already on the step grid")
+            4, 5 -> {
+                // SHIFT + pad 5: quantise the focused sound (pad 6: half way); with SELECT held: the group
+                val sounds = if (select) (0 until 16).map { sd(it) } else listOf(snd)
+                pattern.quantize(sounds, if (slot == 4) 1f else 0.5f)
+                changed()
+                message(if (slot == 4) "Quantised" else "Quantised 50 %")
+            }
             6 -> { pattern.nudge(snd, -1); changed(); message("${ui.padLabel()} nudged left") }
             7 -> { pattern.nudge(snd, 1); changed(); message("${ui.padLabel()} nudged right") }
             8 -> { pattern.clearGroup(g); changed(); message("Pattern cleared") }

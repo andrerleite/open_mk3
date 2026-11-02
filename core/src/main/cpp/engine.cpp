@@ -78,7 +78,9 @@ constexpr int B_NOTE = B_VEL + kPads * kSteps;
 constexpr int B_XVEL = B_NOTE + kPads * kSteps;
 constexpr int B_XNOTE = B_XVEL + kPads * kSteps * kExtraNotes;
 constexpr int B_SKIP = B_XNOTE + kPads * kSteps * kExtraNotes;
-constexpr int B_LEN = B_SKIP + kPads * kSteps;            // pattern length in steps (1..64)
+constexpr int B_NLEN = B_SKIP + kPads * kSteps;           // note length in steps (0 = one step)
+constexpr int B_OFF = B_NLEN + kPads * kSteps;            // note start within the step, 0..1
+constexpr int B_LEN = B_OFF + kPads * kSteps;             // pattern length in steps (1..64)
 constexpr int BANK_FLOATS = B_LEN + 1;
 constexpr int PATTERN_FLOATS = OFF_BANKS + kGroups * 2 * BANK_FLOATS;
 constexpr int kRootNote = 60;                             // C3: the note a pad plays in pad mode
@@ -370,6 +372,11 @@ private:
     void startVoice(int slot, float vel, int offset, int gate, bool fromSeq, int note = kRootNote, int chord = 1);
     void releaseSlot(int slot, int note = -1);
     void runRepeat(int frames);
+    // notes that start inside a step (off-grid): fired when their moment comes
+    struct Pending { double at; int slot; float vel; int note; int chord; int gate; };
+    static constexpr int kPending = 512;
+    Pending pend[kPending];
+    int pendCount = 0;
     // metronome click (a short sine burst, higher on the first beat of the bar)
     int clickDelay = -1;    // frames into the chunk where a click starts
     int clickPos = -1;      // frames rendered of the current click
@@ -801,6 +808,7 @@ void Engine::runSequencer(int frames) {
             p[OFF_COUNTING] = 1.f;
         }
         seqPhase = double(nextStep);
+        pendCount = 0;
         for (int g = 0; g < kGroups; g++)
             for (int b = 0; b < 2; b++) {
                 float* bk = bankOf(p, g, b);
@@ -812,6 +820,7 @@ void Engine::runSequencer(int frames) {
         for (auto& v : voices)
             if (v.sample && v.fromSeq) v.gate = 0;
         p[OFF_COUNTING] = 0.f;
+        pendCount = 0;
     }
     wasPlaying = on;
     if (!on) {
@@ -884,18 +893,33 @@ void Engine::runSequencer(int frames) {
                 bool audible = groupOn[g] && (soloInGroup[g] ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f);
                 if (!audible) continue;
                 const int chord = (v > 0.f) + extras;
+                float nl = bk[B_NLEN + cell];
+                const int gate = std::max(16, int((nl > 0.f ? nl : 1.f) * stepLen));
+                const float noff = std::clamp(bk[B_OFF + cell], 0.f, 0.999f);
+                auto fire = [&](float vel, int note) {
+                    if (noff < 0.001f) { startVoice(s, vel, int(off), gate, true, note, chord); return; }
+                    if (pendCount < kPending) pend[pendCount++] = {t + noff, s, vel, note, chord, gate};
+                };
                 if (v > 0.f) {
                     int note = int(bk[B_NOTE + cell] + 0.5f);
-                    startVoice(s, v, int(off), int(stepLen), true, note > 0 ? note : kRootNote, chord);
+                    fire(v, note > 0 ? note : kRootNote);
                 }
                 for (int x = 0; x < kExtraNotes; x++) {
                     float xv = bk[B_XVEL + cell * kExtraNotes + x];
-                    if (xv > 0.f) startVoice(s, xv, int(off), int(stepLen), true, int(bk[B_XNOTE + cell * kExtraNotes + x] + 0.5f), chord);
+                    if (xv > 0.f) fire(xv, int(bk[B_XNOTE + cell * kExtraNotes + x] + 0.5f));
                 }
             }
         }
         currentStep.store(int(n % 16), std::memory_order_relaxed);
         nextStep = n + 1;
+    }
+    // off-grid notes whose moment falls in this chunk
+    for (int k = 0; k < pendCount;) {
+        if (pend[k].at < end) {
+            int o = std::clamp(int(std::lround((pend[k].at - start) * stepLen)), 0, frames - 1);
+            startVoice(pend[k].slot, pend[k].vel, o, pend[k].gate, true, pend[k].note, pend[k].chord);
+            pend[k] = pend[--pendCount];
+        } else k++;
     }
     seqPhase = end;
     phase.store(end, std::memory_order_relaxed);

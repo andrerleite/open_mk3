@@ -476,11 +476,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             return@post
         }
         // PATTERN / SCENE released: back, unless pinned
-        if (!down && (name == "PATTERN" || name == "SCENE" || name == "VARIATION")) {
+        if (!down && (name == "PATTERN" || name == "SCENE" || name == "VARIATION" || name == "EVENTS")) {
             if (modeHeld == name) modeHeld = null
             val cur = page
             if (cur is SlotPage && name !in pinned) cur.back()
             if (cur is VariationPage && name !in pinned) cur.back()
+            if (cur is EventsPage && name !in pinned) cur.back()
             return@post
         }
         // while NOTE REPEAT is held: D3 arp hold, D4 gate reset, D5-D8 rate presets
@@ -542,6 +543,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     val cur = page
                     if (cur is SlotPage && cur.kind == kind) cur.back()  // pinned: press again to leave
                     else show(SlotPage(this, if (cur is SlotPage) org.openmk3.core.Edition.homePage(this) else cur, kind))
+                    return@post
+                }
+                "EVENTS" -> {
+                    modeHeld = name
+                    val cur = page
+                    if (cur is EventsPage) cur.back() else show(EventsPage(this, cur))
                     return@post
                 }
                 "VARIATION" -> {
@@ -653,7 +660,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (repeatKind == RepeatKind.ARP) lights.set("D3", arpHold)
             lights.set("D4")
         }
-        if (modeHeld == "PATTERN" || modeHeld == "SCENE" || modeHeld == "VARIATION") lights.set("D1", modeHeld in pinned)
+        if (modeHeld == "PATTERN" || modeHeld == "SCENE" || modeHeld == "VARIATION" || modeHeld == "EVENTS") lights.set("D1", modeHeld in pinned)
         lights.set("LOCK", lock.quick != null || page is LockPage)
         if (page is VariationPage) lights.set("VARIATION", true)
         val p = engine.pattern

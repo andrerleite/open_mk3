@@ -47,8 +47,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SCENE | Hold: scenes on the pads (select / launch; empty pad = new scene from the patterns playing). Hold + D1 pins the mode. | ✅ |
 | SHIFT + SCENE (Section) | Arranger sections | ⬜ |
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
-| EVENTS | Edit or select events: pads choose the sound, encoder and knobs edit | ⬜ |
-| VARIATION | Hold (D1 pins): HUMANIZE varies the focused sound's velocities; RANDOM writes new random notes (density, velocity, note range); D8 applies | 🟡 (timing variation needs off-grid notes) |
+| EVENTS | Hold (D1 pins): pads add / remove a sound's notes from the selection (dim: has notes, lit: selected), D5 all, D6 none, ERASE + pad erases; K1 position, K2 note, K3 velocity, K4 length (SHIFT: fine); ◀ ▶ pages | ✅ |
+| VARIATION | Hold (D1 pins): HUMANIZE varies the focused sound's velocity (K1, K2 probability) and timing (K3); RANDOM writes new random notes (density, velocity, note range); D8 applies | ✅ |
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
@@ -74,8 +74,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | 2 | Redo | ✅ |
 | 3 | Step undo (same as undo) | ✅ |
 | 4 | Step redo (same as redo) | ✅ |
-| 5 | Quantise (notes are already recorded on the step grid) | ✅ |
-| 6 | Quantise 50 % (as above) | ✅ |
+| 5 | Quantise the focused sound (with SELECT held: the whole group) | ✅ |
+| 6 | Quantise 50 % | ✅ |
 | 7 | Nudge the focused sound's notes one step left | ✅ |
 | 8 | Nudge right | ✅ |
 | 9 | Clear the focused group's pattern | ✅ |
@@ -221,7 +221,11 @@ fades with RELEASE). Sequencer notes last one step.
   scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +
   D1 pins them. Double: SHIFT + DUPLICATE; clear: SHIFT + pad 9.
 - STEP mode: ◀ ▶ move through the bars of longer patterns; FOLLOW makes the page follow the
-  playhead. Recording into a group without a pattern creates one.
+  playhead. Recording into a group without a pattern creates one. Hold a step and turn the
+  encoder: VOLUME active = its velocity, SWING = its position, TEMPO = its pitch (an existing
+  step is removed on release unless it was edited).
+- Live recording keeps the timing you played (not rounded to the step) and the length you held
+  the pad; SHIFT + pad 5 / 6 quantise.
 - Songs (patterns, scenes, mixer settings) are kept automatically and saved in projects (FILE).
 
 ## KEYBOARD, CHORDS and 16 VEL
