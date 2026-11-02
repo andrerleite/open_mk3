@@ -99,7 +99,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         if (state != IDLE) { finish(); return }
         if (source == SRC_PHONE && !phoneActive) {
             Mk3Service.instance?.requestPhoneCapture()
-            message = "Allow phone audio: tap the notification on the phone"
+            message = "Allow phone audio: see the phone (notification or app button)"
             return
         }
         n.nativeRecArm(source, thresholdMode, threshold, maxSeconds)
@@ -234,7 +234,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 source = 1 - source
                 if (source == SRC_PHONE && !phoneActive) {
                     Mk3Service.instance?.requestPhoneCapture()
-                    message = "Allow phone audio: tap the notification on the phone"
+                    message = "Allow phone audio: see the phone (notification or app button)"
                 } else message = ""
             }
             "D2" -> if (state == IDLE) thresholdMode = !thresholdMode
@@ -308,9 +308,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
 
         l.drawText("INPUT", 16f, 140f, label)
         meter(l, 146f, meterIn, thresholdMode && source == SRC_INPUT)
-        l.drawText(if (phoneActive) "PHONE" else "PHONE (not allowed yet)", 16f, 178f, label)
+        l.drawText(if (phoneActive) "PHONE" else "PHONE (not allowed yet: confirm on the phone)", 16f, 178f, label)
         meter(l, 184f, meterPhone, thresholdMode && source == SRC_PHONE)
-        if (message.isNotEmpty()) l.drawText(ellipsize(message, 54), 16f, 222f, if (message.startsWith("Can't") || message.startsWith("Allow")) warn else ok)
+        if (message.isNotEmpty()) l.drawText(ellipsize(message, 62), 16f, 222f, if (message.startsWith("Can't") || message.startsWith("Allow")) warn else ok)
         l.drawRect(0f, 232f, 480f, 233f, sep)
         knob(l, 0, "THRESHOLD", "${(threshold * 100).toInt()}%")
         knob(l, 1, "MAX LENGTH", "$maxSeconds s")

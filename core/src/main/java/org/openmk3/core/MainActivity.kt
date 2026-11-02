@@ -215,6 +215,13 @@ class MainActivity : Activity() {
             AppLog.i("${qLabel()} (takes effect on the next connect: tap Stop, then Connect)")
         }
         row(audioBtn, queueBtn)
+        row(btn("Allow phone audio (sampling)") {
+            if (Mk3Service.instance?.ui == null) {
+                AppLog.i("Phone capture: connect the MK3 first")
+            } else {
+                handleIntent(Intent(Mk3Service.ACTION_REQUEST_CAPTURE))
+            }
+        })
 
         logView = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 10f; setTextIsSelectable(true) }
         logScroll = ScrollView(this).apply { addView(logView) }

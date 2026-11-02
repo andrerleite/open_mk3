@@ -34,6 +34,7 @@ class Mk3Service : Service() {
 
     companion object {
         private const val CHANNEL = "groove"
+        private const val CAPTURE_CHANNEL = "capture"
         private const val NOTIF_ID = 1
         const val ACTION_STOP = "org.openmk3.core.STOP"
         const val ACTION_WIZARD = "org.openmk3.core.WIZARD"
@@ -139,7 +140,11 @@ class Mk3Service : Service() {
         instance = this
         AppLog.init(this)
         getSystemService(NotificationManager::class.java)!!
-            .createNotificationChannel(NotificationChannel(CHANNEL, "MK3 session", NotificationManager.IMPORTANCE_LOW))
+            .createNotificationChannels(listOf(
+                NotificationChannel(CHANNEL, "MK3 session", NotificationManager.IMPORTANCE_LOW),
+                // High importance: pops up on the phone screen so the request isn't missed.
+                NotificationChannel(CAPTURE_CHANNEL, "Phone audio sampling", NotificationManager.IMPORTANCE_HIGH),
+            ))
         registerReceiver(receiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -259,15 +264,18 @@ class Mk3Service : Service() {
             this, 2, Intent(this, MainActivity::class.java).setAction(ACTION_REQUEST_CAPTURE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val n = Notification.Builder(this, CHANNEL)
+        val n = Notification.Builder(this, CAPTURE_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setCategory(Notification.CATEGORY_CALL)
             .setContentTitle("Allow sampling phone audio")
             .setContentText("Tap, then choose \"Entire screen\" and Start")
             .setContentIntent(pi)
             .setAutoCancel(true)
             .build()
-        getSystemService(NotificationManager::class.java)!!.notify(CAPTURE_NOTIF_ID, n)
-        AppLog.i("Phone capture: waiting for the user to confirm on the phone")
+        val nm = getSystemService(NotificationManager::class.java)!!
+        nm.notify(CAPTURE_NOTIF_ID, n)
+        AppLog.i("Phone capture: waiting for the user to confirm on the phone" +
+            if (!nm.areNotificationsEnabled()) " (notifications are OFF for this app: use the app's 'Allow phone audio' button)" else "")
     }
 
     /** Called by MainActivity with the result of the system capture dialog. */
