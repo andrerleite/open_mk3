@@ -14,6 +14,8 @@ import org.openmk3.core.mk3.Mk3Device
  */
 class PalettePage(ui: Ui) : Page(ui) {
 
+    override val customLeds = true
+
     private var base = 0
     private val title = Theme.text(22f, Theme.ACCENT, bold = true)
     private val body = Theme.text(17f)

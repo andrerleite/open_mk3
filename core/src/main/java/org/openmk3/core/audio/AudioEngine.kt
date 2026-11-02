@@ -50,6 +50,8 @@ object NativeEngine {
     external fun nativeUsbClockPpm(): Double
     external fun nativeUsbStats(): String
     external fun nativeSetParamBuffer(buf: ByteBuffer)
+    external fun nativeRelease(slot: Int)
+    external fun nativeActiveSlots(): Int
     external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
     external fun nativeRecStop()
     external fun nativeRecState(): Int
@@ -261,7 +263,24 @@ class AudioEngine(private val ctx: Context) {
     fun trigger(slot: Int, velocity: Float) = n.nativeTrigger(slot, velocity)
 
     fun transportPlay() { if (!playing) n.nativeTransport(2); playing = true }
-    fun transportStop() { n.nativeTransport(0); playing = false }
+    fun transportStop() {
+        n.nativeTransport(0)
+        playing = false
+        // Diagnostics for sounds heard after stopping: which pads are still sounding, and why.
+        val now = n.nativeActiveSlots()
+        if (now != 0) AppLog.i("Stop: still sounding (tails / release): ${slotsOf(now)}")
+        Thread {
+            Thread.sleep(400)
+            val later = n.nativeActiveSlots()
+            if (later != 0) AppLog.i("Stop +400 ms: still sounding: ${slotsOf(later)}")
+        }.start()
+    }
+
+    private fun slotsOf(mask: Int) = (0 until 17).filter { mask and (1 shl it) != 0 }
+        .joinToString { if (it == PREVIEW_SLOT) "preview" else "pad ${it + 1} (${kit[it].name})" }
+
+    /** Note-off for a pad (ends ADSR sustain). */
+    fun release(slot: Int) = n.nativeRelease(slot)
     fun transportRestart() { n.nativeTransport(2); playing = true }
 
     /** Steps of latency between the playhead and what the player hears. */

@@ -6,6 +6,7 @@ import org.openmk3.core.AppLog
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -33,8 +34,9 @@ class SoundParams {
 
     companion object {
         const val SLOTS = 17
-        const val COUNT = 16
+        const val COUNT = 48
 
+        // Indices match P_* in engine.cpp and are stable (saved settings depend on them).
         const val TUNE = 0
         const val VOL = 1
         const val PAN = 2
@@ -48,27 +50,80 @@ class SoundParams {
         const val FTYPE = 10
         const val CUT = 11
         const val RES = 12
+        const val SUS = 13
+        const val REL = 14
+        const val POLY = 15
+        const val ENGINE = 16
+        const val LOOP = 17
+        const val LSTART = 18
+        const val LEND = 19
+        const val XFADE = 20
+        const val DRIVE = 21
+        const val MATT = 22
+        const val MDEC = 23
+        const val MPITCH = 24
+        const val MCUT = 25
+        const val LWAVE = 26
+        const val LRATE = 27
+        const val LPITCH = 28
+        const val LCUT = 29
+        const val LPAN = 30
+        const val LVOL = 31
+        const val VVOL = 32
+        const val VCUT = 33
 
         private fun secs(v: Float) = if (v < 1f) "${(v * 1000).roundToInt()} ms" else "%.2f s".format(v)
         private fun pct(v: Float) = "${(v * 100).roundToInt()}%"
+        private fun pctFine(v: Float) = "%.1f%%".format(v * 100)
+        private fun semis(v: Float) = "%+.2f st".format(v)
+        private fun octs(v: Float) = "%+.2f oct".format(v)
+        private val OFF_ON = listOf("OFF", "ON")
 
         val DEFS: Map<Int, Def> = listOf(
-            Def(TUNE, "TUNE", -36f, 36f, 0f, 0.01f, { v -> "%+.2f st".format(v) }),
+            // voice
+            Def(TUNE, "TUNE", -36f, 36f, 0f, 0.01f, ::semis),
             Def(VOL, "VOLUME", -60f, 12f, 0f, 0.05f, { v -> if (v <= -59.9f) "-∞ dB" else "%+.1f dB".format(v) }),
             Def(PAN, "PAN", -1f, 1f, 0f, 0.002f, { v ->
                 val p = (v * 100).roundToInt()
                 when { p == 0 -> "C"; p < 0 -> "L${-p}"; else -> "R$p" }
             }),
-            Def(START, "START", 0f, 1f, 0f, 0.0005f, ::pct),
-            Def(END, "END", 0f, 1f, 1f, 0.0005f, ::pct),
-            Def(REV, "REVERSE", 0f, 1f, 0f, 1f, { "" }, choices = listOf("OFF", "ON")),
-            Def(ENV, "MODE", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "AHD")),
-            Def(ATT, "ATTACK", 0.0005f, 5f, 0.001f, 0.004f, ::secs, log = true),
-            Def(HOLD, "HOLD", 0.0005f, 5f, 0.05f, 0.004f, ::secs, log = true),
-            Def(DEC, "DECAY", 0.005f, 10f, 0.5f, 0.004f, ::secs, log = true),
-            Def(FTYPE, "FILTER", 0f, 3f, 0f, 1f, { "" }, choices = listOf("OFF", "LOW-PASS", "BAND-PASS", "HIGH-PASS")),
+            Def(POLY, "POLYPHONY", 1f, 16f, 1f, 0.02f, { v -> "${v.roundToInt()}" }),
+            Def(ENGINE, "ENGINE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("STANDARD", "VINTAGE A", "VINTAGE B")),
+            Def(REV, "REVERSE", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
+            // sample region and loop
+            Def(START, "START", 0f, 1f, 0f, 0.0005f, ::pctFine),
+            Def(END, "END", 0f, 1f, 1f, 0.0005f, ::pctFine),
+            Def(LOOP, "LOOP", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
+            Def(LSTART, "LOOP START", 0f, 1f, 0f, 0.0005f, ::pctFine),
+            Def(LEND, "LOOP END", 0f, 1f, 1f, 0.0005f, ::pctFine),
+            Def(XFADE, "CROSSFADE", 0f, 1f, 0f, 0.002f, ::pct),
+            // amplitude envelope
+            Def(ENV, "TYPE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "AHD", "ADSR")),
+            Def(ATT, "ATTACK", 0.0005f, 10f, 0.001f, 0.004f, ::secs, log = true),
+            Def(HOLD, "HOLD", 0.0005f, 10f, 0.05f, 0.004f, ::secs, log = true),
+            Def(DEC, "DECAY", 0.005f, 20f, 0.5f, 0.004f, ::secs, log = true),
+            Def(SUS, "SUSTAIN", 0f, 1f, 0.7f, 0.002f, ::pct),
+            Def(REL, "RELEASE", 0.005f, 20f, 0.2f, 0.004f, ::secs, log = true),
+            // filter
+            Def(FTYPE, "FILTER", 0f, 4f, 0f, 1f, { "" }, choices = listOf("OFF", "LP 12", "BP", "HP", "LP 24")),
             Def(CUT, "CUTOFF", 20f, 20000f, 20000f, 0.004f, { v -> if (v >= 1000f) "%.1f kHz".format(v / 1000f) else "${v.roundToInt()} Hz" }, log = true),
             Def(RES, "RESONANCE", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(DRIVE, "DRIVE", 0f, 1f, 0f, 0.002f, ::pct),
+            // modulation envelope
+            Def(MATT, "ATTACK", 0.0005f, 10f, 0.001f, 0.004f, ::secs, log = true),
+            Def(MDEC, "DECAY", 0.005f, 20f, 0.2f, 0.004f, ::secs, log = true),
+            Def(MPITCH, "→ PITCH", -48f, 48f, 0f, 0.05f, ::semis),
+            Def(MCUT, "→ CUTOFF", -8f, 8f, 0f, 0.01f, ::octs),
+            // LFO
+            Def(LWAVE, "WAVE", 0f, 4f, 0f, 1f, { "" }, choices = listOf("SINE", "TRIANGLE", "SAW", "SQUARE", "RANDOM")),
+            Def(LRATE, "RATE", 0.01f, 40f, 4f, 0.004f, { v -> if (v < 1f) "%.2f Hz".format(v) else "%.1f Hz".format(v) }, log = true),
+            Def(LPITCH, "→ PITCH", -12f, 12f, 0f, 0.01f, ::semis),
+            Def(LCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
+            Def(LPAN, "→ PAN", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(LVOL, "→ VOLUME", 0f, 1f, 0f, 0.002f, ::pct),
+            // velocity
+            Def(VVOL, "→ VOLUME", 0f, 1f, 1f, 0.002f, ::pct),
+            Def(VCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
         ).associateBy { it.index }
 
         private fun file(ctx: Context) = File(ctx.filesDir, "sound_params.json")
@@ -111,7 +166,11 @@ class SoundParams {
     fun resetRange(slot: Int) {
         this[slot, START] = 0f
         this[slot, END] = 1f
+        this[slot, LSTART] = 0f
+        this[slot, LEND] = 1f
     }
+
+    private var acc = 0
 
     /** Applies [delta] knob units to parameter [i] of [slot]; [fine] = 10x finer. */
     fun nudge(slot: Int, i: Int, delta: Int, fine: Boolean) {
@@ -119,13 +178,22 @@ class SoundParams {
         val cur = this[slot, i]
         val k = if (fine) 0.1f else 1f
         val next = when {
-            d.choices != null -> (cur.roundToInt() + if (delta > 0) 1 else -1).toFloat()
+            d.choices != null -> {
+                // A switch moves one choice per notch-sized turn, not per encoder unit.
+                acc += delta
+                if (abs(acc) < 25) return
+                val dir = if (acc > 0) 1 else -1
+                acc = 0
+                (cur.roundToInt() + dir).toFloat()
+            }
             d.log -> cur * 2f.pow(delta * d.step * k * 2.5f)
             else -> cur + delta * d.step * k
         }
         this[slot, i] = next.coerceIn(d.min, d.max)
         if (i == START && this[slot, START] > this[slot, END] - 0.001f) this[slot, START] = (this[slot, END] - 0.001f).coerceAtLeast(0f)
         if (i == END && this[slot, END] < this[slot, START] + 0.001f) this[slot, END] = (this[slot, START] + 0.001f).coerceAtMost(1f)
+        if (i == LSTART && this[slot, LSTART] > this[slot, LEND] - 0.001f) this[slot, LSTART] = (this[slot, LEND] - 0.001f).coerceAtLeast(0f)
+        if (i == LEND && this[slot, LEND] < this[slot, LSTART] + 0.001f) this[slot, LEND] = (this[slot, LSTART] + 0.001f).coerceAtMost(1f)
     }
 
     fun display(slot: Int, i: Int): String {

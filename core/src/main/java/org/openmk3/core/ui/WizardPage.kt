@@ -14,6 +14,8 @@ import org.openmk3.core.mk3.Mk3Device
  */
 class WizardPage(ui: Ui, private val mode: Mode) : Page(ui) {
 
+    override val customLeds = true
+
     enum class Mode { ALL, PADS, BUTTONS, ENCODER, BUTTON_LEDS, PAD_LEDS }
     private enum class Pass(val title: String) {
         PADS("Pad layout"), BUTTONS("Buttons"), BUTTON_LEDS("Button lights"), PAD_LEDS("Pad lights")

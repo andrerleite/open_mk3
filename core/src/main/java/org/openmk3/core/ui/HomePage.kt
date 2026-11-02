@@ -160,25 +160,24 @@ class HomePage(ui: Ui) : Page(ui) {
                 any = true
             }
         }
-        val e = ui.engine
-        val dim = 0x14
-        ui.buttonLed("PLAY", if (e.playing) 0x7F else dim)
-        ui.buttonLed("REC", if (rec) 0x7F else dim)
-        ui.buttonLed("STOP", dim)
-        ui.buttonLed("RESTART", dim)
-        ui.buttonLed("STEP", if (mode == Mode.STEP) 0x7F else dim)
-        ui.buttonLed("PAD MODE", if (mode == Mode.PAD) 0x7F else dim)
-        ui.buttonLed("FIXED VEL", if (fixedVel) 0x7F else dim)
-        ui.buttonLed("ERASE", if (erase) 0x7F else dim)
-        ui.buttonLed("SELECT", if (select) 0x7F else dim)
-        ui.buttonLed("MUTE", if (mute) 0x7F else dim)
-        ui.buttonLed("SOLO", if (solo) 0x7F else dim)
-        ui.buttonLed("SHIFT", if (shift) 0x7F else dim)
-        ui.buttonLed("SETTINGS", dim)
-        ui.buttonLed("PAGE LEFT", dim)
-        ui.buttonLed("PAGE RIGHT", dim)
-        ui.buttonLed("GROUP A", Mk3Colors.value(Mk3Colors.RED, 1))
         return any
+    }
+
+    override fun lights(l: Lights) {
+        val e = ui.engine
+        l.set("PLAY", e.playing)
+        l.set("REC", rec)
+        l.set("STOP", "RESTART", "SETTINGS", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
+        l.set("STEP", mode == Mode.STEP)
+        l.set("PAD MODE", mode == Mode.PAD)
+        l.set("FIXED VEL", fixedVel)
+        l.set("ERASE", erase)
+        l.set("SELECT", select)
+        l.set("MUTE", mute)
+        l.set("SOLO", solo)
+        l.set("SHIFT", shift)
+        if (Edition.full) l.set("PLUG-IN")
+        l.set("GROUP A", true)  // the only group so far, and it's selected
     }
 
     /** Step i (0 = top-left, reading order) <-> pad slot (0 = bottom-left). Self-inverse. */

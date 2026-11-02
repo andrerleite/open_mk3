@@ -95,7 +95,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | MIXER | Mixer: levels, pan, sends per sound or group | ⬜ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Browse instruments and effects | ⬜ |
-| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, trim, normalise, save to pad; slicing planned) |
+| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice | 🟡 (record, edit, slice; zones planned) |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Project menu. SHIFT + FILE saves. | ⬜ (pattern and kit autosave today) |
 | SETTINGS | Settings | 🟡 (LED palette page today) |
@@ -106,7 +106,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| D1–D8 (buttons above the screens) | Context functions shown on the screen under each button | 🟡 (sampling page) |
+| D1–D8 (buttons above the screens) | Context functions shown on the screen under each button | 🟡 (sampling and sampler pages) |
 | Knobs 1–8 | Parameters shown on the screen above each knob. Touching a knob shows its value. | 🟡 (fixed: volume, sensitivity, tempo, swing) |
 | 4D encoder turn | Context value: list scrolling, or the selected encoder mode | 🟡 (tempo on home, scroll in browser) |
 | 4D encoder push / tilt | Confirm / navigate | ✅ (browser) |
@@ -132,31 +132,42 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Controller audio inputs | ✅ |
 | Phone playback, i.e. whatever another app plays | ✅ (Android playback capture: confirm once per session via the notification on the phone; apps that block capture record as silence) |
 
-## Sampling page
+## Sampling page (SAMPLING)
 
-| Control | Function |
+D1–D3 choose the tab. Hold SHIFT for fine knob steps.
+
+| Tab | Controls |
 |---|---|
-| D1 | Source: controller INPUT / PHONE playback |
-| D2 | Start: MANUAL / THRESHOLD (starts when the signal crosses K1) |
-| D4 or encoder push | Start / stop recording |
-| D6 | Normalise on / off |
-| D7 | Preview the edited sample |
-| D8 | Save to `Download/<app folder>/Recordings` and load onto the focused pad |
-| K1 / K2 | Threshold / maximum length (up to 30 s) |
-| K5 / K6 (or encoder) | Trim start / end. Hold SHIFT for fine steps. |
-| Pads | Choose the target pad |
+| RECORD | D5 source (controller INPUT / PHONE playback) · D6 start (MANUAL / THRESHOLD) · D8 or encoder push start/stop · K1 threshold · K2 max length (up to 30 s) · pads choose the target pad |
+| EDIT | Edits the new take, or the focused pad's sample (pads choose which) · K1 start · K2 end · K3 fade in · K4 fade out · D5 normalise · D6 reverse · D7 preview · D8 save as a new WAV in `Download/<app folder>/Recordings` and load it onto the focused pad |
+| SLICE | K1 / D5 mode (GRID / DETECT transients) · K2 number of slices or detection sensitivity · pads play the slices · D7 preview · D8 apply: each slice is saved as a WAV and loaded onto pads 1, 2, 3… |
+
+Planned: ZONE tab (multi-sample mapping) together with KEYBOARD mode.
 
 ## Sampler parameters (PLUG-IN, full app)
 
-| Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 |
-|---|---|---|---|---|---|---|---|
-| VOICE | Tune | Volume | Pan | | Start | End | Reverse |
-| ENVELOPE | Mode (one-shot / AHD) | Attack | Hold | Decay | | | |
-| FILTER | Type (off / LP / BP / HP) | Cutoff | Resonance | | | | |
-
-◀ ▶ or D1–D3 choose the page. Hold SHIFT for fine steps; SHIFT + touching a knob resets it.
+◀ ▶ or D1–D7 choose the page. Hold SHIFT for fine steps; SHIFT + touching a knob resets it.
 Pads focus (and play) a sound. Settings are saved per pad. Loading a new sample resets
-start and end.
+start, end and loop points. Values that do nothing with the current settings are shown dimmed.
+
+| Page | K1 | K2 | K3 | K4 | K5 | K6 |
+|---|---|---|---|---|---|---|
+| VOICE | Tune | Volume | Pan | Polyphony (1–16) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) | Reverse |
+| SAMPLE | Start | End | | | Loop | Loop start · K7 loop end · K8 crossfade |
+| AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) |
+| FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | |
+| MOD ENV | Attack | Decay | → Pitch | → Cutoff | | |
+| LFO | Wave (sine / triangle / saw / square / random) | Rate | → Pitch | → Cutoff | → Pan | → Volume |
+| VELOCITY | → Volume | → Cutoff | | | | |
+
+ADSR sustains while a pad is held; sequencer notes last one step. Loops need an AHD or ADSR
+envelope so that a looped sound always ends.
+
+## Button lights
+
+Every button that does something on the current page is lit: dim when available, bright when
+active or selected (e.g. the open page, a held modifier, a toggle that is on). Buttons that do
+nothing yet stay dark.
 
 ## Open MK3–specific controls
 

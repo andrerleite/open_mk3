@@ -76,52 +76,93 @@ constexpr int kFadeIn = 16;
 constexpr int kFadeOut = 96;
 
 // Per-sound parameters: kSlots x kParams floats in a direct buffer shared with Kotlin
-// (SoundParams.kt). Read at voice start (pitch, start/end, envelope) and every callback
-// (volume, pan, filter) so knob moves are heard on playing sounds.
-constexpr int kParams = 16;
+// (SoundParams.kt). Indices are stable: saved settings depend on them.
+constexpr int kParams = 48;
 enum {
-    P_TUNE = 0,    // semitones, -36..36 (fractional = fine tune)
-    P_VOL = 1,     // dB, -60 (silent) .. +12
-    P_PAN = 2,     // -1 left .. 1 right
-    P_START = 3,   // 0..1 of the sample
-    P_END = 4,     // 0..1 of the sample
-    P_REV = 5,     // > 0.5 = reverse
-    P_ENV = 6,     // 0 one-shot, 1 AHD
-    P_ATT = 7,     // seconds
-    P_HOLD = 8,    // seconds
-    P_DEC = 9,     // seconds (to -80 dB)
-    P_FTYPE = 10,  // 0 off, 1 low-pass, 2 band-pass, 3 high-pass
-    P_CUT = 11,    // Hz
-    P_RES = 12,    // 0..1
+    P_TUNE = 0,     // semitones, -36..36 (fractional = fine tune)
+    P_VOL = 1,      // dB, -60 (silent) .. +12
+    P_PAN = 2,      // -1 left .. 1 right
+    P_START = 3,    // 0..1 of the sample
+    P_END = 4,      // 0..1 of the sample
+    P_REV = 5,      // > 0.5 = reverse
+    P_ENV = 6,      // amp envelope: 0 one-shot, 1 AHD, 2 ADSR
+    P_ATT = 7,      // seconds
+    P_HOLD = 8,     // seconds (AHD)
+    P_DEC = 9,      // seconds
+    P_FTYPE = 10,   // 0 off, 1 low-pass 12, 2 band-pass, 3 high-pass, 4 low-pass 24
+    P_CUT = 11,     // Hz
+    P_RES = 12,     // 0..1
+    P_SUS = 13,     // 0..1 (ADSR)
+    P_REL = 14,     // seconds (ADSR)
+    P_POLY = 15,    // voices per sound, 1..16
+    P_ENGINE = 16,  // 0 standard, 1 vintage 12-bit/26 kHz, 2 vintage 12-bit/40 kHz
+    P_LOOP = 17,    // > 0.5 = loop (AHD / ADSR only)
+    P_LSTART = 18,  // 0..1 of the sample
+    P_LEND = 19,    // 0..1 of the sample
+    P_XFADE = 20,   // 0..1 of the loop length
+    P_DRIVE = 21,   // 0..1 saturation before the filter
+    P_MATT = 22,    // modulation envelope attack, seconds
+    P_MDEC = 23,    // modulation envelope decay, seconds
+    P_MPITCH = 24,  // modulation envelope -> pitch, semitones
+    P_MCUT = 25,    // modulation envelope -> cutoff, octaves
+    P_LWAVE = 26,   // LFO: 0 sine, 1 triangle, 2 saw, 3 square, 4 random
+    P_LRATE = 27,   // Hz
+    P_LPITCH = 28,  // LFO -> pitch, semitones
+    P_LCUT = 29,    // LFO -> cutoff, octaves
+    P_LPAN = 30,    // LFO -> pan, 0..1
+    P_LVOL = 31,    // LFO -> volume (tremolo), 0..1
+    P_VVOL = 32,    // velocity -> volume, 0..1
+    P_VCUT = 33,    // velocity -> cutoff, octaves
 };
-static const float kDefaultParams[kParams] = {0, 0, 0, 0, 1, 0, 0, 0.001f, 0.05f, 0.5f, 0, 20000, 0, 0, 0, 0};
+static float kDefaultParams[kParams];
+static bool initDefaults() {
+    float* d = kDefaultParams;
+    d[P_END] = 1; d[P_ATT] = 0.001f; d[P_HOLD] = 0.05f; d[P_DEC] = 0.5f; d[P_CUT] = 20000;
+    d[P_SUS] = 0.7f; d[P_REL] = 0.2f; d[P_POLY] = 1; d[P_LEND] = 1; d[P_MATT] = 0.001f;
+    d[P_MDEC] = 0.2f; d[P_LRATE] = 4; d[P_VVOL] = 1;
+    return true;
+}
+static bool gDefaultsReady = initDefaults();
 
 struct Voice {
     const SampleData* sample = nullptr;
-    double pos = 0.0;   // fractional read position (frames)
-    double rate = 1.0;  // frames per output frame
+    double pos = 0.0;     // fractional read position (frames)
     int startF = 0, endF = 0;
     bool rev = false;
-    float gain = 0.f;   // velocity gain
+    float vel = 0.f;
     int startOffset = 0;
-    int fadeIn = 0;     // frames rendered so far of the fade-in
-    int fadeOut = -1;   // frames left of the fade-out, -1 = not fading
+    int fadeIn = 0;       // frames rendered so far of the fade-in
+    int fadeOut = -1;     // frames left of the fade-out, -1 = not fading
     int slot = -1;
     uint64_t age = 0;
-    // AHD envelope
-    bool ahd = false;
-    int envStage = 0;   // 0 attack, 1 hold, 2 decay
+    bool fromSeq = false;
+    int gate = -1;        // frames until note-off (sequencer), -1 = held until released
+    bool released = false;
+    // amp envelope
+    int envType = 0;      // 0 one-shot, 1 AHD, 2 ADSR
+    int envStage = 0;     // 0 attack, 1 hold, 2 decay, 3 sustain, 4 release
     int envCount = 0;
-    int attF = 0, holdF = 0;
-    float envLevel = 1.f, decCoef = 0.f;
-    // state-variable filter (stereo)
-    float ic1[2] = {0, 0}, ic2[2] = {0, 0};
+    float envLevel = 1.f;
+    // modulation envelope (attack / decay)
+    int mStage = 0;
+    int mCount = 0;
+    float mLevel = 0.f;
+    // LFO
+    float lfoPhase = 0.f;
+    float lfoHeld = 0.f;
+    uint32_t rnd = 1;
+    // filter (two state-variable stages, stereo)
+    float ic1[2] = {0, 0}, ic2[2] = {0, 0}, jc1[2] = {0, 0}, jc2[2] = {0, 0};
+    // vintage engine sample-and-hold
+    float vPhase = 1.f;
+    float vHeld[2] = {0, 0};
 };
 
 struct Trigger {
     int slot;
     float vel;
     int64_t tNanos;
+    int type;  // 0 note-on, 1 note-off
 };
 
 class Engine {
@@ -178,12 +219,12 @@ public:
 
     std::atomic_flag producerLock = ATOMIC_FLAG_INIT;  // input thread + browser preview
 
-    void pushTrigger(int slot, float vel) {
+    void pushTrigger(int slot, float vel, int type = 0) {
         while (producerLock.test_and_set(std::memory_order_acquire)) {}
         uint32_t h = ringHead.load(std::memory_order_relaxed);
         uint32_t t = ringTail.load(std::memory_order_acquire);
         if (h - t < kRing) {
-            ring[h % kRing] = {slot, vel, nowNanos()};
+            ring[h % kRing] = {slot, vel, nowNanos(), type};
             ringHead.store(h + 1, std::memory_order_release);
         }
         producerLock.clear(std::memory_order_release);
@@ -206,7 +247,11 @@ private:
     float meterAcc = 0.f;
     int meterFrames = 0;
 
-    void startVoice(int slot, float vel, int offset);
+    void startVoice(int slot, float vel, int offset, int gate, bool fromSeq);
+    void releaseSlot(int slot);
+public:
+    std::atomic<uint32_t> activeSlots{0};  // bit per sound with a voice playing (diagnostics)
+private:
     void runSequencer(int frames);
 };
 
@@ -423,18 +468,35 @@ void Engine::tune() {
     }
 }
 
-void Engine::startVoice(int slot, float vel, int offset) {
+void Engine::releaseSlot(int slot) {
+    for (auto& v : voices)
+        if (v.sample && v.slot == slot && !v.fromSeq) v.released = true;
+}
+
+void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq) {
     if (slot < 0 || slot >= kSlots) return;
     const SampleData* s = current[slot].load(std::memory_order_acquire);
     if (!s || s->frames <= 0) return;
-    // Each pad is monophonic, like a drum machine: a new hit fades out the previous one
-    // instead of piling on top of its tail (which smears the attack).
-    for (auto& v : voices)
-        if (v.sample && v.slot == slot && v.fadeOut < 0) v.fadeOut = kFadeOut;
+    float* pb = params.load(std::memory_order_acquire);
+    const float* P = pb ? pb + slot * kParams : kDefaultParams;
+    // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
+    // oldest voices of this sound beyond the limit instead of piling on their tails.
+    int poly = std::clamp(int(P[P_POLY] + 0.5f), 1, 16);
+    while (true) {
+        int count = 0;
+        Voice* oldestOfSlot = nullptr;
+        for (auto& v : voices) {
+            if (!v.sample || v.slot != slot || v.fadeOut >= 0) continue;
+            count++;
+            if (!oldestOfSlot || v.age < oldestOfSlot->age) oldestOfSlot = &v;
+        }
+        if (count < poly || !oldestOfSlot) break;
+        oldestOfSlot->fadeOut = kFadeOut;
+    }
     if (s->choke != 0) {
         // e.g. closed hat silences open hat: fade instead of cutting
         for (auto& v : voices)
-            if (v.sample && v.sample->choke == s->choke && v.fadeOut < 0) v.fadeOut = kFadeOut;
+            if (v.sample && v.slot != slot && v.sample->choke == s->choke && v.fadeOut < 0) v.fadeOut = kFadeOut;
     }
     // A free voice, else the oldest one (with 32 voices this is rare).
     Voice* best = nullptr;
@@ -444,34 +506,28 @@ void Engine::startVoice(int slot, float vel, int offset) {
         if (v.age < oldest->age) oldest = &v;
     }
     if (!best) best = oldest;
-    float* pb = params.load(std::memory_order_acquire);
-    const float* P = pb ? pb + slot * kParams : kDefaultParams;
     float a = std::clamp(P[P_START], 0.f, 1.f);
     float b = std::clamp(P[P_END], 0.f, 1.f);
     int sf = int(a * float(s->frames));
     int ef = int(b * float(s->frames));
     if (ef <= sf) ef = std::min(s->frames, sf + 1);
     if (sf >= s->frames) return;
-    best->sample = s;
-    best->startF = sf;
-    best->endF = ef;
-    best->rev = P[P_REV] > 0.5f;
-    best->pos = best->rev ? double(ef - 1) : double(sf);
-    best->rate = std::pow(2.0, double(std::clamp(P[P_TUNE], -48.f, 48.f)) / 12.0);
-    best->ahd = P[P_ENV] > 0.5f;
-    best->envStage = 0;
-    best->envCount = 0;
-    best->attF = int(std::max(0.f, P[P_ATT]) * kSampleRate);
-    best->holdF = int(std::max(0.f, P[P_HOLD]) * kSampleRate);
-    best->envLevel = best->attF > 0 ? 0.f : 1.f;
-    best->decCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_DEC]) * kSampleRate)));
-    best->ic1[0] = best->ic1[1] = best->ic2[0] = best->ic2[1] = 0.f;
-    best->age = ++voiceAge;
-    best->gain = vel * vel;  // perceptual curve
-    best->startOffset = offset;
-    best->fadeIn = 0;
-    best->fadeOut = -1;
-    best->slot = slot;
+    Voice& v = *best;
+    v = Voice();
+    v.sample = s;
+    v.startF = sf;
+    v.endF = ef;
+    v.rev = P[P_REV] > 0.5f;
+    v.pos = v.rev ? double(ef - 1) : double(sf);
+    v.vel = vel;
+    v.startOffset = offset;
+    v.slot = slot;
+    v.age = ++voiceAge;
+    v.fromSeq = fromSeq;
+    v.gate = gate;
+    v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);
+    v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
+    v.rnd = uint32_t(voiceAge * 2654435761u) | 1u;
     if (int64_t* lt = lastTrigMs.load(std::memory_order_acquire); lt && slot < kSounds) {
         lt[slot] = nowNanos() / 1000000LL + int64_t(offset) * 1000 / kSampleRate;
     }
@@ -480,10 +536,18 @@ void Engine::startVoice(int slot, float vel, int offset) {
 void Engine::runSequencer(int frames) {
     float* p = pattern.load(std::memory_order_acquire);
     bool on = playRequested.load(std::memory_order_acquire) && p != nullptr;
-    if (on && (!wasPlaying || restartRequested.exchange(false))) {
+    // Always consume the restart flag: PLAY sets it too, and leaving it set made the
+    // pattern restart (and step 1 sound twice) one callback after starting.
+    bool restart = restartRequested.exchange(false);
+    if (on && (!wasPlaying || restart)) {
         seqPhase = 0.0;
         nextStep = 0;
         for (int i = 0; i < kSounds * kSteps; i++) p[OFF_SKIP + i] = 0.f;
+    }
+    if (!on && wasPlaying) {
+        // Stopping ends the notes the sequencer started (their release phase plays out).
+        for (auto& v : voices)
+            if (v.sample && v.fromSeq) v.gate = 0;
     }
     wasPlaying = on;
     if (!on) {
@@ -513,7 +577,7 @@ void Engine::runSequencer(int frames) {
             float& skip = p[OFF_SKIP + s * kSteps + step];
             if (skip > 0.5f) { skip = 0.f; continue; }
             bool audible = anySolo ? p[OFF_SOLO + s] > 0.5f : p[OFF_MUTE + s] < 0.5f;
-            if (audible) startVoice(s, v, int(off));
+            if (audible) startVoice(s, v, int(off), int(stepLen), true);
         }
         currentStep.store(step, std::memory_order_relaxed);
         nextStep = n + 1;
@@ -541,9 +605,13 @@ void Engine::render(float* out, int32_t frames) {
     uint32_t h = ringHead.load(std::memory_order_acquire);
     while (t != h) {
         const Trigger& tr = ring[t % kRing];
-        float ms = float(now - tr.tNanos) / 1e6f;
-        if (ms > worstTrigMs.load(std::memory_order_relaxed)) worstTrigMs.store(ms, std::memory_order_relaxed);
-        startVoice(tr.slot, tr.vel, 0);
+        if (tr.type == 1) {
+            releaseSlot(tr.slot);
+        } else {
+            float ms = float(now - tr.tNanos) / 1e6f;
+            if (ms > worstTrigMs.load(std::memory_order_relaxed)) worstTrigMs.store(ms, std::memory_order_relaxed);
+            startVoice(tr.slot, tr.vel, 0, -1, false);
+        }
         t++;
     }
     ringTail.store(t, std::memory_order_release);
@@ -554,88 +622,213 @@ void Engine::render(float* out, int32_t frames) {
     // 3. voices
     std::memset(out, 0, sizeof(float) * frames * 2);
     float* pb = params.load(std::memory_order_acquire);
+    uint32_t active = 0;
+    constexpr int kBlock = 16;  // control rate: modulation and filter coefficients per 16 frames
+    constexpr float kSr = float(kSampleRate);
     for (auto& v : voices) {
         const SampleData* s = v.sample;
         if (!s) continue;
         const float* P = pb ? pb + v.slot * kParams : kDefaultParams;
-        // per-callback parameters
-        float vol = P[P_VOL] <= -59.9f ? 0.f : std::pow(10.f, std::clamp(P[P_VOL], -60.f, 12.f) / 20.f);
-        float pan = std::clamp(P[P_PAN], -1.f, 1.f);
-        float gl = pan > 0.f ? 1.f - pan : 1.f;
-        float gr = pan < 0.f ? 1.f + pan : 1.f;
+        // ---- parameters read every callback (knob moves affect playing notes) ----
+        const float volDb = std::clamp(P[P_VOL], -60.f, 12.f);
+        const float vol = volDb <= -59.9f ? 0.f : std::pow(10.f, volDb / 20.f);
+        const float vv = std::clamp(P[P_VVOL], 0.f, 1.f);
+        const float velGain = 1.f - vv + vv * v.vel * v.vel;
+        const float basePan = std::clamp(P[P_PAN], -1.f, 1.f);
+        const float tune = std::clamp(P[P_TUNE], -48.f, 48.f);
         int ftype = int(P[P_FTYPE] + 0.5f);
-        float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f, fk = 2.f;
-        if (ftype >= 1 && ftype <= 3) {
-            float fc = std::clamp(P[P_CUT], 20.f, 20000.f);
-            float fg = std::tan(3.14159265f * std::min(fc, 0.45f * kSampleRate) / kSampleRate);
-            fk = 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
-            fa1 = 1.f / (1.f + fg * (fg + fk));
-            fa2 = fg * fa1;
-            fa3 = fg * fa2;
-        } else {
-            ftype = 0;
-        }
-        const float* d = s->data.data();
+        if (ftype < 1 || ftype > 4) ftype = 0;
+        const float baseCut = std::clamp(P[P_CUT], 20.f, 20000.f);
+        const float fk = 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
+        const float drive = std::clamp(P[P_DRIVE], 0.f, 1.f);
+        const float dg = 1.f + drive * 15.f;
+        const float dnorm = 1.f / std::tanh(dg);
+        const int engine = int(P[P_ENGINE] + 0.5f);
+        const float vStep = engine == 1 ? 26040.f / kSr : engine == 2 ? 40000.f / kSr : 0.f;
+        // envelopes (frames / per-sample coefficients)
+        const int attF = int(std::max(0.f, P[P_ATT]) * kSr);
+        const int holdF = int(std::max(0.f, P[P_HOLD]) * kSr);
+        const float decCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_DEC]) * kSr)));
+        const float sus = std::clamp(P[P_SUS], 0.f, 1.f);
+        const float relCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_REL]) * kSr)));
+        const int mAttF = int(std::max(0.f, P[P_MATT]) * kSr);
+        const float mDecCoef = float(std::exp(std::log(1e-3) / (std::max(0.005f, P[P_MDEC]) * kSr)));
+        const float mPitch = P[P_MPITCH], mCut = P[P_MCUT];
+        const int lWave = int(P[P_LWAVE] + 0.5f);
+        const float lInc = std::clamp(P[P_LRATE], 0.01f, 40.f) / kSr;
+        const float lPitch = P[P_LPITCH], lCut = P[P_LCUT];
+        const float lPan = std::clamp(P[P_LPAN], 0.f, 1.f), lVol = std::clamp(P[P_LVOL], 0.f, 1.f);
+        const float velCut = P[P_VCUT] * (v.vel - 1.f);
+        // loop (only with a releasing envelope, so a looped sound always ends)
         const int n = s->frames;
-        const bool st = s->channels == 2;
+        const bool loop = v.envType != 0 && P[P_LOOP] > 0.5f;
+        int ls = 0, le = 0, xf = 0;
+        if (loop) {
+            ls = std::clamp(int(std::clamp(P[P_LSTART], 0.f, 1.f) * n), v.startF, v.endF - 1);
+            le = std::clamp(int(std::clamp(P[P_LEND], 0.f, 1.f) * n), ls + 1, v.endF);
+            xf = std::min(int(std::clamp(P[P_XFADE], 0.f, 1.f) * float(le - ls)), ls);  // needs audio before ls
+        }
+        const double loopLen = double(le - ls);
+
+        const float* d = s->data.data();
         const int ch = s->channels;
         auto at = [&](int f, int c) { return d[std::clamp(f, 0, n - 1) * ch + c]; };
+        auto interp = [&](double pos, int c) {
+            int ip = int(std::floor(pos));
+            float t = float(pos - ip);
+            float y1 = at(ip, c);
+            if (t == 0.f) return y1;
+            float y0 = at(ip - 1, c), y2 = at(ip + 1, c), y3 = at(ip + 2, c);
+            float c1 = 0.5f * (y2 - y0);
+            float c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3;
+            float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+            return ((c3 * t + c2) * t + c1) * t + y1;
+        };
+
         int i = v.startOffset;
         v.startOffset = 0;
-        const float g = v.gain * vol;
-        const double step = v.rev ? -v.rate : v.rate;
         bool done = false;
-        for (; i < frames; i++) {
-            if (v.rev ? v.pos < double(v.startF) : v.pos >= double(v.endF)) { done = true; break; }
-            float env = 1.f;
-            if (v.fadeIn < kFadeIn) env = float(++v.fadeIn) / kFadeIn;
-            if (v.fadeOut >= 0) {
-                env *= float(v.fadeOut) / kFadeOut;
-                if (--v.fadeOut <= 0) { done = true; break; }
+        while (i < frames && !done) {
+            // ---- control-rate values for this block ----
+            float lfo;
+            switch (lWave) {
+                case 1: lfo = 1.f - 4.f * std::fabs(v.lfoPhase - 0.5f); break;           // triangle
+                case 2: lfo = 2.f * v.lfoPhase - 1.f; break;                               // saw
+                case 3: lfo = v.lfoPhase < 0.5f ? 1.f : -1.f; break;                       // square
+                case 4: lfo = v.lfoHeld; break;                                            // random
+                default: lfo = std::sin(6.2831853f * v.lfoPhase); break;                   // sine
             }
-            if (v.ahd) {
-                if (v.envStage == 0) {
-                    if (v.envCount >= v.attF) { v.envStage = 1; v.envCount = 0; v.envLevel = 1.f; }
-                    else v.envLevel = float(++v.envCount) / float(v.attF);
-                } else if (v.envStage == 1) {
-                    if (++v.envCount >= v.holdF) v.envStage = 2;
+            const float me = v.mLevel;
+            const double rate = std::pow(2.0, double(tune + me * mPitch + lfo * lPitch) / 12.0);
+            const double step = v.rev ? -rate : rate;
+            float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f;
+            if (ftype) {
+                float fc = baseCut * std::exp2(me * mCut + lfo * lCut + velCut);
+                fc = std::clamp(fc, 20.f, 0.45f * kSr);
+                float fg = std::tan(3.14159265f * fc / kSr);
+                fa1 = 1.f / (1.f + fg * (fg + fk));
+                fa2 = fg * fa1;
+                fa3 = fg * fa2;
+            }
+            const float pan = std::clamp(basePan + lfo * lPan, -1.f, 1.f);
+            const float trem = 1.f - lVol * (0.5f - 0.5f * lfo);
+            const float g = vol * velGain * trem;
+            const float gl = g * (pan > 0.f ? 1.f - pan : 1.f);
+            const float gr = g * (pan < 0.f ? 1.f + pan : 1.f);
+
+            const int blockEnd = std::min(frames, i + kBlock);
+            for (; i < blockEnd; i++) {
+                // end of the sample region / loop
+                if (v.rev) {
+                    if (v.pos < double(v.startF)) {
+                        if (loop) v.pos += loopLen; else { done = true; break; }
+                    } else if (loop && v.pos < double(ls)) v.pos += loopLen;
                 } else {
-                    v.envLevel *= v.decCoef;
-                    if (v.envLevel < 1e-4f) { done = true; break; }
+                    if (loop && v.pos >= double(le)) v.pos -= loopLen;
+                    if (v.pos >= double(v.endF)) { done = true; break; }
+                }
+                // gate (sequencer notes) and note-off
+                if (v.gate > 0 && --v.gate == 0) v.released = true;
+                else if (v.gate == 0) v.released = true;
+                // fades
+                float env = 1.f;
+                if (v.fadeIn < kFadeIn) env = float(++v.fadeIn) / kFadeIn;
+                if (v.fadeOut >= 0) {
+                    env *= float(v.fadeOut) / kFadeOut;
+                    if (--v.fadeOut <= 0) { done = true; break; }
+                }
+                // amp envelope
+                if (v.envType == 1) {  // AHD: ignores note-off
+                    if (v.envStage == 0) {
+                        if (v.envCount >= attF) { v.envStage = 1; v.envCount = 0; v.envLevel = 1.f; }
+                        else v.envLevel = float(++v.envCount) / float(attF);
+                    } else if (v.envStage == 1) {
+                        if (++v.envCount >= holdF) v.envStage = 2;
+                    } else {
+                        v.envLevel *= decCoef;
+                        if (v.envLevel < 1e-4f) { done = true; break; }
+                    }
+                } else if (v.envType == 2) {  // ADSR
+                    if (v.released && v.envStage < 4) v.envStage = 4;
+                    if (v.envStage == 0) {
+                        if (v.envCount >= attF) { v.envStage = 2; v.envLevel = 1.f; }
+                        else v.envLevel = float(++v.envCount) / float(attF);
+                    } else if (v.envStage == 2) {
+                        v.envLevel = sus + (v.envLevel - sus) * decCoef;
+                        if (std::fabs(v.envLevel - sus) < 1e-4f) v.envStage = 3;
+                    } else if (v.envStage == 4) {
+                        v.envLevel *= relCoef;
+                        if (v.envLevel < 1e-4f) { done = true; break; }
+                    }
                 }
                 env *= v.envLevel;
-            }
-            // 4-point Hermite interpolation (exact at rate 1, clean when pitched)
-            int ip = int(std::floor(v.pos));
-            float t = float(v.pos - ip);
-            float xs[2];
-            for (int c = 0; c < ch; c++) {
-                float y0 = at(ip - 1, c), y1 = at(ip, c), y2 = at(ip + 1, c), y3 = at(ip + 2, c);
-                if (t == 0.f) { xs[c] = y1; continue; }
-                float c1 = 0.5f * (y2 - y0);
-                float c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3;
-                float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-                xs[c] = ((c3 * t + c2) * t + c1) * t + y1;
-            }
-            if (!st) xs[1] = xs[0];
-            if (ftype) {
-                for (int c = 0; c < 2; c++) {
-                    float x = xs[c];
-                    float v3 = x - v.ic2[c];
-                    float v1 = fa1 * v.ic1[c] + fa2 * v3;
-                    float v2 = v.ic2[c] + fa2 * v.ic1[c] + fa3 * v3;
-                    v.ic1[c] = 2.f * v1 - v.ic1[c];
-                    v.ic2[c] = 2.f * v2 - v.ic2[c];
-                    xs[c] = ftype == 1 ? v2 : ftype == 2 ? fk * v1 : x - fk * v1 - v2;
+                // read the sample (crossfading into the loop start near the loop end)
+                float xs[2];
+                for (int c = 0; c < ch; c++) {
+                    float y = interp(v.pos, c);
+                    if (loop && xf > 0 && !v.rev && v.pos >= double(le - xf)) {
+                        float tt = float((v.pos - double(le - xf)) / double(xf));
+                        y = y * (1.f - tt) + interp(v.pos - loopLen, c) * tt;
+                    }
+                    xs[c] = y;
                 }
+                if (ch == 1) xs[1] = xs[0];
+                // vintage engines: reduced sample rate and 12-bit resolution
+                if (vStep > 0.f) {
+                    v.vPhase += vStep;
+                    if (v.vPhase >= 1.f) {
+                        v.vPhase -= 1.f;
+                        for (int c = 0; c < 2; c++) v.vHeld[c] = std::round(xs[c] * 2048.f) / 2048.f;
+                    }
+                    xs[0] = v.vHeld[0];
+                    xs[1] = v.vHeld[1];
+                }
+                if (drive > 0.001f)
+                    for (int c = 0; c < 2; c++) xs[c] = std::tanh(xs[c] * dg) * dnorm;
+                if (ftype) {
+                    for (int c = 0; c < 2; c++) {
+                        float x = xs[c];
+                        float v3 = x - v.ic2[c];
+                        float v1 = fa1 * v.ic1[c] + fa2 * v3;
+                        float v2 = v.ic2[c] + fa2 * v.ic1[c] + fa3 * v3;
+                        v.ic1[c] = 2.f * v1 - v.ic1[c];
+                        v.ic2[c] = 2.f * v2 - v.ic2[c];
+                        float y = ftype == 2 ? fk * v1 : ftype == 3 ? x - fk * v1 - v2 : v2;
+                        if (ftype == 4) {  // second low-pass stage: 24 dB/octave
+                            float w3 = y - v.jc2[c];
+                            float w1 = fa1 * v.jc1[c] + fa2 * w3;
+                            float w2 = v.jc2[c] + fa2 * v.jc1[c] + fa3 * w3;
+                            v.jc1[c] = 2.f * w1 - v.jc1[c];
+                            v.jc2[c] = 2.f * w2 - v.jc2[c];
+                            y = w2;
+                        }
+                        xs[c] = y;
+                    }
+                }
+                out[i * 2] += xs[0] * env * gl;
+                out[i * 2 + 1] += xs[1] * env * gr;
+                v.pos += step;
             }
-            float ge = g * env;
-            out[i * 2] += xs[0] * ge * gl;
-            out[i * 2 + 1] += xs[1] * ge * gr;
-            v.pos += step;
+            // ---- advance control-rate modulators by the block just rendered ----
+            const int adv = kBlock;
+            if (v.mStage == 0) {
+                v.mCount += adv;
+                if (v.mCount >= mAttF) { v.mStage = 1; v.mLevel = 1.f; }
+                else v.mLevel = float(v.mCount) / float(std::max(1, mAttF));
+            } else {
+                v.mLevel *= std::pow(mDecCoef, float(adv));
+            }
+            v.lfoPhase += lInc * adv;
+            if (v.lfoPhase >= 1.f) {
+                v.lfoPhase -= std::floor(v.lfoPhase);
+                v.rnd ^= v.rnd << 13; v.rnd ^= v.rnd >> 17; v.rnd ^= v.rnd << 5;
+                v.lfoHeld = float(v.rnd & 0xFFFF) / 32767.5f - 1.f;
+            }
         }
         if (done) v.sample = nullptr;
+        else if (v.slot < 32) active |= 1u << v.slot;
     }
+    activeSlots.store(active, std::memory_order_relaxed);
 
     // 4. master gain, soft clip, meter
     float g = masterGain.load(std::memory_order_relaxed);
@@ -1254,6 +1447,13 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
     long long p = gUsb.packetsIn.load(), f = gUsb.framesIn.load();
     if (p < 8000) return 0.0;
     return (double(f) / double(p) / (kSampleRate / 8000.0) - 1.0) * 1e6;
+}
+
+JNIEXPORT void JNICALL JNI_FN(nativeRelease)(JNIEnv*, jobject, jint slot) {
+    gEngine.pushTrigger(slot, 0.f, 1);
+}
+JNIEXPORT jint JNICALL JNI_FN(nativeActiveSlots)(JNIEnv*, jobject) {
+    return jint(gEngine.activeSlots.load());
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeSetParamBuffer)(JNIEnv* env, jobject, jobject buf) {

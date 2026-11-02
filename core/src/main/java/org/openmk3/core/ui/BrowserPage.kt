@@ -221,6 +221,13 @@ class BrowserPage(ui: Ui) : Page(ui) {
         ui.invalidate()
     }
 
+    override fun lights(l: Lights) {
+        l.set("BROWSER", true)
+        l.set("PLAY", ui.engine.playing)
+        l.set("SHIFT", shiftHeld)
+        l.set("STOP", "PAGE LEFT", "PAGE RIGHT", "SETTINGS")
+    }
+
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         ui.selectedSound = slot
         message = ""

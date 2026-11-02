@@ -97,6 +97,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         try {
             val now = SystemClock.uptimeMillis()
             if (page.tick(now)) dirty = true
+            if (!page.customLeds) applyLights()
             if (!dirty) return
             dirty = false
             page.draw(left.canvas, right.canvas, now)
@@ -138,6 +139,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     override fun onPadRelease(pad: Int) {
         val slot = map.hidPadToSlot(pad)
+        engine.release(slot)  // always: a missed note-off would leave a sustained sound hanging
         post { padPressure[slot] = 0; page.onPadRelease(slot, pad); dirty = true }
     }
 
@@ -157,6 +159,21 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     // LED helpers (UI thread)
     // =====================================================================================
 
+    private val lights = Lights()
+
+    /**
+     * Every button the page handles is lit: dim when available, bright when active / selected.
+     * Buttons that do nothing on this page stay dark, so the panel shows what works.
+     */
+    private fun applyLights() {
+        lights.clear()
+        page.lights(lights)
+        for ((name, idx) in map.buttonLeds) {
+            val v = lights.values[name] ?: 0
+            dev.setButtonLed(idx, v)
+        }
+    }
+
     fun buttonLed(name: String, value: Int) {
         map.buttonLeds[name]?.let { dev.setButtonLed(it, value) }
     }
@@ -168,8 +185,31 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
 }
 
+/** Button lights requested by a page (see [Page.lights]). */
+class Lights {
+    val values = HashMap<String, Int>()
+    fun clear() = values.clear()
+    /** A button this page handles: dim, or bright when [on]. */
+    fun set(name: String, on: Boolean = false) {
+        values[name] = if (name.startsWith("GROUP ")) {
+            org.openmk3.core.mk3.Mk3Colors.value(org.openmk3.core.mk3.Mk3Colors.RED, if (on) 2 else 0)
+        } else if (on) BRIGHT else DIM
+    }
+    fun set(vararg names: String) = names.forEach { set(it, false) }
+    /** Explicit LED value (colour buttons). */
+    fun raw(name: String, value: Int) { values[name] = value }
+    companion object {
+        const val DIM = 0x10
+        const val BRIGHT = 0x7F
+    }
+}
+
 /** Base class for everything shown on the two MK3 screens. All calls happen on the UI thread. */
 abstract class Page(val ui: Ui) {
+    /** Pages that drive button LEDs themselves (setup wizard, palette) set this. */
+    open val customLeds = false
+    /** Declare the buttons this page handles and which are active (called every frame). */
+    open fun lights(l: Lights) {}
     /** If true, pad hits play sounds directly from the input thread. */
     open val playsPads = false
     open fun onEnter() {}
