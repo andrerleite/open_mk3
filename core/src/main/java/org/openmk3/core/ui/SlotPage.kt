@@ -178,7 +178,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         val d = if (lenAcc > 0) 1 else -1
         lenAcc = 0
         val cur = p.length(g)
-        val next = if (shift) cur + d else (if (d > 0) (cur / 16 + 1) * 16 else ((cur - 1) / 16) * 16)
+        val a = ui.arrangeGrid
+        val next = if (shift) cur + d else (if (d > 0) (cur / a + 1) * a else ((cur - 1) / a) * a)
         p.setLength(g, next.coerceIn(1, Pattern.STEPS))
         message = "Length ${lengthText(p.length(g))}"
         p.save(ui.ctx)

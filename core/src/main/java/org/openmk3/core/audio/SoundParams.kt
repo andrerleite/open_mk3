@@ -94,6 +94,8 @@ class SoundParams {
         const val FMATT = 54
         const val FMREL = 55
         const val FMFB = 56
+        const val CHOKE = 57
+        const val LINK = 58
 
         const val SRC_SAMPLER = 0
         const val SRC_SYNTH = 1
@@ -172,6 +174,8 @@ class SoundParams {
             Def(FMBRIGHT, "BRIGHTNESS", -1f, 1f, 0f, 0.002f, ::pct),
             Def(FMATT, "ATTACK", -1f, 1f, 0f, 0.002f, ::pct),
             Def(FMREL, "RELEASE", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(CHOKE, "CHOKE", 0f, 16f, 0f, 1f, { "" }, choices = listOf("OFF") + (1..16).map { "$it" }),
+            Def(LINK, "LINK", 0f, 16f, 0f, 1f, { "" }, choices = listOf("OFF") + (1..16).map { "$it" }),
             Def(FMFB, "FEEDBACK", -1f, 7f, -1f, 0.02f, { v -> if (v < -0.5f) "PATCH" else "${v.roundToInt()}" }),
             // synth
             Def(SMODEL, "MODEL", 0f, 23f, 8f, 1f, { "" }, choices = MODELS),

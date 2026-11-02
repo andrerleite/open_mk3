@@ -97,7 +97,7 @@ class EventsPage(ui: Ui, private val back: Page) : Page(ui) {
         if (selected.isEmpty()) return
         when (knob) {
             0 -> if (shift) { p.move(selected, delta / 400f); changed(null) }
-                 else notch(0, delta).takeIf { it != 0 }?.let { p.move(selected, it.toFloat()); changed("Moved ${if (it > 0) "right" else "left"}") }
+                 else notch(0, delta).takeIf { it != 0 }?.let { p.move(selected, it * ui.nudgeGrid); changed("Moved ${if (it > 0) "right" else "left"}") }
             1 -> notch(1, delta).takeIf { it != 0 }?.let { d -> selected.forEach { p.transpose(it, d) }; changed("Transposed ${if (d > 0) "+1" else "−1"}") }
             2 -> { p.addVelocity(selected, delta / 400f); changed(null) }
             3 -> if (shift) { p.addLength(selected, delta / 400f); changed(null) }

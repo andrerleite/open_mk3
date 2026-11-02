@@ -56,6 +56,28 @@ class HomePage(ui: Ui) : Page(ui) {
         val st = pattern.stepOf(ui.group)
         return if (st >= 0 && st / 16 == viewPage) st % 16 else -1
     }
+    // STEP pads follow the step grid (SHIFT + FOLLOW): 1/16 by default, finer or coarser
+    private val g get() = ui.stepGrid
+    private val stepPagesN get() = kotlin.math.ceil(pattern.length(ui.group) / (16f * g)).toInt().coerceAtLeast(1)
+    private val stepViewPage: Int get() {
+        val st = pattern.stepOf(ui.group)
+        return (if (ui.follow && st >= 0) (st / (16f * g)).toInt() else stepPage).coerceIn(0, stepPagesN - 1)
+    }
+    /** Position (in 16ths) of a step pad. */
+    private fun padPos(slot: Int) = (stepViewPage * 16 + stepForSlot(slot)) * g
+    /** The step holding a note at [pos] (start matching within a hair), or null. */
+    private fun noteAtPos(sound: Int, pos: Float): Int? {
+        val c = kotlin.math.floor(pos).toInt()
+        if (c >= pattern.length(ui.group)) return null
+        return if (pattern.hasStep(sound, c) && kotlin.math.abs(pattern.noteOffset(sound, c) - (pos - c)) < 0.02f) c else null
+    }
+    /** Pad index (step order) under the playhead on the step page shown, or -1. */
+    private val stepPlayPad: Int get() {
+        val st = pattern.stepOf(ui.group)
+        if (st < 0) return -1
+        val i = kotlin.math.floor((st - stepViewPage * 16 * g) / g).toInt()
+        return if (i in 0 until 16) i else -1
+    }
     private var lastMeter = -1
     private val lastLed = IntArray(16) { -1 }
     private val pattern get() = ui.engine.pattern
@@ -184,13 +206,16 @@ class HomePage(ui: Ui) : Page(ui) {
                 }
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
-                    val abs = viewPage * 16 + s
-                    val on = abs < pattern.length(ui.group) && p.hasStep(sd(selected), abs)
+                    val pos = padPos(slot)
+                    val cell = noteAtPos(sd(selected), pos)
+                    val on = cell != null
                     val sc = ui.soundColour(sd(selected))
+                    val head = s == stepPlayPad
                     when {
-                        flash && s == step && on -> Mk3Colors.value(sc, 3)
-                        flash && s == step -> Mk3Colors.value(Mk3Colors.WHITE, 0)
-                        on -> Mk3Colors.value(sc, if (p.vel(sd(selected), abs) > 0.7f) 2 else 1)
+                        pos >= pattern.length(ui.group) -> 0
+                        flash && head && on -> Mk3Colors.value(sc, 3)
+                        flash && head -> Mk3Colors.value(Mk3Colors.WHITE, 0)
+                        on -> Mk3Colors.value(sc, if (p.vel(sd(selected), cell!!) > 0.7f) 2 else 1)
                         else -> 0
                     }
                 }
@@ -255,16 +280,22 @@ class HomePage(ui: Ui) : Page(ui) {
                     for ((snd, note) in ui.notesForPad(slot)) record(snd, v, note, slot)
                 }
             }
-            else -> { // STEP mode
-                val s = viewPage * 16 + stepForSlot(slot)
-                if (s >= pattern.length(ui.group)) return
+            else -> { // STEP mode (pads = steps of the step grid)
+                val pos = padPos(slot)
+                if (pos >= pattern.length(ui.group)) return
                 val sound = sd(selected)
                 stepEdited = false
+                val cell = noteAtPos(sound, pos)
                 when {
-                    erase -> { p.clearStep(sound, s); changed() }
+                    erase -> { if (cell != null) { p.clearStep(sound, cell); changed() } }
                     // an existing step goes on release, unless it was edited while held
-                    p.hasStep(sound, s) -> stepRemove[slot] = s
-                    else -> { p.recordNote(sound, s, Pattern.ROOT, velocity); changed() }
+                    cell != null -> stepRemove[slot] = cell
+                    else -> {
+                        val c = kotlin.math.floor(pos).toInt()
+                        if (p.hasStep(sound, c)) p.clearStep(sound, c)  // one note start per 16th cell
+                        p.recordNote(sound, c, ui.keys.groupBase[ui.group], velocity, pos - c, g.coerceAtMost(1f))
+                        changed()
+                    }
                 }
             }
         }
@@ -346,9 +377,14 @@ class HomePage(ui: Ui) : Page(ui) {
             "TEMPO" -> encMode = if (shift) Enc.TUNE else Enc.TEMPO
             "STEP" -> mode = Mode.STEP  // PAD MODE / KEYBOARD / CHORDS leave it
             "KEYBOARD", "CHORDS" -> mode = Mode.PAD  // leave STEP: pads play notes / chords
+            "D5", "D6", "D7", "D8" -> if (ui.padParams && ui.padMode == Ui.PadMode.PAD && mode == Mode.PAD) {
+                val d = mapOf("D5" to -12, "D6" to -1, "D7" to 1, "D8" to 12)[name]!!
+                ui.keys.groupBase[ui.group] = (ui.keys.groupBase[ui.group] + d).coerceIn(0, 127)
+                ui.keys.save(ui.ctx)
+            }
             "PAD MODE" -> mode = Mode.PAD
-            "PAGE LEFT" -> if (mode == Mode.STEP) { stepPage = (viewPage - 1).coerceAtLeast(0); ui.follow = false } else selected = (selected + 15) % 16
-            "PAGE RIGHT" -> if (mode == Mode.STEP) { stepPage = (viewPage + 1).coerceAtMost(pages - 1); ui.follow = false } else selected = (selected + 1) % 16
+            "PAGE LEFT" -> if (mode == Mode.STEP) { stepPage = (stepViewPage - 1).coerceAtLeast(0); ui.follow = false } else selected = (selected + 15) % 16
+            "PAGE RIGHT" -> if (mode == Mode.STEP) { stepPage = (stepViewPage + 1).coerceAtMost(stepPagesN - 1); ui.follow = false } else selected = (selected + 1) % 16
             "SETTINGS" -> ui.show(SettingsPage(ui))
             "BROWSER" -> ui.show(BrowserPage(ui))
             "SAMPLING" -> ui.show(SamplingPage(ui))
@@ -359,6 +395,51 @@ class HomePage(ui: Ui) : Page(ui) {
     private var keyAcc = 0
 
     /** KEYBOARD / CHORDS knobs: K1 root, K2 scale, K3 octave; CHORDS: K5 mode, K6 type / set. */
+    /** PAD MODE settings: K1 choke group, K2 link group (focused sound); D5-D8 base key. */
+    private fun padSettingsKnob(knob: Int, delta: Int): Boolean {
+        if (mode == Mode.STEP || !ui.padParams || ui.padMode != Ui.PadMode.PAD) return false
+        keyAcc += delta
+        if (kotlin.math.abs(keyAcc) < 25) return true
+        val d = if (keyAcc > 0) 1 else -1
+        keyAcc = 0
+        val sp = ui.engine.params
+        val snd = sd(selected)
+        val idx = when (knob) { 0 -> org.openmk3.core.audio.SoundParams.CHOKE; 1 -> org.openmk3.core.audio.SoundParams.LINK; else -> return true }
+        sp[snd, idx] = (sp[snd, idx] + d).coerceIn(0f, 16f)
+        sp.save(ui.ctx)
+        return true
+    }
+
+    private fun drawPadSettings(l: Canvas, r: Canvas) {
+        val K = org.openmk3.core.audio.Keys
+        val sp = ui.engine.params
+        val e = ui.engine
+        l.drawColor(Theme.BG)
+        r.drawColor(Theme.BG)
+        val dl = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
+        r.drawText("−OCT", 60f, 24f, dl); r.drawText("−1", 180f, 24f, dl); r.drawText("+1", 300f, 24f, dl); r.drawText("+OCT", 420f, 24f, dl)
+        l.drawText("PAD MODE · GROUP ${ui.groupLetter}", 16f, 56f, title)
+        l.drawText("Base key ${K.noteName(ui.keys.groupBase[ui.group])} (D5–D8)", 16f, 90f, value)
+        l.drawRoundRect(RectF(16f, 104f, 40f, 128f), 4f, 4f, colourPaint)
+        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 124f, value)
+        l.drawText("Choke: a sound silences the others of its group", 16f, 160f, label)
+        l.drawText("Link: linked pads play together", 16f, 180f, label)
+        val choke = sp.display(sd(selected), org.openmk3.core.audio.SoundParams.CHOKE)
+        val link = sp.display(sd(selected), org.openmk3.core.audio.SoundParams.LINK)
+        knobLabel(l, 0, "CHOKE", choke)
+        knobLabel(l, 1, "LINK", link)
+        val w = 112f; val h = 44f
+        for (slot in 0 until 16) {
+            val col = slot % 4; val row = 3 - slot / 4
+            val x = 8f + col * (w + 4f); val y = 40f + row * (h + 4f)
+            val s = sd(slot)
+            r.drawRoundRect(RectF(x, y, x + w, y + h), 5f, 5f, if (slot == selected) paintOf(s) else keyCell)
+            r.drawText(fitEnd(e.kit[s].name.ifEmpty { "—" }, keyDim, w - 8f), x + w / 2, y + 18f, keyDim)
+            val c = sp[s, org.openmk3.core.audio.SoundParams.CHOKE].toInt(); val k = sp[s, org.openmk3.core.audio.SoundParams.LINK].toInt()
+            r.drawText((if (c > 0) "C$c " else "") + (if (k > 0) "L$k" else ""), x + w / 2, y + 36f, keyName)
+        }
+    }
+
     private fun keysKnob(knob: Int, delta: Int): Boolean {
         if (mode == Mode.STEP || !ui.padParams || (ui.padMode != Ui.PadMode.KEYBOARD && ui.padMode != Ui.PadMode.CHORDS)) return false
         keyAcc += delta
@@ -383,6 +464,7 @@ class HomePage(ui: Ui) : Page(ui) {
 
     override fun onKnob(knob: Int, delta: Int) {
         if (keysKnob(knob, delta)) return
+        if (padSettingsKnob(knob, delta)) return
         val e = ui.engine
         when (knob) {
             0 -> e.masterGain = (e.masterGain + delta / 300f).coerceIn(0f, 1.5f)
@@ -401,8 +483,8 @@ class HomePage(ui: Ui) : Page(ui) {
         // STEP mode: hold a step and turn: VOLUME = velocity, SWING = position, TEMPO = pitch
         val heldStep = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
         if (mode == Mode.STEP && heldStep != null) {
-            val st = viewPage * 16 + stepForSlot(heldStep)
             val snd = sd(selected)
+            val st = noteAtPos(snd, padPos(heldStep)) ?: return
             when (encMode) {
                 Enc.VOLUME -> pattern.editStep(snd, st, velDelta = delta * 0.03f)
                 Enc.SWING -> pattern.editStep(snd, st, posDelta = delta * 0.05f)
@@ -584,6 +666,7 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
+        if (mode != Mode.STEP && ui.padParams && ui.padMode == Ui.PadMode.PAD) { drawPadSettings(l, r); return }
         if (mode != Mode.STEP && ui.padParams && ui.padMode != Ui.PadMode.PAD) { drawKeys(l, r); return }
         drawLeft(l)
         drawGrid(r)

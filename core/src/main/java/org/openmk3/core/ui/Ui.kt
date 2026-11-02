@@ -209,6 +209,11 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
     }
 
+    /** Step grid (16ths per STEP pad), nudge grid (EVENTS position) and arrange grid (pattern length). */
+    @Volatile var stepGrid = 1f
+    @Volatile var nudgeGrid = 1f
+    @Volatile var arrangeGrid = 16
+
     /** FOLLOW: step pages follow the playhead. */
     @Volatile var follow = true
     /** Snap sample markers (start, end, loop, slices) to zero crossings. */
@@ -237,10 +242,17 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     /** The (sound, note) pairs pad [slot] plays in the current pad mode. */
     fun notesForPad(slot: Int): List<Pair<Int, Int>> = when (padMode) {
-        PadMode.PAD -> listOf(snd(slot) to 60)
+        PadMode.PAD -> {
+            // the pad, plus every sound of the group in the same link group
+            val base = keys.groupBase[group]
+            val me = snd(slot)
+            val link = engine.params[me, org.openmk3.core.audio.SoundParams.LINK].toInt()
+            if (link <= 0) listOf(me to base)
+            else (0 until 16).map { snd(it) }.filter { it == me || engine.params[it, org.openmk3.core.audio.SoundParams.LINK].toInt() == link }.map { it to base }
+        }
         PadMode.KEYBOARD -> listOf(selectedIndex to keys.noteFor(slot))
         PadMode.CHORDS -> keys.chordFor(slot).map { selectedIndex to it }
-        PadMode.VEL16 -> listOf(selectedIndex to 60)
+        PadMode.VEL16 -> listOf(selectedIndex to keys.groupBase[group])
     }
 
     /** 16 VEL: pad 1 is the softest, pad 16 the hardest. */
@@ -523,7 +535,14 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     dirty = true
                     return@post
                 }
-                "FOLLOW" -> { follow = !follow; dirty = true; return@post }
+                "FOLLOW" -> {
+                    val cur = page
+                    if (cur is GridPage) cur.back()
+                    else if (shiftHeld) show(GridPage(this, cur))  // SHIFT + FOLLOW: grids (stays until pressed again)
+                    else follow = !follow
+                    dirty = true
+                    return@post
+                }
                 "MIXER" -> { if (page is MixerPage) showHome() else show(MixerPage(this)); return@post }
                 "FILE" -> {
                     if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
@@ -577,7 +596,11 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     setPadMode(m)
                     pushRepeat()
                 }
-                "PAD MODE" -> { setPadMode(PadMode.PAD); padParams = false; pushRepeat() }
+                "PAD MODE" -> {
+                    padParams = if (shiftHeld) false else if (padMode == PadMode.PAD) !padParams else true
+                    setPadMode(PadMode.PAD)
+                    pushRepeat()
+                }
             }
             if (name == "FIXED VEL" && !page.handlesFixedVel) {
                 fixedVel = !fixedVel

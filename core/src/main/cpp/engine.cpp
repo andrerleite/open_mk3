@@ -170,6 +170,7 @@ enum {
     P_FMATT = 54,   // FM: attack -1..1
     P_FMREL = 55,   // FM: release -1..1
     P_FMFB = 56,    // FM: feedback 0..7, < 0 = the patch's
+    P_CHOKE = 57,   // choke group 1..16 (0 = the sound's default: none, or built-in hats)
 };
 static float kDefaultParams[kParams];
 static bool initDefaults() {
@@ -195,6 +196,7 @@ struct Voice {
     int slot = -1;
     uint64_t age = 0;
     int note = kRootNote;
+    int choke = 0;
     int64_t startAt = 0;
     bool fromSeq = false;
     int gate = -1;        // frames until note-off (sequencer), -1 = held until released
@@ -696,10 +698,11 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
         if (count < poly || !oldestOfSlot) break;
         oldestOfSlot->fadeOut = kFadeOut;
     }
-    if (s->choke != 0) {
-        // e.g. closed hat silences open hat: fade instead of cutting
+    const int choke = P[P_CHOKE] > 0.5f ? std::clamp(int(P[P_CHOKE] + 0.5f), 1, 16) : s->choke;
+    if (choke != 0) {
+        // a sound silences the others of its choke group (e.g. closed hat -> open hat): fade, not cut
         for (auto& v : voices)
-            if (v.sample && v.slot != slot && v.sample->choke == s->choke && v.fadeOut < 0) v.fadeOut = kFadeOut;
+            if (v.sample && v.slot != slot && v.choke == choke && v.fadeOut < 0) v.fadeOut = kFadeOut;
     }
     // A free voice, else the oldest one (with 32 voices this is rare).
     Voice* best = nullptr;
@@ -757,6 +760,7 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     v.age = ++voiceAge;
     v.fromSeq = fromSeq;
     v.note = std::clamp(note, 0, 127);
+    v.choke = choke;
     v.startAt = startAt;
     v.gate = gate;
     v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);

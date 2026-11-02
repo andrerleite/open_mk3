@@ -85,6 +85,7 @@ class Keys {
                     k.chordMode = j.optInt("chordMode", 0).coerceIn(0, 1)
                     k.chordType = j.optInt("chordType", 2).coerceIn(0, CHORD_TYPES.size - 1)
                     k.chordSet = j.optInt("chordSet", 0).coerceIn(0, CHORD_SETS.size - 1)
+                    j.optJSONArray("groupBase")?.let { a -> for (g in 0 until minOf(8, a.length())) k.groupBase[g] = a.getInt(g).coerceIn(0, 127) }
                 }
             } catch (e: Exception) {
                 AppLog.i("keys.json unreadable: $e")
@@ -99,6 +100,8 @@ class Keys {
     var chordMode = 0     // 0 harmonizer (chords from the scale), 1 chord set
     var chordType = 2
     var chordSet = 0
+    /** Base key of each group in pad mode: the note every pad plays (60 = as sampled). */
+    val groupBase = IntArray(8) { 60 }
 
     /** MIDI note of pad 1. */
     val baseNote get() = (12 * (octave + 2) + root).coerceIn(0, 127)
@@ -157,6 +160,7 @@ class Keys {
             file(ctx).writeText(JSONObject().apply {
                 put("root", root); put("octave", octave); put("scale", scale)
                 put("chordMode", chordMode); put("chordType", chordType); put("chordSet", chordSet)
+                put("groupBase", org.json.JSONArray(groupBase.toList()))
             }.toString())
         } catch (e: Exception) {
             AppLog.i("keys.json save failed: $e")

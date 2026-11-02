@@ -27,13 +27,13 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | TAP | Tap tempo | ✅ |
 | SHIFT + TAP (Metro) | Metronome on / off | ✅ |
 | FOLLOW | Step pages follow the playhead | ✅ |
-| SHIFT + FOLLOW (Grid) | Grid / quantise settings | ⬜ |
+| SHIFT + FOLLOW (Grid) | Grids: D3 arrange (pattern length steps), D4 step (what a STEP pad is: 1/4 … 1/64, triplets), D5 nudge (EVENTS position); pads choose; FOLLOW: back | ✅ |
 
 ## Pad modes (buttons above the pads)
 
 | Control | Function | Status |
 |---|---|---|
-| PAD MODE | Pads play the 16 sounds of the focused group | ✅ |
+| PAD MODE | Pads play the group's 16 sounds. Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound); press again: hide them | ✅ |
 | KEYBOARD | Pads play the focused sound as notes. Press: switch and show the settings; press again: hide them (pads stay); SHIFT + KEYBOARD: switch without settings. PAD MODE returns to sounds. | ✅ |
 | CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
@@ -55,7 +55,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SELECT + pad | Focus a sound without playing it | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
-| SHIFT + MUTE (Choke) | Choke groups setup | ⬜ (fixed hat choke today) |
+| SHIFT + MUTE (Choke) | Choke groups setup | 🟡 (choke and link groups on the PAD MODE page) |
 
 ## Groups
 
