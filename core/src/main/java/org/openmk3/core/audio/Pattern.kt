@@ -136,7 +136,8 @@ class Pattern {
         private const val OFF_GFILT = OFF_GPAN + GROUPS
         private const val OFF_METROVOL = OFF_GFILT + GROUPS
         private const val OFF_COUNTBARS = OFF_METROVOL + 1
-        private const val OFF_BANKS = OFF_GFILT + GROUPS + 6
+        private const val OFF_GSWING = OFF_GFILT + GROUPS + 6
+        private const val OFF_BANKS = OFF_GSWING + GROUPS
         private const val B_VEL = 0
         private const val B_NOTE = B_VEL + PADS * STEPS
         private const val B_XVEL = B_NOTE + PADS * STEPS
@@ -198,6 +199,9 @@ class Pattern {
     fun groupVolume(g: Int) = f.get(OFF_GVOL + g)
     fun setGroupVolume(g: Int, db: Float) = f.put(OFF_GVOL + g, db.coerceIn(-60f, 12f))
     fun groupPan(g: Int) = f.get(OFF_GPAN + g)
+    /** Extra swing of a group (CHANNEL groove), 0..0.5, added to the project swing. */
+    fun groupSwing(g: Int) = f.get(OFF_GSWING + g)
+    fun setGroupSwing(g: Int, v: Float) = f.put(OFF_GSWING + g, v.coerceIn(0f, 0.5f))
     fun setGroupPan(g: Int, v: Float) = f.put(OFF_GPAN + g, v.coerceIn(-1f, 1f))
     /** Performance filter of a group: -1 low-pass .. 0 off .. 1 high-pass. */
     fun setGroupFilter(g: Int, v: Float) = f.put(OFF_GFILT + g, v.coerceIn(-1f, 1f))
@@ -676,6 +680,7 @@ class Pattern {
         put("groupSolo", JSONArray(groupSolo.toList()))
         put("groupVolume", JSONArray((0 until GROUPS).map { groupVolume(it).toDouble() }))
         put("groupPan", JSONArray((0 until GROUPS).map { groupPan(it).toDouble() }))
+        put("groupSwing", JSONArray((0 until GROUPS).map { groupSwing(it).toDouble() }))
         put("groups", JSONArray().apply {
             for (g in 0 until GROUPS) put(JSONObject().apply {
                 put("current", current[g])
@@ -702,6 +707,7 @@ class Pattern {
         j.optJSONArray("groupSolo")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) groupSolo[g] = a.getBoolean(g) }
         j.optJSONArray("groupVolume")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupVolume(g, a.getDouble(g).toFloat()) }
         j.optJSONArray("groupPan")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupPan(g, a.getDouble(g).toFloat()) }
+        j.optJSONArray("groupSwing")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupSwing(g, a.getDouble(g).toFloat()) }
         for (g in 0 until GROUPS) { patterns[g].fill(null); current[g] = -1; queued[g] = -1 }
         scenes.fill(null)
         if (j.optInt("version", 1) >= 3) {

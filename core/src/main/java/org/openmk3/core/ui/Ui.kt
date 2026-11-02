@@ -214,6 +214,25 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var nudgeGrid = 1f
     @Volatile var arrangeGrid = 16
 
+    // ---- MACRO: 8 macros per group, each (sound, parameter); saved as macros.json ----
+    val macros = Array(8) { IntArray(16) { -1 } }
+    /** Macro waiting for its parameter (group * 8 + macro), -1 = none. */
+    @Volatile var macroLearn = -1
+
+    private fun macroFile() = java.io.File(ctx.filesDir, "macros.json")
+    fun saveMacros() {
+        try { macroFile().writeText(org.json.JSONArray(macros.map { org.json.JSONArray(it.toList()) }).toString()) } catch (_: Exception) {}
+    }
+    private fun loadMacros() {
+        try {
+            val f = macroFile()
+            if (!f.exists()) return
+            val a = org.json.JSONArray(f.readText())
+            for (g in 0 until minOf(8, a.length())) { val r = a.getJSONArray(g); for (i in 0 until minOf(16, r.length())) macros[g][i] = r.getInt(i) }
+        } catch (_: Exception) {}
+    }
+    init { loadMacros() }
+
     // ---- AUTO: knob moves are recorded into the playing pattern ----
     @Volatile var autoHeld = false
     @Volatile var autoPinned = false
@@ -223,6 +242,16 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     /** Call after a sound parameter changed on a knob: records or erases its automation. */
     fun autoWrite(sound: Int, param: Int) {
+        // MACRO set: the parameter just turned becomes the waiting macro's target
+        if (macroLearn >= 0) {
+            val g = macroLearn / 8; val i = macroLearn % 8
+            macros[g][i * 2] = sound; macros[g][i * 2 + 1] = param
+            macroLearn = -1
+            saveMacros()
+            AppLog.i("Macro ${i + 1} (group ${'A' + g}) = ${org.openmk3.core.audio.soundLabel(sound)} ${org.openmk3.core.audio.SoundParams.DEFS[param]?.name}")
+            show(MacroPage(this, true))
+            return
+        }
         val p = engine.pattern
         if (eraseHeld) { if (p.hasAutomation(sound, param)) { p.clearAutomation(sound / 16, sound, param); p.save(ctx) }; return }
         if (!autoActive || !engine.playing) return
@@ -570,6 +599,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "MIXER" -> { if (page is MixerPage) showHome() else show(MixerPage(this)); return@post }
+                "CHANNEL" -> { if (page is ChannelPage) showHome() else show(ChannelPage(this)); return@post }
+                "MACRO" -> { if (page is MacroPage) showHome() else show(MacroPage(this, shiftHeld)); return@post }
                 "FILE" -> {
                     if (shiftHeld) quickSave() else if (page is FilePage) showHome() else show(FilePage(this))
                     return@post
@@ -693,6 +724,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("NOTE REPEAT", repeatActive)
         lights.set("TAP", engine.pattern.metronome)
         lights.set("AUTO", autoActive)
+        lights.set("CHANNEL", page is ChannelPage)
+        lights.set("MACRO", page is MacroPage || macroLearn >= 0)
         lights.set("PITCH", stripMode == StripMode.PITCH)
         lights.set("MOD", stripMode == StripMode.MOD)
         lights.set("PERFORM", stripMode == StripMode.PERFORM)

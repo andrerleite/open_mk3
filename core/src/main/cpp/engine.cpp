@@ -71,7 +71,8 @@ constexpr int OFF_GPAN = OFF_GVOL + kGroups;              // kGroups: group pan 
 constexpr int OFF_GFILT = OFF_GPAN + kGroups;             // kGroups: performance filter (-1 LP .. 0 off .. 1 HP)
 constexpr int OFF_METROVOL = OFF_GFILT + kGroups;        // metronome level 0..1
 constexpr int OFF_COUNTBARS = OFF_METROVOL + 1;           // count-in length in bars (1, 2, 4)
-constexpr int OFF_BANKS = OFF_GFILT + kGroups + 6;
+constexpr int OFF_GSWING = OFF_GFILT + kGroups + 6;       // kGroups: extra swing per group (CHANNEL groove)
+constexpr int OFF_BANKS = OFF_GSWING + kGroups;
 // per bank (pad = 0..15 within the group, cell = pad * kSteps + step)
 constexpr int B_VEL = 0;
 constexpr int B_NOTE = B_VEL + kPads * kSteps;
@@ -912,7 +913,9 @@ void Engine::runSequencer(int frames) {
                 const int chord = (v > 0.f) + extras;
                 float nl = bk[B_NLEN + cell];
                 const int gate = std::max(16, int((nl > 0.f ? nl : 1.f) * stepLen));
-                const float noff = std::clamp(bk[B_OFF + cell], 0.f, 0.999f);
+                // the note's own offset plus the group's extra swing on odd 16ths
+                const float gsw = (n & 1) ? std::clamp(p[OFF_GSWING + g], 0.f, 0.5f) : 0.f;
+                const float noff = std::clamp(bk[B_OFF + cell] + gsw, 0.f, 1.499f);
                 auto fire = [&](float vel, int note) {
                     if (noff < 0.001f) { startVoice(s, vel, int(off), gate, true, note, chord); return; }
                     if (pendCount < kPending) pend[pendCount++] = {t + noff, s, vel, note, chord, gate};
