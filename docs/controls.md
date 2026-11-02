@@ -37,7 +37,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | KEYBOARD | Pads play the focused sound chromatically | ⬜ |
 | CHORDS | Pads play chords of the focused sound | ⬜ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
-| FIXED VEL | Pads ignore pressure (full velocity) | ✅ |
+| FIXED VEL | Pads ignore pressure (full velocity), on every page | ✅ |
 | SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities | ⬜ |
 
 ## Pattern and arrangement buttons (left of the pads)
@@ -53,15 +53,16 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | DUPLICATE + pad | Duplicate a sound, pattern or scene onto another pad | ⬜ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ⬜ |
 | SELECT + pad | Focus a sound without playing it | ✅ |
-| SOLO + pad | Solo a sound (or a group with group buttons) | ✅ (sounds) |
-| MUTE + pad | Mute a sound (or a group with group buttons) | ✅ (sounds) |
+| SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
+| MUTE + pad | Mute a sound (or a group with group buttons) | ✅ |
 | SHIFT + MUTE (Choke) | Choke groups setup | ⬜ (fixed hat choke today) |
 
 ## Groups
 
 | Control | Function | Status |
 |---|---|---|
-| GROUP A–H | Focus a group. Pads then play its sounds. | ⬜ (single group today, A lit) |
+| GROUP A–H | Focus a group. Pads then play its 16 sounds; every group's pattern plays together. | ✅ |
+| MUTE / SOLO + group | Mute / solo a whole group | ✅ |
 | SHIFT + group | Group options (copy, clear, colour) | ⬜ |
 
 ## SHIFT + pad shortcuts (printed on the pads)
@@ -134,7 +135,9 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 ## Sampling page (SAMPLING)
 
-D1–D3 choose the tab. Hold SHIFT for fine knob steps.
+D1–D3 choose the tab. Hold SHIFT for fine knob steps. In EDIT and SLICE: encoder turn zooms
+the waveform around the marker you moved last, tilting the encoder left / right scrolls, D4
+toggles zero-crossing snap (start, end and slice points), and a playhead follows playback.
 
 | Tab | Controls |
 |---|---|
@@ -147,6 +150,9 @@ Planned: ZONE tab (multi-sample mapping) together with KEYBOARD mode.
 ## Sampler parameters (PLUG-IN, full app)
 
 ◀ ▶ or D1–D7 choose the page. Hold SHIFT for fine steps; SHIFT + touching a knob resets it.
+On VOICE and SAMPLE the waveform shows a playhead; the encoder zooms, tilt scrolls, and on
+SAMPLE D8 toggles zero-crossing snap for start, end and loop points (markers then move
+relative to the zoomed view).
 Pads focus (and play) a sound. Settings are saved per pad. Loading a new sample resets
 start, end and loop points. Values that do nothing with the current settings are shown dimmed.
 

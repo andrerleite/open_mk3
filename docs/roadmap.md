@@ -15,7 +15,7 @@ full app.
    - Per-sound tune, volume, pan, start/end, decay/envelope, filter and reverse.
    - Shown on the screens and set with the knobs.
    - Pages via ◀ ▶.
-4. **Groups**
+4. **Groups** — done in 0.5.0 (patterns per group come with step 5)
    - 8 groups × 16 sounds.
    - Group buttons, group mute/solo, choke groups.
 5. **Patterns, scenes, arranger**
