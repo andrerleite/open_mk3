@@ -59,6 +59,12 @@ class WaveView {
 
     private val waveIn = Theme.fill(Color.rgb(90, 200, 120))
     private val waveOut = Theme.fill(Color.rgb(50, 70, 60))
+
+    /** Draws the waveform in [rgb] (the pad's colour); outside the selection, dimmed. */
+    fun setColour(rgb: Int) {
+        waveIn.color = rgb
+        waveOut.color = Color.rgb(Color.red(rgb) * 3 / 10 + 10, Color.green(rgb) * 3 / 10 + 10, Color.blue(rgb) * 3 / 10 + 14)
+    }
     private val marker = Theme.fill(Theme.ACCENT)
     private val loopFill = Theme.fill(Color.rgb(80, 160, 255))
     private val head = Theme.fill(Color.WHITE)

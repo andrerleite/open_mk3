@@ -215,7 +215,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
             "ENCODER UP" -> move(-1)
             "ENCODER DOWN" -> move(1)
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
-            "STOP" -> e.transportStop()
+            "STOP" -> e.stopPressed()
             "BROWSER", "SETTINGS" -> ui.showHome()
         }
         ui.invalidate()

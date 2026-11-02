@@ -386,8 +386,18 @@ class SamplingPage(ui: Ui) : Page(ui) {
         return true
     }
 
+    /** D7: play the edit; press again while it plays to stop it. */
+    private fun previewToggle() {
+        if (ui.engine.isSounding(AudioEngine.PREVIEW_SLOT)) ui.engine.killAll(AudioEngine.PREVIEW_SLOT)
+        else preview(edited(), 0)
+    }
+
+    private val gate get() = ui.engine.params[ui.selectedIndex, org.openmk3.core.audio.SoundParams.GATE] > 0.5f
+
     override fun onButton(name: String?, bit: Int, down: Boolean) {
         if (name == "SHIFT") { shift = down; return }
+        // GATE trigger: the preview only plays while D7 is held
+        if (!down && name == "D7" && tab != Tab.RECORD && gate) ui.engine.killAll(AudioEngine.PREVIEW_SLOT)
         if (!down) return
         val e = ui.engine
         when (name) {
@@ -398,7 +408,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
             "ENCODER LEFT" -> if (tab != Tab.RECORD) wave.scroll(-1)
             "ENCODER RIGHT" -> if (tab != Tab.RECORD) wave.scroll(1)
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
-            "STOP" -> e.transportStop()
+            "STOP" -> e.stopPressed()
             "SAMPLING" -> ui.showHome()
             "BROWSER" -> ui.show(BrowserPage(ui))
             "PLUG-IN" -> if (org.openmk3.core.Edition.full) ui.show(SoundPage(ui))
@@ -417,9 +427,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
             }
             Tab.EDIT -> when (name) {
                 "D4" -> toggleSnap()
+                "D7" -> previewToggle()
                 "D5" -> { normalise = !normalise; computeSlices() }
                 "D6" -> { reverse = !reverse; computeSlices() }
-                "D7" -> preview(edited(), 0)
                 "D8" -> save()
             }
             Tab.SLICE -> when (name) {
@@ -490,6 +500,12 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     }
                     2 -> fadeInMs = (fadeInMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
                     3 -> fadeOutMs = (fadeOutMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
+                    4 -> if (stepped(delta)) {
+                        // TRIGGER of the focused pad: play the whole sample, or only while held
+                        val sp = ui.engine.params
+                        sp[ui.selectedIndex, org.openmk3.core.audio.SoundParams.GATE] = if (gate) 0f else 1f
+                        sp.save(ui.ctx)
+                    }
                 }
                 if (knob <= 1) computeSlices()
             }
@@ -616,6 +632,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         knob(l, 1, "END", secs(trimEnd))
         knob(l, 2, "FADE IN", "${fadeInMs.roundToInt()} ms")
         knob(l, 3, "FADE OUT", "${fadeOutMs.roundToInt()} ms")
+        knob(r, 4, "TRIGGER", if (gate) "GATE" else "ONE-SHOT")
         drawWave(r, showTrim = true)
     }
 
@@ -653,6 +670,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         }
         val marks = if (showTrim) intArrayOf(trimStart, trimEnd) else IntArray(0)
         val sl = if (sliceMarks) IntArray(slices.size) { editedToTake(slices[it]) } else IntArray(0)
+        wave.setColour(org.openmk3.core.mk3.Mk3Colors.rgb(ui.soundColour(ui.selectedIndex)))
         wave.draw(r, 16f, top, bot,
             selA = if (showTrim) trimStart else -1, selB = trimEnd,
             markers = marks, slices = sl, playhead = head)

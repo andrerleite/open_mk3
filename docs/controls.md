@@ -19,7 +19,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | PLAY | Start / stop playback | ✅ |
 | REC | Toggle recording while playing (starts playback if stopped) | ✅ |
 | SHIFT + REC (Count-in) | Record with a one-bar count-in | ⬜ |
-| STOP | Stop. Press again to return to the start. | 🟡 (no return-to-start yet) |
+| STOP | Stop. Pressed again while stopped: every sound fades out (stops long samples and tails). | ✅ |
 | RESTART | Restart playback from the beginning of the loop | ✅ |
 | SHIFT + RESTART (Loop) | Loop on / off | ⬜ |
 | ERASE + pad | Erase that sound's events in the pattern | ✅ |
@@ -63,7 +63,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 |---|---|---|
 | GROUP A–H | Focus a group. Pads then play its 16 sounds; every group's pattern plays together. | ✅ |
 | MUTE / SOLO + group | Mute / solo a whole group | ✅ |
-| SHIFT + group | Group options (copy, clear, colour) | ⬜ |
+| SHIFT + group | Group colour (pick on the pads) | 🟡 (colour; copy / clear planned) |
+| SHIFT + SELECT | Colour of the focused sound (or AUTO = group colour) | ✅ |
 
 ## SHIFT + pad shortcuts (printed on the pads)
 
@@ -91,7 +92,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | CHANNEL (MIDI) | Channel / sound properties of the focused sound | ⬜ |
-| PLUG-IN (Instance) | Instrument and effect slots of the focused sound/group | 🟡 (sampler parameters of the focused sound; full app) |
+| PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound | ✅ (full app) |
 | ARRANGER | Arranger view (scenes / sections / song) | ⬜ |
 | MIXER | Mixer: levels, pan, sends per sound or group | ⬜ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
@@ -142,32 +143,60 @@ toggles zero-crossing snap (start, end and slice points), and a playhead follows
 | Tab | Controls |
 |---|---|
 | RECORD | D5 source (controller INPUT / PHONE playback) · D6 start (MANUAL / THRESHOLD) · D8 or encoder push start/stop · K1 threshold · K2 max length (up to 30 s) · pads choose the target pad |
-| EDIT | Edits the new take, or the focused pad's sample (pads choose which) · K1 start · K2 end · K3 fade in · K4 fade out · D5 normalise · D6 reverse · D7 preview · D8 save as a new WAV in `Download/<app folder>/Recordings` and load it onto the focused pad |
+| EDIT | Edits the new take, or the focused pad's sample (pads choose which) · K1 start · K2 end · K3 fade in · K4 fade out · K5 trigger of the pad (one-shot / gate) · D5 normalise · D6 reverse · D7 preview (press again to stop; with gate, only while held) · D8 save as a new WAV in `Download/<app folder>/Recordings` and load it onto the focused pad |
 | SLICE | K1 / D5 mode (GRID / DETECT transients) · K2 number of slices or detection sensitivity · pads play the slices · D7 preview · D8 apply: each slice is saved as a WAV and loaded onto pads 1, 2, 3… |
 
 Planned: ZONE tab (multi-sample mapping) together with KEYBOARD mode.
 
-## Sampler parameters (PLUG-IN, full app)
+## PLUG-IN (full app)
 
-◀ ▶ or D1–D7 choose the page. Hold SHIFT for fine steps; SHIFT + touching a knob resets it.
-On VOICE and SAMPLE the waveform shows a playhead; the encoder zooms, tilt scrolls, and on
-SAMPLE D8 toggles zero-crossing snap for start, end and loop points (markers then move
-relative to the zoomed view).
-Pads focus (and play) a sound. Settings are saved per pad. Loading a new sample resets
-start, end and loop points. Values that do nothing with the current settings are shown dimmed.
+| Control | Function |
+|---|---|
+| D1 / D2 / D3 | MASTER / GROUP / SOUND level |
+| D4 | Next slot. Sound: slot 1 is the source (SAMPLER or SYNTH), slots 2–4 effects. Group and master: 4 effect slots. |
+| D5 | Bypass the selected effect |
+| D6 or encoder push | Oscilloscope on the right screen (the selected sound, group or master); encoder changes its time window |
+| ◀ ▶ | Parameter pages of the selected slot |
+| Knobs | Parameters. SHIFT: fine steps. SHIFT + touching a knob: default. On an effect slot, K1 on the first page chooses the effect. |
+| D8 | Zero-crossing snap (sampler SAMPLE page) |
+| Encoder / tilt | Zoom / scroll the waveform (sampler VOICE and SAMPLE pages) |
+| Pads | Focus and play a sound |
 
-| Page | K1 | K2 | K3 | K4 | K5 | K6 |
-|---|---|---|---|---|---|---|
-| VOICE | Tune | Volume | Pan | Polyphony (1–16) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) | Reverse |
-| SAMPLE | Start | End | | | Loop | Loop start · K7 loop end · K8 crossfade |
-| AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) |
-| FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | |
-| MOD ENV | Attack | Decay | → Pitch | → Cutoff | | |
-| LFO | Wave (sine / triangle / saw / square / random) | Rate | → Pitch | → Cutoff | → Pan | → Volume |
-| VELOCITY | → Volume | → Cutoff | | | | |
+**Sampler pages**
 
-ADSR sustains while a pad is held; sequencer notes last one step. Loops need an AHD or ADSR
-envelope so that a looped sound always ends.
+| Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
+|---|---|---|---|---|---|---|---|---|
+| VOICE | Tune | Volume | Pan | Polyphony (1–16) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) | Reverse | Source | Trigger (one-shot / gate) |
+| SAMPLE | Start | End | | | Loop | Loop start | Loop end | Crossfade |
+| AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release | | |
+| FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | | | |
+| MOD ENV | Attack | Decay | → Pitch | → Cutoff | | | | |
+| LFO | Wave | Rate | → Pitch | → Cutoff | → Pan | → Volume | | |
+| VELOCITY | → Volume | → Cutoff | | | | | | |
+
+**Synth pages** (24 models from Mutable Instruments Plaits: analog, waveshaping, FM, granular,
+additive, wavetable, chords, speech, swarm, noise, particles, string, modal, drums, …)
+
+| Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
+|---|---|---|---|---|---|---|---|---|
+| VOICE | Tune | Volume | Pan | Polyphony | Note | | Source | Trigger |
+| SYNTH | Model | Harmonics | Timbre | Morph | Synth gate (the model's own decaying gate) | Decay | Colour | Output (main / aux) |
+| SYNTH ENV | Envelope → pitch | → timbre | → morph | | | | | |
+
+AMP ENV, FILTER, MOD ENV, LFO and VELOCITY work as for the sampler. With the synth gate off,
+the AMP ENV shapes the note (and the sound stops when the pad is released).
+
+**Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
+fades with RELEASE). Sequencer notes last one step.
+
+**Effects** (sound, group and master slots)
+
+| Effect | Parameters |
+|---|---|
+| Compressor | Threshold, ratio, attack, release, knee, makeup, mix (gain reduction shown on the scope) |
+| Chorus | Rate, depth, mix, delay, feedback, width |
+| Delay | Time (ms, or note values when synced), sync, feedback, mix, ping-pong, low cut, high cut, modulation |
+| Reverb | Character (DENSE / LUSH / VAST), pre-delay, size, decay, high cut, low cut, diffusion, modulation, mix, freeze, width |
 
 ## Button lights
 

@@ -24,6 +24,17 @@ import kotlin.math.pow
 class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Listener {
 
     val map: Mk3Map = Mk3Map.load(ctx)
+    init { Colours.load(ctx) }
+
+    /** Colour of a sound: its own, or its group's (COLOUR = AUTO). */
+    fun soundColour(sound: Int): Int {
+        val c = engine.params[sound, org.openmk3.core.audio.SoundParams.COLOUR].toInt()
+        return if (c in 1..16) c else groupColour(sound / 16)
+    }
+
+    /** SHIFT, held on any page (for global SHIFT + group / SELECT shortcuts). */
+    @Volatile var shiftHeld = false
+        private set
     val left = Mk3Screen(0)
     val right = Mk3Screen(1)
     private val exec: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
@@ -181,6 +192,18 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         // Touch sensors are learned by the wizard; the wizard itself sees them to do that.
         if (bit in map.touchBits && page !is WizardPage) return@post
         val name = map.nameForBit(bit)
+        if (name == "SHIFT") shiftHeld = down
+        if (!page.customLeds && down && name != null && shiftHeld && page !is ColourPage) {
+            // SHIFT + group: that group's colour · SHIFT + SELECT: the focused sound's colour
+            if (name.startsWith("GROUP ") && name.length == 7) {
+                show(ColourPage(this, page, ColourPage.Target.GROUP, name[6] - 'A'))
+                return@post
+            }
+            if (name == "SELECT") {
+                show(ColourPage(this, page, ColourPage.Target.SOUND, selectedIndex))
+                return@post
+            }
+        }
         if (!page.customLeds && down && name != null) {
             // Global buttons, the same on every page.
             if (name == "FIXED VEL" && !page.handlesFixedVel) {
@@ -240,11 +263,11 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
      * that have a sample, brighter for the focused one, bright while playing.
      */
     private fun applyPadLights(now: Long) {
-        val c = groupColour(group)
         for (slot in 0 until 16) {
             val custom = page.padLight(slot, now)
             val v = custom ?: run {
                 val sound = snd(slot)
+                val c = soundColour(sound)
                 val hot = now - engine.lastTrigMs[sound] in 0..120 || padPressure[slot] > 0
                 when {
                     hot -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
@@ -268,17 +291,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
 }
 
-/** Default colour of each group A..H (pads and group buttons). */
-fun groupColour(g: Int): Int = when (g) {
-    0 -> org.openmk3.core.mk3.Mk3Colors.RED
-    1 -> org.openmk3.core.mk3.Mk3Colors.ORANGE
-    2 -> org.openmk3.core.mk3.Mk3Colors.YELLOW
-    3 -> org.openmk3.core.mk3.Mk3Colors.GREEN
-    4 -> org.openmk3.core.mk3.Mk3Colors.CYAN
-    5 -> org.openmk3.core.mk3.Mk3Colors.BLUE
-    6 -> org.openmk3.core.mk3.Mk3Colors.VIOLET
-    else -> org.openmk3.core.mk3.Mk3Colors.MAGENTA
-}
+/** Colour (controller index 1..16) of group [g], set with SHIFT + group. */
+fun groupColour(g: Int): Int = Colours.group[g.coerceIn(0, 7)]
 
 /** Button lights requested by a page (see [Page.lights]). */
 class Lights {

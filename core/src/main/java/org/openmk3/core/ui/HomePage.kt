@@ -66,11 +66,12 @@ class HomePage(ui: Ui) : Page(ui) {
 
     // ---- look ----
     // Pads and rows use the focused group's colour.
-    private val groupPaint = Array(8) { Theme.fill(Mk3Colors.rgb(groupColour(it))) }
-    private val groupDim = Array(8) { Theme.fill(mix(Mk3Colors.rgb(groupColour(it)), 0.35f)) }
-    private val gc get() = groupColour(ui.group)
-    private val colourPaint get() = groupPaint[ui.group]
-    private val dimPaint get() = groupDim[ui.group]
+    // Pads and rows use each sound's colour (its own, or its group's).
+    private val colourPaints = Array(18) { Theme.fill(Mk3Colors.rgb(it)) }
+    private val dimPaints = Array(18) { Theme.fill(mix(Mk3Colors.rgb(it), 0.35f)) }
+    private fun paintOf(sound: Int) = colourPaints[ui.soundColour(sound).coerceIn(0, 17)]
+    private fun dimOf(sound: Int) = dimPaints[ui.soundColour(sound).coerceIn(0, 17)]
+    private val colourPaint get() = paintOf(sd(selected))
     private fun sd(slot: Int) = ui.snd(slot)
     private val title = Theme.text(22f, Theme.ACCENT, bold = true)
     private val label = Theme.text(15f, Theme.DIM)
@@ -141,7 +142,7 @@ class HomePage(ui: Ui) : Page(ui) {
         val p = pattern
         val step = ui.engine.currentStep
         for (slot in 0 until 16) {
-            val c = gc
+            val c = ui.soundColour(sd(slot))
             val v = when (mode) {
                 Mode.PAD -> {
                     val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
@@ -156,7 +157,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
                     val on = p.vel[sd(selected)][s] > 0f
-                    val sc = gc
+                    val sc = ui.soundColour(sd(selected))
                     when {
                         flash && s == step && on -> Mk3Colors.value(sc, 3)
                         flash && s == step -> Mk3Colors.value(Mk3Colors.WHITE, 0)
@@ -251,7 +252,7 @@ class HomePage(ui: Ui) : Page(ui) {
         val e = ui.engine
         when (name) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
-            "STOP" -> { e.transportStop(); rec = false }
+            "STOP" -> { e.stopPressed(); rec = false }
             "RESTART" -> e.transportRestart()
             "REC" -> { rec = !rec; if (rec && !e.playing) e.transportPlay() }
             "STEP" -> mode = if (mode == Mode.STEP) Mode.PAD else Mode.STEP
@@ -375,7 +376,7 @@ class HomePage(ui: Ui) : Page(ui) {
             val y = top + row * rowH
             val audible = p.audible(s)
             if (row == selected) c.drawRect(0f, y, 480f, y + rowH, selRow)
-            c.drawRect(2f, y + 3f, 7f, y + rowH - 3f, colourPaint)
+            c.drawRect(2f, y + 3f, 7f, y + rowH - 3f, paintOf(s))
             if (p.solo[s]) c.drawRect(9f, y + 3f, 12f, y + rowH - 3f, soloMark)
             // Clip to the label column; keep the end of long names (the distinctive part).
             c.save()
@@ -387,7 +388,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 val x = x0 + t * cw
                 val v = p.vel[s][t]
                 val paint = when {
-                    v > 0f && audible -> if (v > 0.5f) colourPaint else dimPaint
+                    v > 0f && audible -> if (v > 0.5f) paintOf(s) else dimOf(s)
                     v > 0f -> cellOffBeat
                     (t / 4) % 2 == 0 -> cellOffBeat
                     else -> cellOff

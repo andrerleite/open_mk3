@@ -31,6 +31,9 @@
 #include <cstring>
 #include <ctime>
 #include <memory>
+
+#include "fx.h"
+#include "synth.h"
 #include <mutex>
 #include <vector>
 
@@ -80,7 +83,7 @@ constexpr int kFadeOut = 96;
 
 // Per-sound parameters: kSlots x kParams floats in a direct buffer shared with Kotlin
 // (SoundParams.kt). Indices are stable: saved settings depend on them.
-constexpr int kParams = 48;
+constexpr int kParams = 64;
 enum {
     P_TUNE = 0,     // semitones, -36..36 (fractional = fine tune)
     P_VOL = 1,      // dB, -60 (silent) .. +12
@@ -116,6 +119,21 @@ enum {
     P_LVOL = 31,    // LFO -> volume (tremolo), 0..1
     P_VVOL = 32,    // velocity -> volume, 0..1
     P_VCUT = 33,    // velocity -> cutoff, octaves
+    P_GATE = 34,    // > 0.5 = gate: the sound stops (with RELEASE) when the pad is let go
+    P_SRC = 35,     // sound source: 0 sampler, 1 synth
+    P_SMODEL = 36,  // synth model 0..23
+    P_SNOTE = 37,   // synth base note (MIDI)
+    P_SHARM = 38,   // synth harmonics 0..1
+    P_STIMB = 39,   // synth timbre 0..1
+    P_SMORPH = 40,  // synth morph 0..1
+    P_SDEC = 41,    // synth low-pass gate decay 0..1
+    P_SCOL = 42,    // synth low-pass gate colour 0..1
+    P_SLPG = 43,    // > 0.5 = the synth's own decaying gate shapes notes
+    P_SAUX = 44,    // synth output: 0 main .. 1 auxiliary
+    P_SFM = 45,     // synth internal envelope -> pitch, -1..1
+    P_STMOD = 46,   // synth internal envelope -> timbre, -1..1
+    P_SMMOD = 47,   // synth internal envelope -> morph, -1..1
+    P_COLOUR = 48,  // pad colour (UI only)
 };
 static float kDefaultParams[kParams];
 static bool initDefaults() {
@@ -123,6 +141,8 @@ static bool initDefaults() {
     d[P_END] = 1; d[P_ATT] = 0.001f; d[P_HOLD] = 0.05f; d[P_DEC] = 0.5f; d[P_CUT] = 20000;
     d[P_SUS] = 0.7f; d[P_REL] = 0.2f; d[P_POLY] = 1; d[P_LEND] = 1; d[P_MATT] = 0.001f;
     d[P_MDEC] = 0.2f; d[P_LRATE] = 4; d[P_VVOL] = 1;
+    d[P_SMODEL] = 8; d[P_SNOTE] = 48; d[P_SHARM] = 0.5f; d[P_STIMB] = 0.5f; d[P_SMORPH] = 0.5f;
+    d[P_SDEC] = 0.5f; d[P_SCOL] = 0.5f; d[P_SLPG] = 1;
     return true;
 }
 static bool gDefaultsReady = initDefaults();
@@ -159,7 +179,24 @@ struct Voice {
     // vintage engine sample-and-hold
     float vPhase = 1.f;
     float vHeld[2] = {0, 0};
+    // gate mode release level
+    float gateLevel = 1.f;
+    // synth source: index into the synth pool (-1 = sampler), silence counter
+    int synth = -1;
+    int quietBlocks = 0;
+    int ageBlocks = 0;
 };
+
+// Synth voices have no sample: they point here so "voice in use" checks stay uniform.
+static SampleData gSynthDummy = [] { SampleData d; d.frames = 1; d.data.assign(1, 0.f); return d; }();
+
+constexpr int kSynthVoices = 16;
+constexpr int kFxSlots = 4;
+constexpr int kChains = kSounds + kGroups + 1;   // per sound, per group, master
+constexpr int kChainGroup0 = kSounds;
+constexpr int kChainMaster = kSounds + kGroups;
+constexpr int kChunk = 256;                       // frames rendered per pass (bus sizes)
+constexpr int kSynthMaxBlockFrames = 16;
 
 struct Trigger {
     int slot;
@@ -213,6 +250,8 @@ public:
 
     Engine() {
         for (int i = 0; i < kSlots; i++) { current[i] = nullptr; pending[i] = nullptr; retired[i] = nullptr; playPos[i] = -1.f; }
+        for (int c = 0; c < kChains; c++)
+            for (int k = 0; k < kFxSlots; k++) { fxPending[c][k] = nullptr; fxRetired[c][k] = nullptr; }
         for (auto& m : activeMask) m = 0;
     }
 
@@ -234,6 +273,26 @@ public:
         producerLock.clear(std::memory_order_release);
     }
 
+    // ---- synth pool and effects (created on Java threads, swapped in by the audio thread) ----
+    openmk3::SynthVoice* synthPool[kSynthVoices] = {};
+    Voice* synthOwner[kSynthVoices] = {};
+    std::atomic<float*> fxParams{nullptr};  // kChains x kFxSlots x kFxParams
+    openmk3::Effect* fxCur[kChains][kFxSlots] = {};
+    std::atomic<openmk3::Effect*> fxPending[kChains][kFxSlots];
+    std::atomic<openmk3::Effect*> fxRetired[kChains][kFxSlots];
+    std::atomic<int> fxDirty{0};
+    // oscilloscope tap: 0 master, 1 group (index), 2 sound (index)
+    std::atomic<int> scopeKind{0};
+    std::atomic<int> scopeIndex{0};
+    static constexpr int kScope = 8192;
+    float scopeRing[kScope] = {};
+    std::atomic<int> scopeW{0};
+
+    void ensureSynths() {
+        for (auto& sv : synthPool)
+            if (!sv) sv = openmk3::SynthVoice::create();
+    }
+
     // ---- stream management ----
     bool open();
     void close();
@@ -253,6 +312,32 @@ private:
 
     void startVoice(int slot, float vel, int offset, int gate, bool fromSeq);
     void releaseSlot(int slot);
+    void killSlot(int slot);
+    void renderChunk(float* out, int32_t frames);
+    void freeSynth(Voice& v) {
+        if (v.synth >= 0 && synthOwner[v.synth] == &v) synthOwner[v.synth] = nullptr;
+        v.synth = -1;
+    }
+    bool chainActive(const float* fp, int chain) const {
+        if (!fp) return false;
+        for (int k = 0; k < kFxSlots; k++) {
+            const float* q = fp + (chain * kFxSlots + k) * openmk3::kFxParams;
+            if (fxCur[chain][k] && q[0] > 0.5f && q[1] < 0.5f) return true;
+        }
+        return false;
+    }
+    void runChain(const float* fp, int chain, float* buf, int frames, double bpm) {
+        for (int k = 0; k < kFxSlots; k++) {
+            const float* q = fp + (chain * kFxSlots + k) * openmk3::kFxParams;
+            openmk3::Effect* e = fxCur[chain][k];
+            if (e && q[0] > 0.5f && q[1] < 0.5f) e->process(buf, frames, q, bpm, float(kSampleRate));
+        }
+    }
+    float soundBus[kSounds][kChunk * 2];
+    bool soundUsed[kSounds];
+    float groupBus[kGroups][kChunk * 2];
+    float synthOut[kSynthMaxBlockFrames];
+    float synthAux[kSynthMaxBlockFrames];
 public:
     std::atomic<uint32_t> activeMask[(kSlots + 31) / 32];  // bit per slot with a voice playing
     std::atomic<float> playPos[kSlots];                    // newest voice's read position (frames), -1 = silent
@@ -480,12 +565,18 @@ void Engine::releaseSlot(int slot) {
         if (v.sample && v.slot == slot && !v.fromSeq) v.released = true;
 }
 
+void Engine::killSlot(int slot) {
+    for (auto& v : voices)
+        if (v.sample && (slot < 0 || v.slot == slot) && v.fadeOut < 0) v.fadeOut = kFadeOut;
+}
+
 void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq) {
     if (slot < 0 || slot >= kSlots) return;
-    const SampleData* s = current[slot].load(std::memory_order_acquire);
-    if (!s || s->frames <= 0) return;
     float* pb = params.load(std::memory_order_acquire);
     const float* P = pb ? pb + slot * kParams : kDefaultParams;
+    const bool isSynth = slot < kSounds && P[P_SRC] > 0.5f;
+    const SampleData* s = isSynth ? &gSynthDummy : current[slot].load(std::memory_order_acquire);
+    if (!s || s->frames <= 0) return;
     // Polyphony per sound (default 1, like a drum machine pad): a new hit fades out the
     // oldest voices of this sound beyond the limit instead of piling on their tails.
     int poly = std::clamp(int(P[P_POLY] + 0.5f), 1, 16);
@@ -513,12 +604,28 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq)
         if (v.age < oldest->age) oldest = &v;
     }
     if (!best) best = oldest;
+    freeSynth(*best);
+    int synthIdx = -1;
+    if (isSynth) {
+        for (int k = 0; k < kSynthVoices; k++)
+            if (synthPool[k] && !synthOwner[k]) { synthIdx = k; break; }
+        if (synthIdx < 0) {
+            // all synth voices busy: take the oldest one's
+            Voice* o = nullptr;
+            for (auto& v : voices)
+                if (v.sample && v.synth >= 0 && (!o || v.age < o->age)) o = &v;
+            if (!o) return;
+            synthIdx = o->synth;
+            o->synth = -1;
+            o->sample = nullptr;
+        }
+    }
     float a = std::clamp(P[P_START], 0.f, 1.f);
     float b = std::clamp(P[P_END], 0.f, 1.f);
     int sf = int(a * float(s->frames));
     int ef = int(b * float(s->frames));
     if (ef <= sf) ef = std::min(s->frames, sf + 1);
-    if (sf >= s->frames) return;
+    if (sf >= s->frames && !isSynth) return;
     Voice& v = *best;
     v = Voice();
     v.sample = s;
@@ -535,6 +642,14 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq)
     v.envType = std::clamp(int(P[P_ENV] + 0.5f), 0, 2);
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
     v.rnd = uint32_t(voiceAge * 2654435761u) | 1u;
+    if (isSynth) {
+        v.startF = 0;
+        v.endF = 1;
+        v.pos = 0.0;
+        v.rev = false;
+        v.synth = synthIdx;
+        synthOwner[synthIdx] = &v;
+    }
     if (int64_t* lt = lastTrigMs.load(std::memory_order_acquire); lt && slot < kSounds) {
         lt[slot] = nowNanos() / 1000000LL + int64_t(offset) * 1000 / kSampleRate;
     }
@@ -606,6 +721,23 @@ void Engine::runSequencer(int frames) {
 
 void Engine::render(float* out, int32_t frames) {
     callbackFrames.store(frames, std::memory_order_relaxed);
+    for (int off = 0; off < frames; off += kChunk)
+        renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
+}
+
+void Engine::renderChunk(float* out, int32_t frames) {
+    // effects swapped in by Java (allocation happens there; frees happen there too)
+    if (fxDirty.exchange(0, std::memory_order_acq_rel)) {
+        for (int c = 0; c < kChains; c++)
+            for (int k = 0; k < kFxSlots; k++) {
+                openmk3::Effect* e = fxPending[c][k].exchange(nullptr, std::memory_order_acq_rel);
+                if (!e) continue;
+                openmk3::Effect* old = fxCur[c][k];
+                fxCur[c][k] = e;
+                openmk3::Effect* prev = fxRetired[c][k].exchange(old, std::memory_order_acq_rel);
+                (void)prev;  // freed by the Java thread on its next change
+            }
+    }
     // 0. sample swaps requested by the loader
     for (int slot = 0; slot < kSlots; slot++) {
         SampleData* p = pending[slot].exchange(nullptr, std::memory_order_acq_rel);
@@ -625,6 +757,8 @@ void Engine::render(float* out, int32_t frames) {
         const Trigger& tr = ring[t % kRing];
         if (tr.type == 1) {
             releaseSlot(tr.slot);
+        } else if (tr.type == 2) {
+            killSlot(tr.slot);
         } else {
             float ms = float(now - tr.tNanos) / 1e6f;
             if (ms > worstTrigMs.load(std::memory_order_relaxed)) worstTrigMs.store(ms, std::memory_order_relaxed);
@@ -637,9 +771,16 @@ void Engine::render(float* out, int32_t frames) {
     // 2. sequencer
     runSequencer(frames);
 
-    // 3. voices
+    // 3. voices -> sound buses (sounds with effects) or group buses
     std::memset(out, 0, sizeof(float) * frames * 2);
+    for (auto& gb : groupBus) std::memset(gb, 0, sizeof(float) * frames * 2);
+    std::memset(soundUsed, 0, sizeof(soundUsed));
     float* pb = params.load(std::memory_order_acquire);
+    const float* fp = fxParams.load(std::memory_order_acquire);
+    const int sk = scopeKind.load(std::memory_order_relaxed);
+    const int si = scopeIndex.load(std::memory_order_relaxed);
+    float scopeTap[kChunk * 2];
+    if (sk == 2) std::memset(scopeTap, 0, sizeof(float) * frames * 2);
     uint32_t active[(kSlots + 31) / 32] = {};
     uint64_t newest[kSlots] = {};
     float newestPos[kSlots];
@@ -680,9 +821,36 @@ void Engine::render(float* out, int32_t frames) {
         const float lPitch = P[P_LPITCH], lCut = P[P_LCUT];
         const float lPan = std::clamp(P[P_LPAN], 0.f, 1.f), lVol = std::clamp(P[P_LVOL], 0.f, 1.f);
         const float velCut = P[P_VCUT] * (v.vel - 1.f);
+        // destination bus
+        float* dst;
+        if (v.slot >= kSounds) dst = out;  // preview: straight to the output
+        else if (chainActive(fp, v.slot)) {
+            dst = soundBus[v.slot];
+            if (!soundUsed[v.slot]) { std::memset(dst, 0, sizeof(float) * frames * 2); soundUsed[v.slot] = true; }
+        } else dst = groupBus[v.slot / kPads];
+        float* tap = (sk == 2 && v.slot == si) ? scopeTap : nullptr;
+        // synth source
+        const bool synth = v.synth >= 0 && synthPool[v.synth];
+        openmk3::SynthPatch sp;
+        if (synth) {
+            sp.model = int(P[P_SMODEL] + 0.5f);
+            sp.harmonics = std::clamp(P[P_SHARM], 0.f, 1.f);
+            sp.timbre = std::clamp(P[P_STIMB], 0.f, 1.f);
+            sp.morph = std::clamp(P[P_SMORPH], 0.f, 1.f);
+            sp.decay = std::clamp(P[P_SDEC], 0.f, 1.f);
+            sp.colour = std::clamp(P[P_SCOL], 0.f, 1.f);
+            sp.fmAmount = std::clamp(P[P_SFM], -1.f, 1.f);
+            sp.timbreAmount = std::clamp(P[P_STMOD], -1.f, 1.f);
+            sp.morphAmount = std::clamp(P[P_SMMOD], -1.f, 1.f);
+            sp.lpg = P[P_SLPG] > 0.5f;
+        }
+        const float auxMix = std::clamp(P[P_SAUX], 0.f, 1.f);
+        // gate mode: note-off fades the sound with RELEASE (a synth without its own gate
+        // and without an envelope always behaves like this, or it would never stop)
+        const bool gateMode = P[P_GATE] > 0.5f || (synth && !sp.lpg && v.envType == 0);
         // loop (only with a releasing envelope, so a looped sound always ends)
         const int n = s->frames;
-        const bool loop = v.envType != 0 && P[P_LOOP] > 0.5f;
+        const bool loop = !synth && v.envType != 0 && P[P_LOOP] > 0.5f;
         int ls = 0, le = 0, xf = 0;
         if (loop) {
             ls = std::clamp(int(std::clamp(P[P_LSTART], 0.f, 1.f) * n), v.startF, v.endF - 1);
@@ -738,9 +906,16 @@ void Engine::render(float* out, int32_t frames) {
             const float gr = g * (pan < 0.f ? 1.f + pan : 1.f);
 
             const int blockEnd = std::min(frames, i + kBlock);
+            float blockPeak = 0.f;
+            if (synth) {
+                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + tune + me * mPitch + lfo * lPitch;
+                synthPool[v.synth]->render(sp, !v.released, synthOut, synthAux, blockEnd - i);
+            }
+            const int blockStart = i;
             for (; i < blockEnd; i++) {
                 // end of the sample region / loop
-                if (v.rev) {
+                if (synth) {
+                } else if (v.rev) {
                     if (v.pos < double(v.startF)) {
                         if (loop) v.pos += loopLen; else { done = true; break; }
                     } else if (loop && v.pos < double(ls)) v.pos += loopLen;
@@ -783,8 +958,18 @@ void Engine::render(float* out, int32_t frames) {
                     }
                 }
                 env *= v.envLevel;
+                if (gateMode && v.released && v.envType != 2) {
+                    v.gateLevel *= relCoef;
+                    if (v.gateLevel < 1e-4f) { done = true; break; }
+                    env *= v.gateLevel;
+                }
                 // read the sample (crossfading into the loop start near the loop end)
                 float xs[2];
+                if (synth) {
+                    int k = i - blockStart;
+                    xs[0] = xs[1] = synthOut[k] * (1.f - auxMix) + synthAux[k] * auxMix;
+                    blockPeak = std::max(blockPeak, std::fabs(xs[0]));
+                } else
                 for (int c = 0; c < ch; c++) {
                     float y = interp(v.pos, c);
                     if (loop && xf > 0 && !v.rev && v.pos >= double(le - xf)) {
@@ -793,7 +978,7 @@ void Engine::render(float* out, int32_t frames) {
                     }
                     xs[c] = y;
                 }
-                if (ch == 1) xs[1] = xs[0];
+                if (!synth && ch == 1) xs[1] = xs[0];
                 // vintage engines: reduced sample rate and 12-bit resolution
                 if (vStep > 0.f) {
                     v.vPhase += vStep;
@@ -826,9 +1011,17 @@ void Engine::render(float* out, int32_t frames) {
                         xs[c] = y;
                     }
                 }
-                out[i * 2] += xs[0] * env * gl;
-                out[i * 2 + 1] += xs[1] * env * gr;
-                v.pos += step;
+                const float ol = xs[0] * env * gl, orr = xs[1] * env * gr;
+                dst[i * 2] += ol;
+                dst[i * 2 + 1] += orr;
+                if (tap) { tap[i * 2] += ol; tap[i * 2 + 1] += orr; }
+                if (!synth) v.pos += step;
+            }
+            // a synth whose own gate has closed: end the voice once it stays silent
+            if (synth && !done) {
+                v.ageBlocks++;
+                if (blockPeak < 1e-4f) v.quietBlocks++; else v.quietBlocks = 0;
+                if (v.ageBlocks > 30 && v.quietBlocks > 40 && (sp.lpg || v.released)) done = true;
             }
             // ---- advance control-rate modulators by the block just rendered ----
             const int adv = kBlock;
@@ -848,6 +1041,7 @@ void Engine::render(float* out, int32_t frames) {
         }
         if (done) {
             v.sample = nullptr;
+            freeSynth(v);
         } else {
             active[v.slot / 32] |= 1u << (v.slot % 32);
             if (v.age > newest[v.slot]) { newest[v.slot] = v.age; newestPos[v.slot] = float(v.pos); }
@@ -856,7 +1050,36 @@ void Engine::render(float* out, int32_t frames) {
     for (int k = 0; k < (kSlots + 31) / 32; k++) activeMask[k].store(active[k], std::memory_order_relaxed);
     for (int k = 0; k < kSlots; k++) playPos[k].store(newestPos[k], std::memory_order_relaxed);
 
-    // 4. master gain, soft clip, meter
+    // 4. effects: sound buses -> group buses -> master
+    double bpm = 120.0;
+    if (float* pp = pattern.load(std::memory_order_acquire)) bpm = pp[OFF_BPM];
+    if (fp) {
+        for (int snd = 0; snd < kSounds; snd++) {
+            // effects keep running after the notes end (reverb and delay tails)
+            if (!chainActive(fp, snd)) continue;
+            if (!soundUsed[snd]) std::memset(soundBus[snd], 0, sizeof(float) * frames * 2);
+            runChain(fp, snd, soundBus[snd], frames, bpm);
+            float* gb = groupBus[snd / kPads];
+            for (int k = 0; k < frames * 2; k++) gb[k] += soundBus[snd][k];
+        }
+    }
+    for (int g = 0; g < kGroups; g++) {
+        if (fp) runChain(fp, kChainGroup0 + g, groupBus[g], frames, bpm);
+        for (int k = 0; k < frames * 2; k++) out[k] += groupBus[g][k];
+    }
+    if (fp) runChain(fp, kChainMaster, out, frames, bpm);
+    // oscilloscope (before the master volume, so the shape is what the sound makes)
+    {
+        const float* src = sk == 2 ? scopeTap : sk == 1 ? groupBus[std::clamp(si, 0, kGroups - 1)] : out;
+        int w = scopeW.load(std::memory_order_relaxed);
+        for (int k = 0; k < frames; k++) {
+            scopeRing[w] = 0.5f * (src[k * 2] + src[k * 2 + 1]);
+            w = (w + 1) & (kScope - 1);
+        }
+        scopeW.store(w, std::memory_order_release);
+    }
+
+    // 5. master gain, soft clip, meter
     float g = masterGain.load(std::memory_order_relaxed);
     float peak = meterAcc;
     for (int i = 0; i < frames * 2; i++) {
@@ -1479,6 +1702,41 @@ JNIEXPORT jdouble JNICALL JNI_FN(nativeUsbClockPpm)(JNIEnv*, jobject) {
 
 JNIEXPORT void JNICALL JNI_FN(nativeRelease)(JNIEnv*, jobject, jint slot) {
     gEngine.pushTrigger(slot, 0.f, 1);
+}
+/** Fades out every voice of [slot] (-1 = everything). */
+JNIEXPORT void JNICALL JNI_FN(nativeKill)(JNIEnv*, jobject, jint slot) {
+    gEngine.pushTrigger(slot, 0.f, 2);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeInitSynths)(JNIEnv*, jobject) { gEngine.ensureSynths(); }
+JNIEXPORT void JNICALL JNI_FN(nativeSetFxBuffer)(JNIEnv* env, jobject, jobject buf) {
+    if (env->GetDirectBufferCapacity(buf) < jlong(kChains * kFxSlots * openmk3::kFxParams * sizeof(float))) return;
+    gEngine.fxParams.store(static_cast<float*>(env->GetDirectBufferAddress(buf)), std::memory_order_release);
+}
+/** Creates the effect for a slot (type 0 = empty) and hands it to the audio thread. */
+JNIEXPORT void JNICALL JNI_FN(nativeSetFx)(JNIEnv*, jobject, jint chain, jint slot, jint type) {
+    if (chain < 0 || chain >= kChains || slot < 0 || slot >= kFxSlots) return;
+    openmk3::Effect* e = openmk3::createEffect(type);
+    if (!e) e = new openmk3::Compressor();  // placeholder for "empty": skipped while its type is 0
+    delete gEngine.fxRetired[chain][slot].exchange(nullptr, std::memory_order_acq_rel);
+    delete gEngine.fxPending[chain][slot].exchange(e, std::memory_order_acq_rel);
+    gEngine.fxDirty.store(1, std::memory_order_release);
+}
+JNIEXPORT jfloat JNICALL JNI_FN(nativeFxMeter)(JNIEnv*, jobject, jint chain, jint slot) {
+    if (chain < 0 || chain >= kChains || slot < 0 || slot >= kFxSlots) return 0.f;
+    openmk3::Effect* e = gEngine.fxCur[chain][slot];
+    return e ? e->meter : 0.f;
+}
+JNIEXPORT void JNICALL JNI_FN(nativeSetScopeTap)(JNIEnv*, jobject, jint kind, jint index) {
+    gEngine.scopeKind.store(kind);
+    gEngine.scopeIndex.store(index);
+}
+/** Copies the newest [out.length] scope samples (oldest first). */
+JNIEXPORT void JNICALL JNI_FN(nativeScope)(JNIEnv* env, jobject, jfloatArray out) {
+    int n = std::min(int(env->GetArrayLength(out)), Engine::kScope);
+    int w = gEngine.scopeW.load(std::memory_order_acquire);
+    float tmp[Engine::kScope];
+    for (int k = 0; k < n; k++) tmp[k] = gEngine.scopeRing[(w - n + k) & (Engine::kScope - 1)];
+    env->SetFloatArrayRegion(out, 0, n, tmp);
 }
 JNIEXPORT jint JNICALL JNI_FN(nativeActiveSlots)(JNIEnv*, jobject, jint word) {
     if (word < 0 || word >= (kSlots + 31) / 32) return 0;

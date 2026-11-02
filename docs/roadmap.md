@@ -33,13 +33,13 @@ full app.
    - KEYBOARD and CHORDS, 16 velocities.
    - NOTE REPEAT / arpeggiator.
    - Touch-strip modes.
-9. **Instruments**
+9. **Instruments** — synth source (Plaits) done in 0.6.0
    - High-quality open-source synthesis engines. Candidates:
      - Mutable Instruments' open-source DSP (MIT)
      - DaisySP (MIT)
      - Surge XT components (GPL-3)
    - Credited in the licence notices and labelled with our own names.
-10. **Effects**
+10. **Effects** — compressor, chorus, delay, reverb done in 0.6.0 (EQ, filter, saturation next)
     - Insert and send effects: filter, EQ, compressor, saturation, delay, reverb.
     - Candidates: Airwindows (MIT), DaisySP, Surge XT.
 11. **Mixer and automation**

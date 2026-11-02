@@ -51,6 +51,13 @@ object NativeEngine {
     external fun nativeUsbStats(): String
     external fun nativeSetParamBuffer(buf: ByteBuffer)
     external fun nativeRelease(slot: Int)
+    external fun nativeKill(slot: Int)
+    external fun nativeInitSynths()
+    external fun nativeSetFxBuffer(buf: ByteBuffer)
+    external fun nativeSetFx(chain: Int, slot: Int, type: Int)
+    external fun nativeFxMeter(chain: Int, slot: Int): Float
+    external fun nativeSetScopeTap(kind: Int, index: Int)
+    external fun nativeScope(out: FloatArray)
     external fun nativeActiveSlots(word: Int): Int
     external fun nativePlayPos(slot: Int): Float
     external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
@@ -121,6 +128,8 @@ class AudioEngine(private val ctx: Context) {
 
     /** Tune, volume, pan, range, envelope and filter of every sound (saved separately). */
     val params: SoundParams = SoundParams.load(ctx)
+    /** Effect slots of sounds, groups and the master (saved separately). */
+    val fx: FxParams = FxParams.load(ctx)
 
     var masterGain: Float = 0.7f
         set(v) {
@@ -158,6 +167,13 @@ class AudioEngine(private val ctx: Context) {
         n.nativeSetTrigBuffer(trigBuf)
         n.nativeSetPatternBuffer(pattern.buffer)
         n.nativeSetParamBuffer(params.buffer)
+        n.nativeSetFxBuffer(fx.buffer)
+        n.nativeInitSynths()
+        // re-create the saved effects (each allocates its buffers here, not on the audio thread)
+        for (c in 0 until FxParams.CHAINS) for (k in 0 until FxParams.SLOTS) {
+            val t = fx.type(c, k)
+            if (t != FxParams.NONE) n.nativeSetFx(c, k, t)
+        }
         n.nativeSetMasterGain(masterGain)
         n.nativeTransport(0) // the native engine outlives sessions: start stopped
         // Samples are loaded before the stream starts, so the callback never sees a half-copied one.
@@ -292,6 +308,31 @@ class AudioEngine(private val ctx: Context) {
 
     /** Read position (frames) of the newest voice of [slot], or -1 when silent. */
     fun playPos(slot: Int): Float = n.nativePlayPos(slot)
+
+    /** Puts effect [type] in a chain slot, with its default settings. */
+    fun setFx(chain: Int, slot: Int, type: Int) {
+        fx.setType(chain, slot, type)
+        n.nativeSetFx(chain, slot, type)
+        fx.save(ctx)
+    }
+
+    /** Gain reduction (compressor) of a slot, for the screen. */
+    fun fxMeter(chain: Int, slot: Int) = n.nativeFxMeter(chain, slot)
+
+    /** Fades out everything that is sounding (or one sound). */
+    fun killAll(slot: Int = -1) {
+        n.nativeKill(slot)
+        if (slot < 0) AppLog.i("All sounds off")
+    }
+
+    /** STOP: stops the transport; pressed again (already stopped) it silences every sound. */
+    fun stopPressed() {
+        if (playing) transportStop() else killAll()
+    }
+
+    /** Oscilloscope source: 0 master, 1 group [index], 2 sound [index]. */
+    fun setScopeTap(kind: Int, index: Int) = n.nativeSetScopeTap(kind, index)
+    fun scope(out: FloatArray) = n.nativeScope(out)
 
     /** Note-off for a pad (ends ADSR sustain). */
     fun release(slot: Int) = n.nativeRelease(slot)

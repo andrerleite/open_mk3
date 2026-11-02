@@ -34,7 +34,7 @@ class SoundParams {
 
     companion object {
         const val SLOTS = Pattern.SOUNDS + 1
-        const val COUNT = 48
+        const val COUNT = 64
 
         // Indices match P_* in engine.cpp and are stable (saved settings depend on them).
         const val TUNE = 0
@@ -71,6 +71,31 @@ class SoundParams {
         const val LVOL = 31
         const val VVOL = 32
         const val VCUT = 33
+        const val GATE = 34
+        const val SRC = 35
+        const val SMODEL = 36
+        const val SNOTE = 37
+        const val SHARM = 38
+        const val STIMB = 39
+        const val SMORPH = 40
+        const val SDEC = 41
+        const val SCOL = 42
+        const val SLPG = 43
+        const val SAUX = 44
+        const val SFM = 45
+        const val STMOD = 46
+        const val SMMOD = 47
+        const val COLOUR = 48
+
+        /** Synth models (Mutable Instruments Plaits engines), described in our own words. */
+        val MODELS = listOf(
+            "VA + FILTER", "PHASE DIST", "6-OP FM 1", "6-OP FM 2", "6-OP FM 3", "WAVE TERRAIN",
+            "STRING MACH", "CHIPTUNE", "ANALOG", "WAVESHAPE", "2-OP FM", "GRANULAR",
+            "ADDITIVE", "WAVETABLE", "CHORDS", "SPEECH", "SWARM", "NOISE",
+            "PARTICLES", "STRING", "MODAL", "BASS DRUM", "SNARE", "HI-HAT",
+        )
+        private val NOTE_NAMES = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+        fun noteName(n: Int) = NOTE_NAMES[((n % 12) + 12) % 12] + (n / 12 - 1)
 
         private fun secs(v: Float) = if (v < 1f) "${(v * 1000).roundToInt()} ms" else "%.2f s".format(v)
         private fun pct(v: Float) = "${(v * 100).roundToInt()}%"
@@ -124,6 +149,23 @@ class SoundParams {
             // velocity
             Def(VVOL, "→ VOLUME", 0f, 1f, 1f, 0.002f, ::pct),
             Def(VCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
+            // trigger mode and source
+            Def(GATE, "TRIGGER", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "GATE")),
+            Def(SRC, "SOURCE", 0f, 1f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH")),
+            // synth
+            Def(SMODEL, "MODEL", 0f, 23f, 8f, 1f, { "" }, choices = MODELS),
+            Def(SNOTE, "NOTE", 0f, 127f, 48f, 0.02f, { v -> noteName(v.roundToInt()) }),
+            Def(SHARM, "HARMONICS", 0f, 1f, 0.5f, 0.002f, ::pct),
+            Def(STIMB, "TIMBRE", 0f, 1f, 0.5f, 0.002f, ::pct),
+            Def(SMORPH, "MORPH", 0f, 1f, 0.5f, 0.002f, ::pct),
+            Def(SDEC, "DECAY", 0f, 1f, 0.5f, 0.002f, ::pct),
+            Def(SCOL, "COLOUR", 0f, 1f, 0.5f, 0.002f, ::pct),
+            Def(SLPG, "SYNTH GATE", 0f, 1f, 1f, 1f, { "" }, choices = listOf("OFF", "ON")),
+            Def(SAUX, "OUTPUT", 0f, 1f, 0f, 0.002f, { v -> if (v < 0.01f) "MAIN" else if (v > 0.99f) "AUX" else "${(v * 100).roundToInt()}% AUX" }),
+            Def(SFM, "ENV → PITCH", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(STMOD, "ENV → TIMBRE", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(SMMOD, "ENV → MORPH", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(COLOUR, "COLOUR", 0f, 16f, 0f, 1f, { "" }, choices = listOf("AUTO") + (1..16).map { "$it" }),
         ).associateBy { it.index }
 
         private fun file(ctx: Context) = File(ctx.filesDir, "sound_params.json")

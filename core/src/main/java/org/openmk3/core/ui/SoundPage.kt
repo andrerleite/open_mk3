@@ -7,6 +7,7 @@ import android.graphics.Path
 import android.os.SystemClock
 import org.openmk3.core.audio.Sample
 import org.openmk3.core.audio.SoundParams
+import org.openmk3.core.mk3.Mk3Colors
 import org.openmk3.core.audio.SoundParams.Companion.TUNE
 import org.openmk3.core.audio.SoundParams.Companion.VOL
 import org.openmk3.core.audio.SoundParams.Companion.PAN
@@ -41,6 +42,21 @@ import org.openmk3.core.audio.SoundParams.Companion.LPAN
 import org.openmk3.core.audio.SoundParams.Companion.LVOL
 import org.openmk3.core.audio.SoundParams.Companion.VVOL
 import org.openmk3.core.audio.SoundParams.Companion.VCUT
+import org.openmk3.core.audio.SoundParams.Companion.GATE
+import org.openmk3.core.audio.SoundParams.Companion.SRC
+import org.openmk3.core.audio.SoundParams.Companion.SMODEL
+import org.openmk3.core.audio.SoundParams.Companion.SNOTE
+import org.openmk3.core.audio.SoundParams.Companion.SHARM
+import org.openmk3.core.audio.SoundParams.Companion.STIMB
+import org.openmk3.core.audio.SoundParams.Companion.SMORPH
+import org.openmk3.core.audio.SoundParams.Companion.SDEC
+import org.openmk3.core.audio.SoundParams.Companion.SCOL
+import org.openmk3.core.audio.SoundParams.Companion.SLPG
+import org.openmk3.core.audio.SoundParams.Companion.SAUX
+import org.openmk3.core.audio.SoundParams.Companion.SFM
+import org.openmk3.core.audio.SoundParams.Companion.STMOD
+import org.openmk3.core.audio.SoundParams.Companion.SMMOD
+import org.openmk3.core.audio.FxParams
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -48,107 +64,185 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * Sampler parameters of the focused sound, a page of eight knobs at a time.
+ * PLUG-IN: the plug-in chains of the master, the focused group and the focused sound,
+ * following the hardware workflow.
  *
- *  ◀ ▶ or D1–D7 = page (VOICE / SAMPLE / AMP ENV / FILTER / MOD ENV / LFO / VELOCITY) · knobs = parameters (SHIFT = fine)
- *  SHIFT + touch knob = back to default · PADS = focus and play a sound
- *  PLUG-IN = back
+ *  D1 MASTER · D2 GROUP · D3 SOUND (level) · D4 next slot · D5 bypass the effect
+ *  D6 oscilloscope · D8 zero-crossing snap (sampler SAMPLE page)
+ *  ◀ ▶ = parameter pages · knobs = parameters (SHIFT = fine, SHIFT + touch = default)
+ *  Sound slot 1 is the source (SAMPLER or SYNTH); sound slots 2–4 and every group / master
+ *  slot hold an effect (K1 on the first page chooses it).
+ *  Encoder: zoom the waveform (or the scope's time) · tilt: scroll · PADS: focus and play
  */
 class SoundPage(ui: Ui) : Page(ui) {
 
     override val playsPads = true
 
-    private class PageDef(val name: String, val knobs: IntArray)
+    private enum class View { WAVE, AMP, FILTER, MOD, LFO, VEL, SCOPE }
 
-    private companion object {
-        val PAGES = listOf(
-            PageDef("VOICE", intArrayOf(TUNE, VOL, PAN, POLY, ENGINE, REV, -1, -1)),
-            PageDef("SAMPLE", intArrayOf(START, END, -1, -1, LOOP, LSTART, LEND, XFADE)),
-            PageDef("AMP ENV", intArrayOf(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1)),
-            PageDef("FILTER", intArrayOf(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1)),
-            PageDef("MOD ENV", intArrayOf(MATT, MDEC, MPITCH, MCUT, -1, -1, -1, -1)),
-            PageDef("LFO", intArrayOf(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1)),
-            PageDef("VELOCITY", intArrayOf(VVOL, VCUT, -1, -1, -1, -1, -1, -1)),
-        )
-        var lastPage = 0
-        val MARKERS = setOf(START, END, LSTART, LEND)
+    /** A knob: a sound parameter, an effect parameter, or the effect type. */
+    private sealed class Knob {
+        class Snd(val p: Int) : Knob()
+        class Fx(val d: FxParams.Def) : Knob()
+        object Type : Knob()
     }
 
+    private class PageDef(val name: String, val knobs: List<Knob?>, val view: View)
+
+    private companion object {
+        fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
+        val SAMPLER = listOf(
+            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, ENGINE, REV, SRC, GATE), View.WAVE),
+            PageDef("SAMPLE", snd(START, END, -1, -1, LOOP, LSTART, LEND, XFADE), View.WAVE),
+            PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
+            PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
+            PageDef("MOD ENV", snd(MATT, MDEC, MPITCH, MCUT, -1, -1, -1, -1), View.MOD),
+            PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
+            PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
+        )
+        val SYNTH = listOf(
+            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, SNOTE, -1, SRC, GATE), View.SCOPE),
+            PageDef("SYNTH", snd(SMODEL, SHARM, STIMB, SMORPH, SLPG, SDEC, SCOL, SAUX), View.SCOPE),
+            PageDef("SYNTH ENV", snd(SFM, STMOD, SMMOD, -1, -1, -1, -1, -1), View.SCOPE),
+            PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
+            PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
+            PageDef("MOD ENV", snd(MATT, MDEC, MPITCH, MCUT, -1, -1, -1, -1), View.MOD),
+            PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
+            PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
+        )
+        val MARKERS = setOf(START, END, LSTART, LEND)
+        var lastLevel = 2
+        var lastSlot = 0
+        var lastPage = 0
+        var scopeOn = false
+        var scopeWindow = 1024
+    }
+
+    private var level = lastLevel        // 0 master, 1 group, 2 sound
+    private var slotIdx = lastSlot       // sound: 0 = source, 1..3 = effects; group / master: 0..3
     private var pageIdx = lastPage
-    private val page get() = PAGES[pageIdx]
     private var shift = false
     private var dirtySince = 0L
+    private var fxDirtySince = 0L
     private val params = ui.engine.params
+    private val fx = ui.engine.fx
     /** Sound index (0..127) of the focused pad. */
     private val slot get() = ui.selectedIndex
     private val waveView = WaveView()
-    /** Unsnapped marker positions while zero-crossing snap is on (param index -> fraction). */
     private val rawMarker = HashMap<Int, Float>()
     private var focusFrame = 0
+    private val scopeBuf = FloatArray(8192)
 
-    // waveform cache of the focused sample
-    private var waveOf: Sample? = null
-    private val wave = FloatArray(448)
+    private val slotCount get() = if (level == 2) 1 + FxParams.SOUND_FX_SLOTS else FxParams.SLOTS
+    private val isSource get() = level == 2 && slotIdx == 0
+    private val isSynth get() = params[slot, SRC] > 0.5f
+    /** Effect chain index and slot for the current selection (not the sound source). */
+    private val chain get() = when (level) { 0 -> FxParams.MASTER; 1 -> FxParams.GROUP0 + ui.group; else -> slot }
+    private val fxSlot get() = if (level == 2) slotIdx - 1 else slotIdx
+
+    private fun pages(): List<PageDef> {
+        if (isSource) return if (isSynth) SYNTH else SAMPLER
+        val type = fx.type(chain, fxSlot)
+        val defs = FxParams.DEFS[type] ?: emptyList()
+        val name = FxParams.TYPES[type]
+        val first = listOf<Knob?>(Knob.Type) + defs.take(7).map { Knob.Fx(it) }
+        val out = mutableListOf(PageDef(name, first + List(8 - first.size) { null }, View.SCOPE))
+        var rest = defs.drop(7)
+        var n = 2
+        while (rest.isNotEmpty()) {
+            val k = rest.take(8).map { Knob.Fx(it) as Knob? }
+            out.add(PageDef("$name $n", k + List(8 - k.size) { null }, View.SCOPE))
+            rest = rest.drop(8)
+            n++
+        }
+        return out
+    }
+
+    private val page get() = pages().let { it[pageIdx.coerceIn(0, it.size - 1)] }
 
     private val tab = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
     private val tabOn = Theme.text(15f, Theme.ACCENT, bold = true, align = Paint.Align.CENTER)
+    private val strip = Theme.text(13f, Theme.DIM, align = Paint.Align.LEFT)
+    private val stripOn = Theme.text(13f, Theme.ACCENT, bold = true, align = Paint.Align.LEFT)
     private val kName = Theme.text(13f, Theme.DIM, align = Paint.Align.CENTER)
     private val kValue = Theme.text(16f, Theme.FG, bold = true, align = Paint.Align.CENTER)
     private val kOff = Theme.text(16f, Theme.DIM, bold = false, align = Paint.Align.CENTER)
-    private val title = Theme.text(20f, Theme.ACCENT, bold = true)
-    private val big = Theme.text(22f, Theme.FG, bold = true)
+    private val title = Theme.text(18f, Theme.ACCENT, bold = true)
+    private val big = Theme.text(20f, Theme.FG, bold = true)
     private val label = Theme.text(14f, Theme.DIM)
+    private val slotText = Theme.text(15f, Theme.FG)
+    private val slotDim = Theme.text(15f, Theme.DIM)
+    private val selFill = Theme.fill(Color.rgb(60, 60, 80))
     private val sep = Theme.fill(Color.rgb(50, 50, 60))
     private val barBg = Theme.fill(Theme.CELL)
     private val barFg = Theme.fill(Theme.ACCENT)
-    private val waveIn = Theme.fill(Color.rgb(90, 200, 120))
-    private val waveOut = Theme.fill(Color.rgb(50, 70, 60))
-    private val marker = Theme.fill(Theme.ACCENT)
+    private val grFill = Theme.fill(Theme.WARN)
     private val curve = Theme.stroke(Theme.ACCENT, 2f)
-    private val loopFill = Theme.fill(Color.rgb(80, 160, 255))
     private val grid = Theme.stroke(Color.rgb(50, 50, 60), 1f)
 
     override fun onEnter() {
-        ui.buttonLed("PLUG-IN", 0x7F)
+        updateScopeTap()
     }
 
     override fun onExit() {
-        lastPage = pageIdx
+        lastLevel = level; lastSlot = slotIdx; lastPage = pageIdx
         if (dirtySince != 0L) save()
+        if (fxDirtySince != 0L) { fx.save(ui.ctx); fxDirtySince = 0L }
+        ui.engine.setScopeTap(0, 0)
     }
 
-    private fun changed() {
-        if (dirtySince == 0L) dirtySince = SystemClock.uptimeMillis()
-    }
+    private fun changed() { if (dirtySince == 0L) dirtySince = SystemClock.uptimeMillis() }
+    private fun fxChanged() { if (fxDirtySince == 0L) fxDirtySince = SystemClock.uptimeMillis() }
 
     private fun save() {
         params.save(ui.ctx)
         dirtySince = 0L
     }
 
+    private fun updateScopeTap() = when (level) {
+        0 -> ui.engine.setScopeTap(0, 0)
+        1 -> ui.engine.setScopeTap(1, ui.group)
+        else -> ui.engine.setScopeTap(2, slot)
+    }
+
+    private fun showScope() = scopeOn || page.view == View.SCOPE
+
     private var lastHead = -2f
 
     override fun tick(now: Long): Boolean {
         if (dirtySince != 0L && now - dirtySince > 1500) save()
-        // redraw while the playhead moves
-        val h = if (pageIdx <= 1) ui.engine.playPos(slot) else -1f
+        if (fxDirtySince != 0L && now - fxDirtySince > 1500) { fx.save(ui.ctx); fxDirtySince = 0L }
+        updateScopeTap()
+        if (showScope()) return true  // live view
+        val h = if (page.view == View.WAVE) ui.engine.playPos(slot) else -1f
         if (h != lastHead) { lastHead = h; return true }
         return false
     }
+
+    private fun resetPage() { pageIdx = 0; rawMarker.clear() }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
         if (name == "SHIFT") { shift = down; return }
         if (!down) return
         val e = ui.engine
+        val n = pages().size
         when (name) {
-            "ENCODER LEFT" -> if (pageIdx <= 1) waveView.scroll(-1)
-            "ENCODER RIGHT" -> if (pageIdx <= 1) waveView.scroll(1)
-            "D8" -> if (pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
-            "PAGE LEFT" -> pageIdx = (pageIdx + PAGES.size - 1) % PAGES.size
-            "PAGE RIGHT" -> pageIdx = (pageIdx + 1) % PAGES.size
-            "D1", "D2", "D3", "D4", "D5", "D6", "D7" -> pageIdx = name[1] - '1'
+            "D1" -> { level = 0; slotIdx = 0; resetPage() }
+            "D2" -> { level = 1; slotIdx = 0; resetPage() }
+            "D3" -> { level = 2; slotIdx = 0; resetPage() }
+            "D4" -> { slotIdx = (slotIdx + 1) % slotCount; resetPage() }
+            "D5" -> if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) {
+                fx[chain, fxSlot, 1] = if (fx.bypassed(chain, fxSlot)) 0f else 1f
+                fxChanged()
+            }
+            "D6", "ENCODER PUSH" -> scopeOn = !scopeOn
+            "D8" -> if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
+            "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
+            "ENCODER RIGHT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(1)
+            "PAGE LEFT" -> pageIdx = (pageIdx + n - 1) % n
+            "PAGE RIGHT" -> pageIdx = (pageIdx + 1) % n
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
-            "STOP" -> e.transportStop()
+            "STOP" -> e.stopPressed()
             "RESTART" -> e.transportRestart()
             "PLUG-IN" -> ui.showHome()
             "BROWSER" -> ui.show(BrowserPage(ui))
@@ -161,18 +255,45 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.set("PLAY", ui.engine.playing)
         l.set("SHIFT", shift)
         l.set("STOP", "RESTART", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
-        for (i in PAGES.indices) l.set("D${i + 1}", i == pageIdx)
-        if (pageIdx == 1) l.set("D8", ui.zeroSnap)
+        l.set("D1", level == 0)
+        l.set("D2", level == 1)
+        l.set("D3", level == 2)
+        l.set("D4")
+        if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) l.set("D5", fx.bypassed(chain, fxSlot))
+        l.set("D6", scopeOn)
+        if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+        val wasSynth = isSynth
         ui.selectedSound = slot
         rawMarker.clear()
+        if (isSource && wasSynth != isSynth) pageIdx = 0
     }
 
     override fun onKnob(knob: Int, delta: Int) {
-        val p = page.knobs.getOrNull(knob) ?: return
-        if (p < 0) return
+        when (val k = page.knobs.getOrNull(knob)) {
+            is Knob.Snd -> soundKnob(k.p, delta)
+            is Knob.Fx -> { fx.nudge(chain, fxSlot, k.d, delta, shift); fxChanged() }
+            Knob.Type -> typeKnob(delta)
+            null -> {}
+        }
+    }
+
+    private var typeAcc = 0
+
+    private fun typeKnob(delta: Int) {
+        typeAcc += delta
+        if (kotlin.math.abs(typeAcc) < 25) return
+        val dir = if (typeAcc > 0) 1 else -1
+        typeAcc = 0
+        val t = (fx.type(chain, fxSlot) + dir).coerceIn(0, FxParams.TYPES.size - 1)
+        if (t == fx.type(chain, fxSlot)) return
+        ui.engine.setFx(chain, fxSlot, t)
+        org.openmk3.core.AppLog.i("FX ${levelName()} slot ${slotIdx + 1}: ${FxParams.TYPES[t]}")
+    }
+
+    private fun soundKnob(p: Int, delta: Int) {
         val frames = ui.engine.kit[slot].frames
         if (p in MARKERS && frames > 0) {
             // Markers move relative to the zoomed view, and can snap to zero crossings.
@@ -187,69 +308,166 @@ class SoundPage(ui: Ui) : Page(ui) {
             focusFrame = (params[slot, p] * frames).toInt()
             waveView.follow(focusFrame)
         } else {
+            val before = isSynth
             params.nudge(slot, p, delta, shift)
+            if (p == SRC && before != isSynth) pageIdx = 0
         }
         changed()
     }
 
     override fun onKnobTouch(knob: Int, touched: Boolean) {
         if (!touched || !shift) return
-        val p = page.knobs.getOrNull(knob) ?: return
-        val d = SoundParams.DEFS[p] ?: return
-        params[slot, p] = d.default
-        changed()
+        when (val k = page.knobs.getOrNull(knob)) {
+            is Knob.Snd -> { SoundParams.DEFS[k.p]?.let { params[slot, k.p] = it.default }; changed() }
+            is Knob.Fx -> { fx[chain, fxSlot, k.d.index] = k.d.default; fxChanged() }
+            else -> {}
+        }
     }
 
     override fun onEncoder(delta: Int) {
-        if (pageIdx <= 1) { waveView.zoom(delta, focusFrame); return }  // VOICE / SAMPLE: zoom
-        val d = if (delta > 0) 1 else PAGES.size - 1
-        pageIdx = (pageIdx + d) % PAGES.size
+        if (showScope()) {
+            scopeWindow = (if (delta > 0) scopeWindow * 2 else scopeWindow / 2).coerceIn(128, 8192)
+            return
+        }
+        if (page.view == View.WAVE) waveView.zoom(delta, focusFrame)
     }
 
     // =====================================================================================
 
+    private fun levelName() = when (level) {
+        0 -> "MASTER"
+        1 -> "GROUP ${ui.groupLetter}"
+        else -> "SOUND ${ui.padLabel()}"
+    }
+
+    private fun slotName(i: Int): String {
+        if (level == 2 && i == 0) return if (isSynth) "SYNTH · ${SoundParams.MODELS[params[slot, SMODEL].toInt().coerceIn(0, 23)]}" else "SAMPLER"
+        val fs = if (level == 2) i - 1 else i
+        val t = fx.type(chain, fs)
+        return if (t == FxParams.NONE) "—" else FxParams.TYPES[t] + if (fx.bypassed(chain, fs)) " (bypassed)" else ""
+    }
+
     private fun knobCell(c: Canvas, i: Int) {
-        val p = page.knobs[i]
-        if (p < 0) return
-        val d = SoundParams.DEFS[p] ?: return
+        val k = page.knobs.getOrNull(i) ?: return
         val x = 60f + (i % 4) * 120f
-        val on = applies(p)
-        c.drawText(d.name, x, 232f, kName)
-        c.drawText(params.display(slot, p), x, 252f, if (on) kValue else kOff)
-        val v = params[slot, p]
-        val frac = if (d.log) (ln(v / d.min) / ln(d.max / d.min)) else (v - d.min) / (d.max - d.min)
+        val name: String
+        val value: String
+        val frac: Float
+        var on = true
+        when (k) {
+            is Knob.Snd -> {
+                val d = SoundParams.DEFS[k.p] ?: return
+                name = d.name
+                value = params.display(slot, k.p)
+                val v = params[slot, k.p]
+                frac = if (d.log) ln(v / d.min) / ln(d.max / d.min) else (v - d.min) / (d.max - d.min)
+                on = applies(k.p)
+            }
+            is Knob.Fx -> {
+                val d = k.d
+                name = d.name
+                value = fx.display(chain, fxSlot, d)
+                val v = fx[chain, fxSlot, d.index]
+                frac = if (d.log) ln(v / d.min) / ln(d.max / d.min) else (v - d.min) / (d.max - d.min)
+            }
+            Knob.Type -> {
+                name = "TYPE"
+                val t = fx.type(chain, fxSlot)
+                value = FxParams.TYPES[t]
+                frac = t / (FxParams.TYPES.size - 1f)
+            }
+        }
+        c.drawText(name, x, 232f, kName)
+        c.drawText(value, x, 252f, if (on) kValue else kOff)
         c.drawRect(x - 44f, 260f, x + 44f, 265f, barBg)
         c.drawRect(x - 44f, 260f, x - 44f + 88f * frac.coerceIn(0f, 1f), 265f, barFg)
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
-        // ---- left ----
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
-        for ((i, pg) in PAGES.withIndex()) {
-            val c = if (i < 4) l else r
-            c.drawText(pg.name, 60f + (i % 4) * 120f, 26f, if (i == pageIdx) tabOn else tab)
+        // D-button labels
+        l.drawText("MASTER", 60f, 24f, if (level == 0) tabOn else tab)
+        l.drawText("GROUP", 180f, 24f, if (level == 1) tabOn else tab)
+        l.drawText("SOUND", 300f, 24f, if (level == 2) tabOn else tab)
+        l.drawText("SLOT ${slotIdx + 1} ▸", 420f, 24f, tab)
+        if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE)
+            r.drawText("BYPASS", 60f, 24f, if (fx.bypassed(chain, fxSlot)) tabOn else tab)
+        r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
+        if (isSource && !isSynth && pageIdx == 1)
+            r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
+        l.drawRect(0f, 34f, 480f, 35f, sep)
+        r.drawRect(0f, 34f, 480f, 35f, sep)
+        // page strip (◀ ▶)
+        val ps = pages()
+        var x = 8f
+        for ((i, pg) in ps.withIndex()) {
+            val p = if (i == pageIdx.coerceIn(0, ps.size - 1)) stripOn else strip
+            if (x + p.measureText(pg.name) > 472f) break
+            l.drawText(pg.name, x, 52f, p)
+            x += p.measureText(pg.name) + 14f
         }
-        l.drawRect(0f, 40f, 480f, 41f, sep)
-        l.drawText("SAMPLER · ${ui.padLabel()}", 16f, 74f, title)
-        l.drawText(ellipsize(ui.engine.kit[slot].name.ifEmpty { "(empty)" }, 30), 16f, 106f, big)
-        l.drawText(ellipsize(ui.engine.kit[slot].info, 54), 16f, 130f, label)
-        l.drawText(pageHint(), 16f, 166f, label)
-        l.drawText("◀ ▶ / D1–D7 pages · SHIFT fine · SHIFT + touch resets", 16f, 196f, label)
+        // chain list
+        l.drawText(levelName(), 16f, 80f, title)
+        if (level == 2) l.drawText(ellipsize(ui.engine.kit[slot].name.ifEmpty { if (isSynth) "" else "(empty)" }, 24), 200f, 80f, slotDim)
+        for (i in 0 until slotCount) {
+            val y = 92f + i * 26f
+            if (i == slotIdx) l.drawRect(8f, y, 472f, y + 24f, selFill)
+            l.drawText("${i + 1}", 18f, y + 18f, slotDim)
+            l.drawText(ellipsize(slotName(i), 40), 40f, y + 18f, if (slotName(i) == "—") slotDim else slotText)
+        }
         l.drawRect(0f, 214f, 480f, 215f, sep)
-        for (i in 0 until 4) knobCell(l, i)
-
-        // ---- right ----
-        r.drawRect(0f, 40f, 480f, 41f, sep)
         r.drawRect(0f, 214f, 480f, 215f, sep)
+        for (i in 0 until 4) knobCell(l, i)
         for (i in 4 until 8) knobCell(r, i)
-        when (pageIdx) {
-            0, 1 -> drawWave(r)
-            2 -> drawEnvelope(r)
-            3 -> drawFilter(r)
-            4 -> drawModEnv(r)
-            5 -> drawLfo(r)
-            6 -> drawVelocity(r)
+        // right screen view
+        if (showScope()) { drawScope(r); return }
+        when (page.view) {
+            View.WAVE -> drawWave(r)
+            View.AMP -> drawEnvelope(r)
+            View.FILTER -> drawFilter(r)
+            View.MOD -> drawModEnv(r)
+            View.LFO -> drawLfo(r)
+            View.VEL -> drawVelocity(r)
+            View.SCOPE -> drawScope(r)
+        }
+    }
+
+    /** Oscilloscope of the selected level, triggered on a rising zero crossing. */
+    private fun drawScope(c: Canvas) {
+        val top = 50f; val bot = 206f; val mid = (top + bot) / 2; val half = (bot - top) / 2 - 4f
+        val x0 = 16f; val w = 448f
+        val n = scopeWindow
+        ui.engine.scope(scopeBuf)
+        val len = scopeBuf.size
+        // find a rising zero crossing so periodic sounds stand still
+        var start = len - n - 1
+        var k = len - n - 1
+        val limit = max(1, len - n - 4096)
+        while (k > limit) {
+            if (scopeBuf[k - 1] <= 0f && scopeBuf[k] > 0f) { start = k; break }
+            k--
+        }
+        var peak = 0.05f
+        for (i in start until start + n) peak = max(peak, abs(scopeBuf[i]))
+        val gain = if (peak < 0.25f) 0.25f / peak else 1f  // small signals are scaled up
+        c.drawLine(x0, mid, x0 + w, mid, grid)
+        val path = Path()
+        for (col in 0..447) {
+            val idx = start + (col.toLong() * n / 448).toInt()
+            val y = mid - (scopeBuf[idx] * gain).coerceIn(-1f, 1f) * half
+            if (col == 0) path.moveTo(x0 + col, y) else path.lineTo(x0 + col, y)
+        }
+        val col = Mk3Colors.rgb(if (level == 2) ui.soundColour(slot) else if (level == 1) groupColour(ui.group) else Mk3Colors.WHITE)
+        c.drawPath(path, Theme.stroke(col, 2f))
+        val ms = n * 1000f / 48000f
+        c.drawText("SCOPE · ${levelName()} · ${"%.1f".format(ms)} ms${if (gain > 1.01f) " · ×${"%.1f".format(gain)}" else ""}", x0, 210f, label)
+        // compressor: gain reduction bar
+        if (!isSource && fx.type(chain, fxSlot) == FxParams.COMPRESSOR) {
+            val gr = ui.engine.fxMeter(chain, fxSlot).coerceIn(0f, 24f)
+            c.drawRect(470f, top, 476f, bot, barBg)
+            c.drawRect(470f, top, 476f, top + (bot - top) * gr / 24f, grFill)
+            c.drawText("GR ${"%.1f".format(gr)} dB", 360f, 210f, label)
         }
     }
 
@@ -257,6 +475,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         val s = ui.engine.kit[slot]
         if (s.frames == 0) { c.drawText("Empty pad: load a sample (BROWSER) or record one (SAMPLING)", 16f, 130f, label); return }
         waveView.set(s.data, s.channels)
+        waveView.setColour(Mk3Colors.rgb(ui.soundColour(slot)))
         val n = s.frames
         fun fr(p: Int) = (params[slot, p] * n).toInt()
         val loop = if (params[slot, LOOP] > 0.5f && params[slot, ENV] > 0.5f) intArrayOf(fr(LSTART), fr(LEND)) else null
@@ -268,10 +487,6 @@ class SoundPage(ui: Ui) : Page(ui) {
             if (pageIdx == 1) add("encoder: zoom · tilt: scroll")
         }
         c.drawText(notes.joinToString("  ·  "), 16f, 210f, label)
-        if (pageIdx == 1) {
-            c.drawText("SNAP", 420f, 16f, kName)
-            c.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", 420f, 34f, if (ui.zeroSnap) tabOn else kOff)
-        }
     }
 
     private fun drawEnvelope(c: Canvas) {
