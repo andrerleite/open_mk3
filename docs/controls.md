@@ -48,7 +48,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + SCENE (Section) | Arranger sections | ⬜ |
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Edit or select events: pads choose the sound, encoder and knobs edit | ⬜ |
-| VARIATION | Humanise / randomise the selected events | ⬜ |
+| VARIATION | Hold (D1 pins): HUMANIZE varies the focused sound's velocities; RANDOM writes new random notes (density, velocity, note range); D8 applies | 🟡 (timing variation needs off-grid notes) |
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
@@ -116,7 +116,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SWING (Position) | Encoder adjusts swing | 🟡 (position ⬜) |
 | TEMPO (Tune) | Encoder adjusts tempo (SHIFT: fine). SHIFT + TEMPO: encoder tunes the focused sound. | ✅ |
 | NOTE REPEAT (Arp) | Hold: pads repeat (arpeggiator in KEYBOARD / CHORDS). Hold + D1 pins it. SHIFT + NOTE REPEAT: KEYBOARD with the arpeggiator. | ✅ |
-| LOCK (Ext Lock) | Snapshot / lock parameter states | ⬜ |
+| LOCK (Ext Lock) | LOCK: quick snapshot of every sound / effect / mixer setting, press again to recall. SHIFT + LOCK: 16 snapshots on the pads (empty pad stores, pad recalls, ERASE + pad deletes, D5 updates), K1 morph on / off, K2 morph time in bars | ✅ |
 
 ## Touch strip
 

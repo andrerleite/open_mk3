@@ -284,6 +284,14 @@ class Pattern {
         writeCell(g, pad, step, d)
     }
 
+    /** Sets the main note's velocity of a step (0 removes it). */
+    fun setVelocity(sound: Int, step: Int, v: Float) {
+        val g = sound / PADS
+        val d = cur(g) ?: return
+        d.vel[sound % PADS][step] = v.coerceIn(0f, 1f)
+        writeCell(g, sound % PADS, step, d)
+    }
+
     fun clearStep(sound: Int, step: Int) {
         val g = sound / PADS
         val d = cur(g) ?: return

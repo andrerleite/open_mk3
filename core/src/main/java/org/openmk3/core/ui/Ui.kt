@@ -233,6 +233,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var padMode = PadMode.PAD
         private set
     val keys: org.openmk3.core.audio.Keys = org.openmk3.core.audio.Keys.load(ctx)
+    val lock = org.openmk3.core.audio.Lock(engine)
 
     /** The (sound, note) pairs pad [slot] plays in the current pad mode. */
     fun notesForPad(slot: Int): List<Pair<Int, Int>> = when (padMode) {
@@ -358,6 +359,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         try {
             val now = SystemClock.uptimeMillis()
             if (page.tick(now)) dirty = true
+            if (lock.tick(now)) dirty = true
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
             if (page !is WizardPage) {
@@ -474,10 +476,11 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             return@post
         }
         // PATTERN / SCENE released: back, unless pinned
-        if (!down && (name == "PATTERN" || name == "SCENE")) {
+        if (!down && (name == "PATTERN" || name == "SCENE" || name == "VARIATION")) {
             if (modeHeld == name) modeHeld = null
             val cur = page
             if (cur is SlotPage && name !in pinned) cur.back()
+            if (cur is VariationPage && name !in pinned) cur.back()
             return@post
         }
         // while NOTE REPEAT is held: D3 arp hold, D4 gate reset, D5-D8 rate presets
@@ -539,6 +542,23 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     val cur = page
                     if (cur is SlotPage && cur.kind == kind) cur.back()  // pinned: press again to leave
                     else show(SlotPage(this, if (cur is SlotPage) org.openmk3.core.Edition.homePage(this) else cur, kind))
+                    return@post
+                }
+                "VARIATION" -> {
+                    modeHeld = name
+                    val cur = page
+                    if (cur is VariationPage) cur.back() else show(VariationPage(this, cur))
+                    return@post
+                }
+                "LOCK" -> {
+                    val cur = page
+                    when {
+                        cur is LockPage -> cur.back()
+                        shiftHeld -> show(LockPage(this, cur))
+                        lock.quick == null -> { lock.quick = lock.take(); AppLog.i("Lock: snapshot taken") }
+                        else -> { lock.recall(lock.quick!!); lock.quick = null; AppLog.i("Lock: snapshot recalled") }
+                    }
+                    dirty = true
                     return@post
                 }
                 // Pad input modes: switch the pads and show the mode's settings; pressing the
@@ -633,7 +653,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (repeatKind == RepeatKind.ARP) lights.set("D3", arpHold)
             lights.set("D4")
         }
-        if (modeHeld == "PATTERN" || modeHeld == "SCENE") lights.set("D1", modeHeld in pinned)
+        if (modeHeld == "PATTERN" || modeHeld == "SCENE" || modeHeld == "VARIATION") lights.set("D1", modeHeld in pinned)
+        lights.set("LOCK", lock.quick != null || page is LockPage)
+        if (page is VariationPage) lights.set("VARIATION", true)
         val p = engine.pattern
         for (g in 0 until 8) {
             val c = groupColour(g)
