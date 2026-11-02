@@ -409,6 +409,9 @@ public:
     std::atomic<float> repeatGate{0.5f}; // note length, fraction of the rate
     std::atomic<int> arpType{0};         // 0 up, 1 down, 2 up-down, 3 random, 4 as played, 5 chord
     std::atomic<int> arpOctaves{1};
+    std::atomic<int> repeatDyn{0};       // velocity shape: 0 as played, 1 full, 2 accent, 3 ramp up, 4 ramp down, 5 random
+    std::atomic<int> repeatRhythm{0};    // index into kRhythms: which ticks play
+    int rpTick = 0;
     std::atomic<bool> recording{false};  // repeat / arp hits are written into the pattern
     std::atomic<bool> recorded{false};   // set when the engine wrote into the pattern (Kotlin syncs)
 private:
@@ -1006,12 +1009,19 @@ void Engine::recordEvent(float* p, int sound, double at, int note, float vel) {
     recorded.store(true, std::memory_order_release);
 }
 
+/** Repeat / arp rhythms: x = tick plays, . = rest (cycled). */
+static const char* const kRhythms[] = {"x", "x.", "xx.", "x.x", "xxx.", "x..x..x.", "xx.x.xx.", "x...x.x."};
+constexpr int kRhythmCount = int(sizeof(kRhythms) / sizeof(kRhythms[0]));
+
 void Engine::runRepeat(int frames) {
     const int mode = repeatMode.load(std::memory_order_relaxed);
     int count = 0;
     for (auto& hd : held) count += hd.slot >= 0;
     if (mode == 0) for (auto& hd : held) hd.slot = -1;  // switched off: forget held pads
-    if (mode == 0 || count == 0) { rpIdle = true; arpIndex = 0; arpDir = 1; return; }
+    if (mode == 0 || count == 0) { rpIdle = true; arpIndex = 0; arpDir = 1; rpTick = 0; return; }
+    const char* rhythm = kRhythms[std::clamp(repeatRhythm.load(std::memory_order_relaxed), 0, kRhythmCount - 1)];
+    const int rhythmLen = int(strlen(rhythm));
+    const int dyn = repeatDyn.load(std::memory_order_relaxed);
     float* p = pattern.load(std::memory_order_acquire);
     double bpm = p ? p[OFF_BPM] : 120.0;
     if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
@@ -1032,11 +1042,27 @@ void Engine::runRepeat(int frames) {
     const bool rec = recording.load(std::memory_order_relaxed) && playing && rpNext >= 0.0;
     while (rpNext < end) {
         int off = std::clamp(int(std::lround((rpNext - startNow) * stepLen)), 0, frames - 1);
+        const int tick = rpTick++;
+        if (rhythm[tick % rhythmLen] != 'x') { rpNext += rate; continue; }  // a rest
+        // velocity shape over groups of 4 ticks
+        auto shape = [&](float v) {
+            const int k = tick % 4;
+            switch (dyn) {
+                case 1: return 1.f;
+                case 2: return k == 0 ? std::min(1.f, v * 1.2f) : v * 0.6f;
+                case 3: return v * (0.4f + 0.2f * k);
+                case 4: return v * (1.f - 0.2f * k);
+                case 5: arpRnd ^= arpRnd << 13; arpRnd ^= arpRnd >> 17; arpRnd ^= arpRnd << 5;
+                        return v * (0.45f + 0.55f * float(arpRnd % 1000u) / 999.f);
+                default: return v;
+            }
+        };
         if (mode == 1) {
             for (auto& hd : held) {
                 if (hd.slot < 0) continue;
-                startVoice(hd.slot, hd.vel, off, gateFrames, true, hd.note, hd.chord);
-                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, hd.note, hd.vel);
+                const float v = shape(hd.vel);
+                startVoice(hd.slot, v, off, gateFrames, true, hd.note, hd.chord);
+                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, hd.note, v);
             }
         } else {
             // arpeggiator: the held notes (sorted, or in playing order) over 1-4 octaves
@@ -1051,7 +1077,7 @@ void Engine::runRepeat(int frames) {
             if (type == 5) {
                 for (int o = 0; o < oct; o++)
                     for (int k = 0; k < n; k++)
-                        if (o == arpIndex % oct) startVoice(list[k].slot, list[k].vel, off, gateFrames, true, std::min(127, list[k].note + 12 * o), n);
+                        if (o == arpIndex % oct) startVoice(list[k].slot, shape(list[k].vel), off, gateFrames, true, std::min(127, list[k].note + 12 * o), n);
                 arpIndex++;
             } else {
                 int idx;
@@ -1070,8 +1096,9 @@ void Engine::runRepeat(int frames) {
                 }
                 const Held& hd = list[idx % n];
                 const int note = std::min(127, hd.note + 12 * (idx / n));
-                startVoice(hd.slot, hd.vel, off, gateFrames, true, note, 1);
-                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, note, hd.vel);
+                const float v = shape(hd.vel);
+                startVoice(hd.slot, v, off, gateFrames, true, note, 1);
+                if (rec && rate >= 1.0 - 1e-6) recordEvent(p, hd.slot, rpNext, note, v);
             }
         }
         rpNext += rate;
@@ -2130,6 +2157,11 @@ JNIEXPORT void JNICALL JNI_FN(nativeNoteOff)(JNIEnv*, jobject, jint slot, jint n
 JNIEXPORT void JNICALL JNI_FN(nativeRepeatHold)(JNIEnv*, jobject, jint slot, jint note, jfloat vel, jint chord, jint type) {
     gEngine.pushTrigger(slot, vel, type, note, chord);
 }
+JNIEXPORT void JNICALL JNI_FN(nativeRepeatShape)(JNIEnv*, jobject, jint dynamics, jint rhythm) {
+    gEngine.repeatDyn.store(dynamics);
+    gEngine.repeatRhythm.store(rhythm);
+}
+
 JNIEXPORT void JNICALL JNI_FN(nativeRepeatConfig)(JNIEnv*, jobject, jint mode, jfloat rate, jfloat gate, jint arpType, jint octaves) {
     gEngine.repeatMode.store(mode);
     gEngine.repeatRate.store(rate);

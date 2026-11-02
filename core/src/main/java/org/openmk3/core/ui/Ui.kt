@@ -324,6 +324,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     var repeatGate = 1f
     var arpType = 0
     var arpOctaves = 1
+    /** K4 rhythm (which ticks play) and K5 dynamics (velocity shape), for repeat and arp. */
+    var repeatRhythm = 0
+    var repeatDyn = 0
     /** Arp HOLD: notes keep playing after the pads are released. */
     var arpHold = false
     private val arpHeldNotes = mutableListOf<Pair<Int, Int>>()
@@ -343,6 +346,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         /** Rates in 16th steps. */
         val REPEAT_STEPS = floatArrayOf(4f, 8f / 3f, 2f, 4f / 3f, 1f, 2f / 3f, 0.5f, 1f / 3f)
         val ARP_TYPES = listOf("UP", "DOWN", "UP-DOWN", "RANDOM", "AS PLAYED", "CHORD")
+        /** Same order as kRhythms in the engine: ● plays, ○ rests. */
+        val RHYTHMS = listOf("x", "x.", "xx.", "x.x", "xxx.", "x..x..x.", "xx.x.xx.", "x...x.x.").map { it.replace('x', '●').replace('.', '○') }
+        val DYNAMICS = listOf("AS PLAYED", "FULL", "ACCENT", "RAMP UP", "RAMP DOWN", "RANDOM")
     }
 
     private fun pushRepeat() {
@@ -350,6 +356,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         repeatKind = if (padMode == PadMode.KEYBOARD || padMode == PadMode.CHORDS) RepeatKind.ARP else RepeatKind.REPEAT
         if (!repeatActive && arpHold) applyArpHold(false)
         val mode = if (!repeatActive) 0 else if (repeatKind == RepeatKind.ARP) 2 else 1
+        engine.repeatShape(repeatDyn, repeatRhythm)
         engine.repeatConfig(mode, REPEAT_STEPS[repeatRate], repeatGate, arpType, arpOctaves)
         dirty = true
     }
@@ -706,6 +713,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         when (knob) {
             1 -> if (arp) arpType = (arpType + step()).coerceIn(0, ARP_TYPES.size - 1)
             2 -> repeatPresets[repeatPreset] = (repeatPresets[repeatPreset] + step()).coerceIn(0, REPEAT_RATES.size - 1)
+            3 -> repeatRhythm = (repeatRhythm + step()).coerceIn(0, RHYTHMS.size - 1)
+            4 -> repeatDyn = (repeatDyn + step()).coerceIn(0, DYNAMICS.size - 1)
             5 -> if (arp) arpOctaves = (arpOctaves + step()).coerceIn(1, 4)
             7 -> repeatGate = (repeatGate + delta / 500f).coerceIn(0.05f, 2f)
         }
@@ -837,6 +846,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
         l.drawText("RATE", 300f, 232f, ovName)
         l.drawText(REPEAT_RATES[repeatRate], 300f, 254f, ovVal)
+        l.drawText("RHYTHM", 420f, 232f, ovName)
+        l.drawText(RHYTHMS[repeatRhythm], 420f, 254f, ovVal)
+        r.drawText("DYNAMICS", 60f, 232f, ovName)
+        r.drawText(DYNAMICS[repeatDyn], 60f, 254f, ovVal)
         if (arp) {
             r.drawText("OCTAVES", 180f, 232f, ovName)
             r.drawText("$arpOctaves", 180f, 254f, ovVal)

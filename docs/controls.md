@@ -253,6 +253,7 @@ plays.
 | While held: D5–D8 | Four rate presets; K3 changes the selected one (1/4 … 1/32T) |
 | While held (arp): D3 / D4 | Hold (notes keep playing after release) / gate back to 100 % |
 | While held: K2 / K6 / K8 | Arp type (up, down, up-down, random, as played, chord) / arp octaves (1–4) / gate (5–200 %) |
+| While held: K4 / K5 | Rhythm (which ticks play, e.g. ●○ or ●●○) / dynamics (as played, full, accent, ramp up, ramp down, random) — for repeat and arp |
 
 Repeats follow the transport grid while playing (free-running when stopped) and the pad's
 pressure sets their velocity. While recording, repeat and arp notes at 1/16 or slower are

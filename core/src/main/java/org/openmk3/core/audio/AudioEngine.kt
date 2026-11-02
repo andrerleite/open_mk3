@@ -56,6 +56,7 @@ object NativeEngine {
     external fun nativeNoteOff(slot: Int, note: Int)
     external fun nativeRepeatHold(slot: Int, note: Int, vel: Float, chord: Int, type: Int)
     external fun nativeRepeatConfig(mode: Int, rate: Float, gate: Float, arpType: Int, octaves: Int)
+    external fun nativeRepeatShape(dynamics: Int, rhythm: Int)
     external fun nativeSetRecording(on: Boolean)
     external fun nativeTakeRecorded(): Boolean
     external fun nativeInitSynths()
@@ -326,6 +327,7 @@ class AudioEngine(private val ctx: Context) {
     /** NOTE REPEAT / ARP: a held note (type 3 down, 4 up, 5 pressure). */
     fun repeatHold(slot: Int, note: Int, vel: Float, chord: Int, type: Int) = n.nativeRepeatHold(slot, note, vel, chord, type)
     /** [mode] 0 off, 1 repeat, 2 arp; [rate] in 16th steps; [gate] fraction of the rate. */
+    fun repeatShape(dynamics: Int, rhythm: Int) = n.nativeRepeatShape(dynamics, rhythm)
     fun repeatConfig(mode: Int, rate: Float, gate: Float, arpType: Int, octaves: Int) =
         n.nativeRepeatConfig(mode, rate, gate, arpType, octaves)
     /** While on (and playing), repeat / arp hits are recorded into the pattern by the engine. */
