@@ -21,7 +21,7 @@
 
 #include <cerrno>
 #include <thread>
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
 #include <android/performance_hint.h>
 #endif
 #include <chrono>
@@ -192,7 +192,7 @@ static bool initDefaults() {
     d[P_END] = 1; d[P_ATT] = 0.001f; d[P_HOLD] = 0.05f; d[P_DEC] = 0.5f; d[P_CUT] = 20000;
     d[P_SUS] = 0.7f; d[P_REL] = 0.2f; d[P_POLY] = 1; d[P_LEND] = 1; d[P_MATT] = 0.001f;
     d[P_MDEC] = 0.2f; d[P_LRATE] = 4; d[P_VVOL] = 1;
-    d[P_SMODEL] = 8; d[P_SNOTE] = 48; d[P_SHARM] = 0.5f; d[P_STIMB] = 0.5f; d[P_SMORPH] = 0.5f;
+    d[P_SMODEL] = 8; d[P_SNOTE] = 60; d[P_SHARM] = 0.5f; d[P_STIMB] = 0.5f; d[P_SMORPH] = 0.5f;
     d[P_SDEC] = 0.5f; d[P_SCOL] = 0.5f; d[P_SLPG] = 1; d[P_FMFB] = -1;
     return true;
 }
@@ -1264,7 +1264,7 @@ void Engine::runRepeat(int frames) {
 
 // ---- performance hint: tells Android how long each audio callback works, so the scheduler
 // keeps the audio thread on fast cores at a high enough clock (screen off especially) ----
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
 static std::atomic<APerformanceHintSession*> gHint{nullptr};
 static std::atomic<int> gHintState{0};  // 0 not tried, 1 no manager, 2 session refused, 3 on
 static std::atomic<int> gHintTid{0};
@@ -1292,7 +1292,7 @@ void Engine::render(float* out, int32_t frames) {
     callbackFrames.store(frames, std::memory_order_relaxed);
     const int64_t t0 = nowNanos();
     for (auto& a : secAcc) a = 0;
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
     {
         // target: half of the callback's time, so there is always headroom
         const int64_t target = int64_t(frames) * 500000000LL / kSampleRate;
@@ -1310,7 +1310,7 @@ void Engine::render(float* out, int32_t frames) {
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
     // CPU load: render time over the audio it made (peak and average, read by the heartbeat)
     const int64_t took = nowNanos() - t0;
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
     if (auto* s = gHint.load(std::memory_order_acquire)) APerformanceHint_reportActualWorkDuration(s, took > 0 ? took : 1);
 #endif
     const double load = double(took) / (double(frames) * 1e9 / kSampleRate);
@@ -2566,7 +2566,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat
 /** Performance hint: makes the session for the audio thread if needed; returns its state
  *  (0 no audio thread yet, 1 unsupported, 2 refused, 3 on). */
 JNIEXPORT jint JNICALL JNI_FN(nativeHintPoll)(JNIEnv*, jobject) {
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
     return hintPoll();
 #else
     return 0;
@@ -2575,7 +2575,7 @@ JNIEXPORT jint JNICALL JNI_FN(nativeHintPoll)(JNIEnv*, jobject) {
 
 /** Audio CPU load since the last call: [average, peak] as fractions of real time. */
 JNIEXPORT jfloatArray JNICALL JNI_FN(nativeCpuLoad)(JNIEnv* env, jobject) {
-#ifndef TEST
+#if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
     const float hint = float(gHintState.load());
 #else
     const float hint = 0.f;

@@ -681,7 +681,14 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     AppLog.i("Loop ${if (engine.pattern.loop) "on" else "off"}")
                     dirty = true
                     return@post
+                } else if (!page.handlesTransport) { engine.transportRestart(); dirty = true; return@post }
+                // transport on pages without their own handling
+                "PLAY" -> if (!page.handlesTransport) {
+                    if (engine.playing) engine.transportStop() else engine.transportPlay()
+                    dirty = true
+                    return@post
                 }
+                "STOP" -> if (!page.handlesTransport) { engine.stopPressed(); dirty = true; return@post }
                 "CHANNEL" -> { if (page is ChannelPage) showHome() else show(ChannelPage(this)); return@post }
                 "MACRO" -> { if (page is MacroPage) showHome() else show(MacroPage(this, shiftHeld)); return@post }
                 "FILE" -> {
@@ -691,11 +698,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 "BROWSER" -> if (shiftHeld && org.openmk3.core.Edition.full) {  // SHIFT + BROWSER: instruments
                     if (page is InstrumentPage) showHome() else show(InstrumentPage(this))
                     return@post
-                }
+                } else if (!page.handlesTransport && page !is InstrumentPage && page !is ZonePage) { show(BrowserPage(this)); return@post }
+                "PLUG-IN" -> if (!page.handlesTransport && org.openmk3.core.Edition.full) { show(SoundPage(this)); return@post }
                 "SAMPLING" -> if (shiftHeld) {  // SHIFT + SAMPLING: the focused sound's zones
                     if (page is ZonePage) showHome() else show(ZonePage(this))
                     return@post
-                }
+                } else if (!page.handlesTransport && page !is ZonePage) { show(SamplingPage(this)); return@post }
                 "PERFORM" -> if (shiftHeld) {  // SHIFT + PERFORM: choose the perform FX
                     if (page is PerformPage) showHome() else show(PerformPage(this))
                     return@post
@@ -840,6 +848,21 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("FOLLOW", follow)
         lights.set("PATTERN", false)
         lights.set("SCENE", false)
+        // every button that does something here is at least dim
+        lights.set("EVENTS", page is EventsPage)
+        lights.set("VARIATION", page is VariationPage)
+        lights.set("SELECT", selectHeld)
+        lights.set("SHIFT", shiftHeld)
+        lights.set("DUPLICATE", dupHeld)
+        lights.set("ERASE", eraseHeld)
+        lights.set("LOCK", lock.quick != null || page is LockPage)
+        lights.set("BROWSER", page is BrowserPage || page is InstrumentPage)
+        lights.set("SAMPLING", page is SamplingPage || page is ZonePage)
+        if (org.openmk3.core.Edition.full) lights.set("PLUG-IN", page is SoundPage)
+        if (!page.handlesTransport) {
+            lights.set("PLAY", engine.playing)
+            lights.set("STOP", "RESTART")
+        }
         page.lights(lights)
         lights.set("FIXED VEL", fixedVel || padMode == PadMode.VEL16)
         if (repeatHeld) {
@@ -1017,6 +1040,8 @@ abstract class Page(val ui: Ui) {
     open fun lights(l: Lights) {}
     /** Pages that drive the pad LEDs themselves set this. */
     open val customPads = false
+    /** Pages with their own PLAY / STOP / RESTART handling set this (otherwise they are global). */
+    open val handlesTransport = false
     /** Override one pad's LED on a page with default pad lights (null = default). */
     open fun padLight(slot: Int, now: Long): Int? = null
     /** A page that gives FIXED VEL its own meaning sets this (none do yet). */

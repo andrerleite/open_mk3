@@ -62,6 +62,7 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -81,6 +82,8 @@ object SoundPageNav {
 }
 
 class SoundPage(ui: Ui) : Page(ui) {
+
+    override val handlesTransport = true
 
     override val playsPads = true
 
@@ -156,7 +159,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         var scopeOn = false
         var scopeWindow = 1024
         /** Scope: free-running (the output as it plays) or locked to a rising zero crossing. */
-        var scopeFree = true
+        var scopeFree = false
     }
 
     private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
@@ -287,7 +290,7 @@ class SoundPage(ui: Ui) : Page(ui) {
                 fx[chain, fxSlot, 1] = if (fx.bypassed(chain, fxSlot)) 0f else 1f
                 fxChanged()
             }
-            "D6", "ENCODER PUSH" -> scopeOn = !scopeOn
+            "D6", "ENCODER PUSH" -> if (page.view != View.SCOPE) scopeOn = !scopeOn
             "D7" -> if (showScope()) scopeFree = !scopeFree
             "D8" -> if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
             "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
@@ -313,7 +316,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.set("D3", level == 2)
         l.set("D4")
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) l.set("D5", fx.bypassed(chain, fxSlot))
-        l.set("D6", scopeOn)
+        if (page.view != View.SCOPE) l.set("D6", scopeOn)
         if (showScope()) l.set("D7", !scopeFree)
         if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
     }
@@ -525,7 +528,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.drawText("SLOT ${slotIdx + 1} ▸", 420f, 24f, tab)
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE)
             r.drawText("BYPASS", 60f, 24f, if (fx.bypassed(chain, fxSlot)) tabOn else tab)
-        r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
+        if (page.view != View.SCOPE) r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
         if (showScope()) r.drawText(if (scopeFree) "FREE" else "LOCKED", 300f, 24f, if (scopeFree) tab else tabOn)
         if (isSource && !isSynth && pageIdx == 1)
             r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
@@ -566,14 +569,66 @@ class SoundPage(ui: Ui) : Page(ui) {
         }
     }
 
-    /** Oscilloscope of the selected level, triggered on a rising zero crossing. */
+    // ---- pitch detection (YIN, on the scope signal decimated to 24 kHz) ----
+    private val yinBuf = FloatArray(1024)
+    private val yinD = FloatArray(512)
+    private var pitchHz = 0f
+    private var pitchFrame = 0
+
+    /** Fundamental of the newest audio in [buf] in Hz, or 0 when there is no clear pitch. */
+    private fun detectPitch(buf: FloatArray): Float {
+        val n = yinBuf.size
+        val src = buf.size - 2 * n
+        var energy = 0f
+        for (i in 0 until n) { val x = 0.5f * (buf[src + 2 * i] + buf[src + 2 * i + 1]); yinBuf[i] = x; energy += x * x }
+        if (energy / n < 1e-6f) return 0f
+        val half = n / 2
+        // difference function and its cumulative mean normalisation
+        var running = 0f
+        yinD[0] = 1f
+        for (tau in 1 until half) {
+            var d = 0f
+            for (j in 0 until half) { val e = yinBuf[j] - yinBuf[j + tau]; d += e * e }
+            running += d
+            yinD[tau] = if (running > 0f) d * tau / running else 1f
+        }
+        // first dip under the threshold (lags 12..500 at 24 kHz: 48 Hz .. 2 kHz)
+        var tau = 12
+        while (tau < half - 1 && yinD[tau] > 0.15f) tau++
+        if (tau >= half - 1) {
+            // no dip under the threshold: take the global minimum if it is clear enough
+            tau = (12 until half - 1).minByOrNull { yinD[it] } ?: return 0f
+            if (yinD[tau] > 0.35f) return 0f
+        }
+        while (tau + 1 < half && yinD[tau + 1] < yinD[tau]) tau++
+        // parabolic interpolation around the minimum
+        val a = yinD[tau - 1]; val b = yinD[tau]; val c = yinD[(tau + 1).coerceAtMost(half - 1)]
+        val den = a - 2f * b + c
+        val t = if (den != 0f) tau + 0.5f * (a - c) / den else tau.toFloat()
+        return 24000f / t
+    }
+
+    private fun noteText(hz: Float): String {
+        val midi = 69.0 + 12.0 * ln(hz / 440.0) / ln(2.0)
+        val n = Math.round(midi).toInt()
+        val cents = ((midi - n) * 100).roundToInt()
+        return "${org.openmk3.core.audio.Keys.noteName(n)} ${if (cents >= 0) "+" else ""}$cents¢ · ${"%.1f".format(hz)} Hz"
+    }
+
+    /**
+     * Oscilloscope of the selected level. FREE: the newest audio scrolling as it plays, window set
+     * by the encoder. LOCKED: follows the detected pitch, showing two cycles that stand still.
+     * Both show the note actually sounding (pitch detected from the audio, not the played note).
+     */
     private fun drawScope(c: Canvas) {
         val top = 50f; val bot = 206f; val mid = (top + bot) / 2; val half = (bot - top) / 2 - 4f
         val x0 = 16f; val w = 448f
-        val n = scopeWindow
         ui.engine.scope(scopeBuf)
         val len = scopeBuf.size
-        // FREE: the newest audio, scrolling as it plays · LOCKED: aligned on a rising zero crossing
+        if (pitchFrame++ % 3 == 0) pitchHz = detectPitch(scopeBuf)
+        val locked = !scopeFree && pitchHz > 0f
+        // LOCKED: two periods (the encoder multiplies the count), aligned on a rising zero crossing
+        val n = if (locked) (2f * 48000f / pitchHz * (scopeWindow / 1024f)).toInt().coerceIn(32, len / 2) else scopeWindow
         var start = len - n - 1
         if (!scopeFree) {
             var k = len - n - 1
@@ -595,8 +650,10 @@ class SoundPage(ui: Ui) : Page(ui) {
         }
         val col = Mk3Colors.rgb(if (level == 2) ui.soundColour(slot) else if (level == 1) groupColour(ui.group) else Mk3Colors.WHITE)
         c.drawPath(path, Theme.stroke(col, 2f))
+        // the note actually sounding
+        c.drawText(if (pitchHz > 0f) noteText(pitchHz) else "no clear pitch", x0, top + 14f, if (pitchHz > 0f) title else label)
         val ms = n * 1000f / 48000f
-        c.drawText("SCOPE · ${levelName()} · ${"%.1f".format(ms)} ms${if (gain > 1.01f) " · ×${"%.1f".format(gain)}" else ""}", x0, 210f, label)
+        c.drawText("${if (scopeFree) "FREE" else if (locked) "LOCKED · 2 cycles" else "LOCKED"} · ${levelName()} · ${"%.1f".format(ms)} ms${if (gain > 1.01f) " · ×${"%.1f".format(gain)}" else ""}", x0, 210f, label)
         // compressor: gain reduction bar
         if (!isSource && fx.type(chain, fxSlot) == FxParams.COMPRESSOR) {
             val gr = ui.engine.fxMeter(chain, fxSlot).coerceIn(0f, 24f)

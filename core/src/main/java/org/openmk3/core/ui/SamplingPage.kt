@@ -33,6 +33,8 @@ import kotlin.math.roundToInt
  */
 class SamplingPage(ui: Ui) : Page(ui) {
 
+    override val handlesTransport = true
+
     private enum class Tab { RECORD, EDIT, SLICE }
 
     override val playsPads get() = tab != Tab.SLICE

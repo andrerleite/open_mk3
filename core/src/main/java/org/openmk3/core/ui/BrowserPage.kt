@@ -24,6 +24,8 @@ import java.util.concurrent.Future
  */
 class BrowserPage(ui: Ui) : Page(ui) {
 
+    override val handlesTransport = true
+
     override val playsPads = true
 
     private sealed class Entry(val label: String) {

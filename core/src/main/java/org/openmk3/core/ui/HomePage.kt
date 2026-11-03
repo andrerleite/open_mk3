@@ -26,6 +26,8 @@ import kotlin.math.roundToLong
  */
 class HomePage(ui: Ui) : Page(ui) {
 
+    override val handlesTransport = true
+
     private enum class Mode { PAD, STEP }
 
     @Volatile private var mode = Mode.PAD

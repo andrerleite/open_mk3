@@ -23,6 +23,8 @@ import org.openmk3.core.mk3.Mk3Colors
  */
 class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
 
+    override val handlesTransport = true
+
     enum class Kind { PATTERN, SCENE }
 
     override val customPads = true

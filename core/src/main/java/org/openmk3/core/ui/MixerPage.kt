@@ -17,6 +17,8 @@ import kotlin.math.roundToInt
  */
 class MixerPage(ui: Ui) : Page(ui) {
 
+    override val handlesTransport = true
+
     override val playsPads = true
 
     private companion object {

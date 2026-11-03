@@ -188,7 +188,7 @@ additive, wavetable, chords, speech, swarm, noise, particles, string, modal, dru
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Volume | Pan | Tune | Polyphony | Source | Trigger | Base note (the pitch the pad plays in PAD mode; KEYBOARD plays relative to it) | |
+| VOICE | Volume | Pan | Tune | Polyphony | Source | Trigger | Base note (the pitch the pad plays in PAD mode, default C3 = 60; in KEYBOARD the C3 key plays it) | |
 | SYNTH | Model | Harmonics | Timbre | Morph | Synth gate (the model's own decaying gate) | Decay | Colour | Output (main / aux) |
 | SYNTH ENV | Envelope → pitch | → timbre | → morph | | | | | |
 
@@ -229,7 +229,7 @@ taken when a fifth plays). Stepped switches move one step per knob notch. Turnin
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
-Oscilloscope (D6 or encoder push, or the SCOPE view): D7 switches FREE (the output scrolling as it plays, default) and LOCKED (aligned on a rising zero crossing so a steady tone stands still); the encoder sets the time window.
+Oscilloscope (the SCOPE view of synth and effect pages; D6 or encoder push shows it over the other views): it detects the pitch actually sounding and shows its note, cents and Hz (60 = C3). D7 switches LOCKED (default: two cycles of the detected pitch that stand still; the encoder shows more cycles) and FREE (the output scrolling as it plays; the encoder sets the time window).
 Effect knobs glide (~20 ms) instead of jumping, so turning them while playing does not click.
 A sound switched to SYNTH or FM gets 8 voices if it had 1.
 
@@ -294,6 +294,8 @@ pressure sets their velocity. While recording, repeat and arp notes at 1/16 or s
 written into the pattern.
 
 ## Button lights
+
+Every button that does something on the current page is lit dim, and bright while active. PLAY, STOP and RESTART work on every page; BROWSER, SAMPLING and PLUG-IN open their pages from every page.
 
 Every button that does something on the current page is lit: dim when available, bright when
 active or selected (e.g. the open page, a held modifier, a toggle that is on). Buttons that do

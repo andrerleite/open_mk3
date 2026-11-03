@@ -112,7 +112,8 @@ class SoundParams {
             "PARTICLES", "STRING", "MODAL", "BASS DRUM", "SNARE", "HI-HAT",
         )
         private val NOTE_NAMES = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-        fun noteName(n: Int) = NOTE_NAMES[((n % 12) + 12) % 12] + (n / 12 - 1)
+        /** Note name with 60 = C3 (the same as the keyboard pages). */
+        fun noteName(n: Int) = NOTE_NAMES[((n % 12) + 12) % 12] + (n / 12 - 2)
 
         private fun secs(v: Float) = if (v < 1f) "${(v * 1000).roundToInt()} ms" else "%.2f s".format(v)
         private fun pct(v: Float) = "${(v * 100).roundToInt()}%"
@@ -180,7 +181,7 @@ class SoundParams {
             Def(FMFB, "FEEDBACK", -1f, 7f, -1f, 0.02f, { v -> if (v < -0.5f) "PATCH" else "${v.roundToInt()}" }),
             // synth
             Def(SMODEL, "MODEL", 0f, 23f, 8f, 1f, { "" }, choices = MODELS),
-            Def(SNOTE, "BASE NOTE", 0f, 127f, 48f, 0.02f, { v -> noteName(v.roundToInt()) }),
+            Def(SNOTE, "BASE NOTE", 0f, 127f, 60f, 0.02f, { v -> noteName(v.roundToInt()) }),
             Def(SHARM, "HARMONICS", 0f, 1f, 0.5f, 0.002f, ::pct),
             Def(STIMB, "TIMBRE", 0f, 1f, 0.5f, 0.002f, ::pct),
             Def(SMORPH, "MORPH", 0f, 1f, 0.5f, 0.002f, ::pct),
