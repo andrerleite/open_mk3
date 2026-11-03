@@ -38,4 +38,4 @@ target_compile_options(obxf PRIVATE -O3 -w)
 
 add_library(openmk3 SHARED engine.cpp synth.cpp fm.cpp)
 target_compile_options(openmk3 PRIVATE -O3 -ffast-math -Wall)
-target_link_libraries(openmk3 mutable dexed obxf aaudio log)
+target_link_libraries(openmk3 mutable dexed obxf aaudio android log)

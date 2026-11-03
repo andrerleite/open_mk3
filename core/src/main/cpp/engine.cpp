@@ -20,6 +20,10 @@
 #include <sched.h>
 
 #include <cerrno>
+#include <thread>
+#ifndef TEST
+#include <android/performance_hint.h>
+#endif
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -535,12 +539,28 @@ private:
         }
         return false;
     }
+    // A chain whose input and output have been silent for ~1.5 s sleeps (its effects are not run)
+    // until sound arrives again: idle reverbs and delays cost nothing.
+    static constexpr int kChainSleep = int(1.5 * kSampleRate / kChunk);
+    int chainQuiet[kChains] = {};
+    static float peakOf(const float* b, int n) {
+        float p = 0.f;
+        for (int i = 0; i < n; i++) p = std::max(p, std::fabs(b[i]));
+        return p;
+    }
+    bool chainAsleep(int chain) const { return chainQuiet[chain] > kChainSleep; }
     void runChain(const float* fp, int chain, float* buf, int frames, double bpm) {
+        const float in = peakOf(buf, frames * 2);
+        if (in < 1e-6f && chainAsleep(chain)) return;  // silent in, silent out
+        bool any = false;
         for (int k = 0; k < kFxSlots; k++) {
             const float* q = fp + (chain * kFxSlots + k) * openmk3::kFxParams;
             openmk3::Effect* e = fxCur[chain][k];
-            if (e && q[0] > 0.5f && q[1] < 0.5f) e->process(buf, frames, q, bpm, float(kSampleRate));
+            if (e && q[0] > 0.5f && q[1] < 0.5f) { e->process(buf, frames, q, bpm, float(kSampleRate)); any = true; }
         }
+        if (!any) return;
+        if (in < 1e-6f && peakOf(buf, frames * 2) < 2e-5f) chainQuiet[chain]++;
+        else chainQuiet[chain] = 0;
     }
     float soundBus[kSounds][kChunk * 2];
     float gfIc1[kGroups][2] = {}, gfIc2[kGroups][2] = {};  // performance filter state
@@ -1239,13 +1259,53 @@ void Engine::runRepeat(int frames) {
     if (!playing) rpPhase = end;
 }
 
+// ---- performance hint: tells Android how long each audio callback works, so the scheduler
+// keeps the audio thread on fast cores at a high enough clock (screen off especially) ----
+#ifndef TEST
+static std::atomic<APerformanceHintSession*> gHint{nullptr};
+static std::atomic<int> gHintTid{0};
+static std::atomic<int64_t> gHintTarget{0};
+static void hintFor(int tid, int64_t targetNs) {
+    // a binder call: made from a helper thread, never the audio thread itself
+    std::thread([tid, targetNs] {
+        APerformanceHintManager* m = APerformanceHint_getManager();
+        if (!m) return;
+        int32_t t = tid;
+        APerformanceHintSession* s = APerformanceHint_createSession(m, &t, 1, targetNs);
+        if (!s) { LOGI("performance hint: not available"); return; }
+        APerformanceHintSession* old = gHint.exchange(s);
+        if (old) APerformanceHint_closeSession(old);
+        LOGI("performance hint: session for audio thread %d (target %lld us)", tid, (long long)(targetNs / 1000));
+    }).detach();
+}
+#endif
+
 void Engine::render(float* out, int32_t frames) {
     callbackFrames.store(frames, std::memory_order_relaxed);
     const int64_t t0 = nowNanos();
+#ifndef TEST
+    {
+        // target: half of the callback's time, so there is always headroom
+        const int64_t target = int64_t(frames) * 500000000LL / kSampleRate;
+        const int tid = int(gettid());
+        if (tid != gHintTid.load(std::memory_order_relaxed)) {
+            gHintTid.store(tid, std::memory_order_relaxed);
+            gHintTarget.store(target, std::memory_order_relaxed);
+            hintFor(tid, target);
+        } else if (target != gHintTarget.load(std::memory_order_relaxed)) {
+            gHintTarget.store(target, std::memory_order_relaxed);
+            if (auto* s = gHint.load(std::memory_order_acquire)) APerformanceHint_updateTargetWorkDuration(s, target);
+        }
+    }
+#endif
     for (int off = 0; off < frames; off += kChunk)
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
     // CPU load: render time over the audio it made (peak and average, read by the heartbeat)
-    const double load = double(nowNanos() - t0) / (double(frames) * 1e9 / kSampleRate);
+    const int64_t took = nowNanos() - t0;
+#ifndef TEST
+    if (auto* s = gHint.load(std::memory_order_acquire)) APerformanceHint_reportActualWorkDuration(s, took > 0 ? took : 1);
+#endif
+    const double load = double(took) / (double(frames) * 1e9 / kSampleRate);
     if (load > cpuPeak.load(std::memory_order_relaxed)) cpuPeak.store(float(load), std::memory_order_relaxed);
     cpuSum += load;
     cpuN++;
@@ -1805,6 +1865,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         for (int snd = 0; snd < kSounds; snd++) {
             // effects keep running after the notes end (reverb and delay tails)
             if (!chainActive(fp, snd)) continue;
+            if (!soundUsed[snd] && chainAsleep(snd)) continue;  // nothing playing, tails done
             if (!soundUsed[snd]) std::memset(soundBus[snd], 0, sizeof(float) * frames * 2);
             runChain(fp, snd, soundBus[snd], frames, bpm);
             float* gb = groupBus[snd / kPads];
@@ -1862,7 +1923,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
     // returns: their effects run even after the sends stop (tails)
     if (fp)
         for (int a = 0; a < 2; a++) {
-            if (!sendUsed[a] && !chainActive(fp, kChainReturn0 + a)) continue;
+            if (!sendUsed[a] && (!chainActive(fp, kChainReturn0 + a) || chainAsleep(kChainReturn0 + a))) continue;
             runChain(fp, kChainReturn0 + a, sendBus[a], frames, bpm);
             for (int k = 0; k < frames * 2; k++) out[k] += sendBus[a][k];
         }
@@ -2473,12 +2534,17 @@ JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat
 
 /** Audio CPU load since the last call: [average, peak] as fractions of real time. */
 JNIEXPORT jfloatArray JNICALL JNI_FN(nativeCpuLoad)(JNIEnv* env, jobject) {
-    float v[3] = {gEngine.cpuN > 0 ? float(gEngine.cpuSum / double(gEngine.cpuN)) : 0.f,
-                  gEngine.cpuPeak.exchange(0.f), float(gEngine.shed.exchange(0))};
+#ifndef TEST
+    const float hint = gHint.load() ? 1.f : 0.f;
+#else
+    const float hint = 0.f;
+#endif
+    float v[4] = {gEngine.cpuN > 0 ? float(gEngine.cpuSum / double(gEngine.cpuN)) : 0.f,
+                  gEngine.cpuPeak.exchange(0.f), float(gEngine.shed.exchange(0)), hint};
     gEngine.cpuSum = 0.0;
     gEngine.cpuN = 0;
-    jfloatArray a = env->NewFloatArray(3);
-    env->SetFloatArrayRegion(a, 0, 3, v);
+    jfloatArray a = env->NewFloatArray(4);
+    env->SetFloatArrayRegion(a, 0, 4, v);
     return a;
 }
 JNIEXPORT void JNICALL JNI_FN(nativeSetMasterGain)(JNIEnv*, jobject, jfloat g) { gEngine.masterGain.store(g); }
