@@ -103,6 +103,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         l.set("PLAY", playing)
         l.set("STOP")
         l.set("D5", "D6")
+        l.set("SETTINGS", "MIXER", "FILE")
         l.set("D7", bank > 0); l.set("D8", bank < banks - 1)
         if (kind == Kind.SCENE) l.set("D2")
     }

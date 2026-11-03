@@ -243,6 +243,7 @@ class HomePage(ui: Ui) : Page(ui) {
         l.set("PAD MODE", mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD)
         l.set("KEYBOARD", mode == Mode.PAD && ui.padMode == Ui.PadMode.KEYBOARD)
         l.set("CHORDS", mode == Mode.PAD && ui.padMode == Ui.PadMode.CHORDS)
+        if (ui.padParams && ui.padMode == Ui.PadMode.PAD && mode == Mode.PAD) l.set("D5", "D6", "D7", "D8")  // base key
         l.set("ERASE", erase || (replace && (System.currentTimeMillis() / 500) % 2 == 0L))
         l.set("SELECT", select)
         l.set("MUTE", mute)
