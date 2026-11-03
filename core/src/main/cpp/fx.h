@@ -44,6 +44,21 @@ static inline float lpCoef(float hz, float sr) {
     return std::exp(-2.f * 3.14159265f * std::clamp(hz, 10.f, sr * 0.49f) / sr);
 }
 
+/**
+ * Parameter smoothing: knob moves glide over ~20 ms instead of jumping (a jump in a delay
+ * length or a gain is heard as a click). next() is called per sample.
+ */
+struct Glide {
+    float v = 0.f;
+    bool primed = false;
+    inline float next(float target, float coef) {
+        if (!primed) { v = target; primed = true; }
+        v = target + coef * (v - target);
+        return v;
+    }
+};
+static inline float glideCoef(float sr) { return std::exp(-1.f / (0.02f * sr)); }
+
 /** Circular delay line with fractional (Hermite) reads. Size is a power of two. */
 class DelayLine {
 public:
@@ -105,10 +120,12 @@ public:
         const float att = onePoleCoef(std::clamp(p[4], 0.05f, 200.f) / 1000.f, sr);
         const float rel = onePoleCoef(std::clamp(p[5], 5.f, 3000.f) / 1000.f, sr);
         const float knee = std::clamp(p[6], 0.f, 24.f);
-        const float makeup = dbToGain(std::clamp(p[7], 0.f, 24.f));
-        const float mix = std::clamp(p[8], 0.f, 1.f);
+        const float makeupT = dbToGain(std::clamp(p[7], 0.f, 24.f));
+        const float mixT = std::clamp(p[8], 0.f, 1.f);
+        const float gc = glideCoef(sr);
         float maxGr = 0.f;
         for (int i = 0; i < frames; i++) {
+            const float makeup = makeupG_.next(makeupT, gc), mix = mixG_.next(mixT, gc);
             float l = io[i * 2], r = io[i * 2 + 1];
             float level = gainToDb(std::max(std::fabs(l), std::fabs(r)));
             // static curve: gain reduction in dB (>= 0)
@@ -132,6 +149,7 @@ public:
 
 private:
     float env_ = 0.f;
+    Glide makeupG_, mixG_;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -143,13 +161,16 @@ public:
     Chorus() { dl_.init(48000 / 10); dr_.init(48000 / 10); }
     void process(float* io, int frames, const float* p, double, float sr) override {
         const float rate = std::clamp(p[2], 0.02f, 10.f);
-        const float depth = std::clamp(p[3], 0.f, 1.f) * 0.004f * sr;  // up to 4 ms
-        const float mix = std::clamp(p[4], 0.f, 1.f);
-        const float base = std::clamp(p[5], 2.f, 25.f) * 0.001f * sr;
-        const float fb = std::clamp(p[6], -0.9f, 0.9f);
-        const float width = std::clamp(p[7], 0.f, 1.f);
+        const float depthT = std::clamp(p[3], 0.f, 1.f) * 0.004f * sr;  // up to 4 ms
+        const float mixT = std::clamp(p[4], 0.f, 1.f);
+        const float baseT = std::clamp(p[5], 2.f, 25.f) * 0.001f * sr;
+        const float fbT = std::clamp(p[6], -0.9f, 0.9f);
+        const float widthT = std::clamp(p[7], 0.f, 1.f);
         const float inc = rate / sr;
+        const float gc = glideCoef(sr);
         for (int i = 0; i < frames; i++) {
+            const float depth = depthG_.next(depthT, gc), mix = mixG_.next(mixT, gc), base = baseG_.next(baseT, gc);
+            const float fb = fbG_.next(fbT, gc), width = widthG_.next(widthT, gc);
             float l = io[i * 2], r = io[i * 2 + 1];
             dl_.write(l + fbL_ * fb);
             dr_.write(r + fbR_ * fb);
@@ -177,6 +198,7 @@ public:
     void reset() override { dl_.clear(); dr_.clear(); fbL_ = fbR_ = 0.f; }
 
 private:
+    Glide depthG_, mixG_, baseG_, fbG_, widthG_;
     DelayLine dl_, dr_;
     float phase_ = 0.f, fbL_ = 0.f, fbR_ = 0.f;
 };
@@ -203,8 +225,9 @@ public:
             target = std::clamp(p[2], 1.f, 2000.f) * 0.001f * sr;
         }
         target = std::clamp(target, 1.f, float(dl_.size() - 8));
-        const float fb = std::clamp(p[4], 0.f, 1.1f);
-        const float mix = std::clamp(p[5], 0.f, 1.f);
+        const float fbT = std::clamp(p[4], 0.f, 1.1f);
+        const float mixT = std::clamp(p[5], 0.f, 1.f);
+        const float gc = glideCoef(sr);
         const bool ping = p[6] > 0.5f;
         const float hpC = lpCoef(std::clamp(p[7], 10.f, 2000.f), sr);
         const float lpC = lpCoef(std::clamp(p[8], 500.f, 20000.f), sr);
@@ -212,6 +235,7 @@ public:
         const float smooth = onePoleCoef(0.15f, sr);  // tape-like glide when the time changes
         if (time_ <= 0.f) time_ = target;
         for (int i = 0; i < frames; i++) {
+            const float fb = fbG_.next(fbT, gc), mix = mixG_.next(mixT, gc);
             time_ = target + smooth * (time_ - target);
             float wob = mod * std::sin(6.2831853f * modPh_);
             modPh_ += 0.6f / sr;
@@ -238,6 +262,7 @@ public:
 
 private:
     DelayLine dl_, dr_;
+    Glide fbG_, mixG_;
     float time_ = -1.f, modPh_ = 0.f, lpL_ = 0.f, lpR_ = 0.f, hpL_ = 0.f, hpR_ = 0.f;
 };
 
@@ -270,33 +295,47 @@ public:
 
     void process(float* io, int frames, const float* p, double, float sr) override {
         const int mode = std::clamp(int(p[2] + 0.5f), 0, 2);
-        const float preD = std::clamp(p[3], 0.f, 500.f) * 0.001f * sr;
+        const float preDT = std::clamp(p[3], 0.f, 500.f) * 0.001f * sr;
         const float size = std::clamp(p[4], 0.f, 1.f);
+        const float gc = glideCoef(sr);
         const bool freeze = p[11] > 0.5f;
         const float t60 = std::clamp(p[5], 0.2f, 30.f);
         const float damp = lpCoef(std::clamp(p[6], 500.f, 20000.f), sr);
         const float lowCut = lpCoef(std::clamp(p[7], 10.f, 1000.f), sr);
         const float diff = std::clamp(p[8], 0.f, 1.f);
         const float modAmt = std::clamp(p[9], 0.f, 1.f);
-        const float mix = std::clamp(p[10], 0.f, 1.f);
-        const float width = std::clamp(p[12], 0.f, 2.f);
+        const float mixT = std::clamp(p[10], 0.f, 1.f);
+        const float widthT = std::clamp(p[12], 0.f, 2.f);
 
         const float* base = mode == 0 ? kDense : mode == 1 ? kLush : kVast;
         const float scale = mode == 0 ? 0.5f + size : mode == 1 ? 0.5f + size : 0.6f + 1.4f * size;
         const float modDepth = (mode == 0 ? 3.f : mode == 1 ? 10.f : 28.f) * modAmt * sr / 48000.f;
         const float apG = 0.45f + 0.3f * diff;
         const float loopG = mode == 0 ? 0.f : (0.25f + 0.35f * diff);
-        float len[N], g[N];
+        // decay gains for the target size; the loop glides to them over the block
+        float gT[N], g0[N], len[N], g[N];
         for (int k = 0; k < N; k++) {
-            len[k] = base[k] * scale * 0.001f * sr;
-            g[k] = freeze ? 1.f : std::pow(10.f, -3.f * len[k] / (t60 * sr));
+            const float lt = base[k] * scale * 0.001f * sr;
+            gT[k] = freeze ? 1.f : std::pow(10.f, -3.f * lt / (t60 * sr));
+            g0[k] = gPrimed_ ? gPrev_[k] : gT[k];
+            gPrev_[k] = gT[k];
         }
+        gPrimed_ = true;
+        const float invFrames = frames > 0 ? 1.f / float(frames) : 0.f;
         // input diffuser lengths (ms): short ones always, long "bloom" ones for VAST
         static const float kIn[6] = {4.77f, 3.59f, 12.73f, 9.31f, 31.7f, 47.3f};
         const int inStages = mode == 2 ? 6 : 4;
         const float inScale = mode == 0 ? 0.6f : 1.f;
 
         for (int i = 0; i < frames; i++) {
+            // knob moves glide: line lengths (size), pre-delay, decay, mix and width
+            const float sc = scaleG_.next(scale, gc);
+            const float preD = preG_.next(preDT, gc), mix = mixG_.next(mixT, gc), width = widthG_.next(widthT, gc);
+            const float tg = float(i + 1) * invFrames;
+            for (int k = 0; k < N; k++) {
+                len[k] = base[k] * sc * 0.001f * sr;
+                g[k] = g0[k] + (gT[k] - g0[k]) * tg;
+            }
             float inL = io[i * 2], inR = io[i * 2 + 1];
             // pre-delay, input low cut (one-pole high-pass)
             pre_[0].write(inL);
@@ -390,6 +429,9 @@ private:
     float lfoPh_[N] = {};
     float lp_[N] = {};
     float hpS_[2] = {};
+    Glide scaleG_, preG_, mixG_, widthG_;
+    float gPrev_[N] = {};
+    bool gPrimed_ = false;
 };
 
 inline Effect* createEffect(int type) {

@@ -52,7 +52,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
-| SELECT + pad | Focus a sound without playing it | ✅ |
+| SELECT + pad | Focus a sound without playing it (on every page, in any pad mode) | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
 | SHIFT + MUTE (Choke) | Choke groups setup | 🟡 (choke and link groups on the PAD MODE page) |
@@ -175,7 +175,7 @@ D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Tune | Volume | Pan | Polyphony (1–16) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) | Reverse | Source | Trigger (one-shot / gate) |
+| VOICE | Volume | Pan | Tune | Polyphony (1–16, strict: 1 = one voice, also for chords) | Source | Trigger (one-shot / gate) | Reverse | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) |
 | SAMPLE | Start | End | | | Loop | Loop start | Loop end | Crossfade |
 | AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release | | |
 | FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | | | |
@@ -188,7 +188,7 @@ additive, wavetable, chords, speech, swarm, noise, particles, string, modal, dru
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Tune | Volume | Pan | Polyphony | Note | | Source | Trigger |
+| VOICE | Volume | Pan | Tune | Polyphony | Source | Trigger | Base note (the pitch the pad plays in PAD mode; KEYBOARD plays relative to it) | |
 | SYNTH | Model | Harmonics | Timbre | Morph | Synth gate (the model's own decaying gate) | Decay | Colour | Output (main / aux) |
 | SYNTH ENV | Envelope → pitch | → timbre | → morph | | | | | |
 
@@ -199,7 +199,7 @@ the AMP ENV shapes the note (and the sound stops when the pad is released).
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 |
 |---|---|---|---|---|---|---|
-| VOICE | Tune | Volume | Pan | Polyphony | | |
+| VOICE | Volume | Pan | Tune | Polyphony | Source | |
 | FM | Bank (ROM 1–3 built-in, USER 1–16) | Patch (by name) | Brightness (modulator levels) | Attack | Release | Feedback (patch / 0–7) |
 
 The 96 built-in voices are the DX7-format banks that ship with Plaits. Put your own 32-voice
@@ -210,7 +210,7 @@ FM notes keep playing their release after note-off, like the original instrument
 
 | Page | Knobs |
 |---|---|
-| VOICE | K1 preset category, K2 preset (493 factory patches), K3 volume, K4 pan, K5 tune, K7 source |
+| VOICE | K1 preset category, K2 preset (493 factory patches), K3 volume, K4 pan, K5 source, K6 tune |
 | OSC | Osc 1 pitch, osc 2 pitch, osc 2 detune, pulse width, osc 1 saw / pulse, osc 2 saw / pulse |
 | OSC MOD | Sync, cross mod, brightness, osc 2 PW offset, filter env → pitch, filter env → PW, osc 2 keytrack, env → both oscs |
 | MIXER | Osc 1, osc 2, ring mod, noise, noise colour, patch volume, transpose, tune |
@@ -229,14 +229,17 @@ taken when a fifth plays). Stepped switches move one step per knob notch. Turnin
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
+Effect knobs glide (~20 ms) instead of jumping, so turning them while playing does not click.
+A sound switched to SYNTH or FM gets 8 voices if it had 1.
+
 **Effects** (sound, group and master slots)
 
 | Effect | Parameters |
 |---|---|
-| Compressor | Threshold, ratio, attack, release, knee, makeup, mix (gain reduction shown on the scope) |
-| Chorus | Rate, depth, mix, delay, feedback, width |
-| Delay | Time (ms, or note values when synced), sync, feedback, mix, ping-pong, low cut, high cut, modulation |
-| Reverb | Character (DENSE / LUSH / VAST), pre-delay, size, decay, high cut, low cut, diffusion, modulation, mix, freeze, width |
+| Compressor | Threshold, ratio, attack, release, makeup, mix, knee (gain reduction shown on the scope) |
+| Chorus | Mix, rate, depth, delay, feedback, width |
+| Delay | Mix, time (ms, or note values when synced), feedback, sync, ping-pong, low cut, high cut; page 2: modulation |
+| Reverb | Mix, decay, size, character (DENSE / LUSH / VAST), pre-delay, high cut, low cut; page 2: diffusion, modulation, width, freeze |
 
 ## Patterns and scenes
 
@@ -268,9 +271,9 @@ the pads' notes or chords and these knobs:
 | CHORDS | Root | Scale | Octave | Chord mode (harmonizer / chord set) | Chord type (harmonizer) or chord set (pop, minor, jazz, neo soul, house, cinematic) |
 
 Root pads light brighter. Notes and chords played while recording are written into the
-pattern (up to 4 notes per step). A chord always gets the voices it needs, even when the
-sound's polyphony is 1. 60 (C3) plays a sample at its own pitch; for a synth, NOTE sets what C3
-plays.
+pattern (up to 4 notes per step). A sound plays as many notes at once as its POLYPHONY allows
+(1: one note, chords included). 60 (C3) plays a sample at its own pitch; for a synth, BASE NOTE
+sets what C3 plays.
 
 ## NOTE REPEAT and arpeggiator
 

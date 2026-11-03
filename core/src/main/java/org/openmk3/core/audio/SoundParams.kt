@@ -180,7 +180,7 @@ class SoundParams {
             Def(FMFB, "FEEDBACK", -1f, 7f, -1f, 0.02f, { v -> if (v < -0.5f) "PATCH" else "${v.roundToInt()}" }),
             // synth
             Def(SMODEL, "MODEL", 0f, 23f, 8f, 1f, { "" }, choices = MODELS),
-            Def(SNOTE, "NOTE", 0f, 127f, 48f, 0.02f, { v -> noteName(v.roundToInt()) }),
+            Def(SNOTE, "BASE NOTE", 0f, 127f, 48f, 0.02f, { v -> noteName(v.roundToInt()) }),
             Def(SHARM, "HARMONICS", 0f, 1f, 0.5f, 0.002f, ::pct),
             Def(STIMB, "TIMBRE", 0f, 1f, 0.5f, 0.002f, ::pct),
             Def(SMORPH, "MORPH", 0f, 1f, 0.5f, 0.002f, ::pct),
@@ -244,6 +244,13 @@ class SoundParams {
     private var acc = 0
 
     /** Applies [delta] knob units to parameter [i] of [slot]; [fine] = 10x finer. */
+    /** Switches the sound source; a sound moving to SYNTH or FM gets 8 voices if it had 1. */
+    fun setSource(slot: Int, src: Int) {
+        val before = this[slot, SRC].roundToInt()
+        this[slot, SRC] = src.toFloat()
+        if (src != before && (src == SRC_SYNTH || src == SRC_FM) && this[slot, POLY].roundToInt() <= 1) this[slot, POLY] = 8f
+    }
+
     fun nudge(slot: Int, i: Int, delta: Int, fine: Boolean) {
         val d = DEFS[i] ?: return
         val cur = this[slot, i]
@@ -260,6 +267,7 @@ class SoundParams {
             d.log -> cur * 2f.pow(delta * d.step * k * 2.5f)
             else -> cur + delta * d.step * k
         }
+        if (i == SRC) { setSource(slot, next.coerceIn(d.min, d.max).roundToInt()); return }
         this[slot, i] = next.coerceIn(d.min, d.max)
         if (i == START && this[slot, START] > this[slot, END] - 0.001f) this[slot, START] = (this[slot, END] - 0.001f).coerceAtLeast(0f)
         if (i == END && this[slot, END] < this[slot, START] + 0.001f) this[slot, END] = (this[slot, START] + 0.001f).coerceAtMost(1f)

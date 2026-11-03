@@ -173,7 +173,9 @@ class AudioEngine(private val ctx: Context) {
     val meter: Float get() = n.nativeMeter()
     val bufferFrames: Int get() = n.nativeBufferFrames()
     /** Audio CPU load since the last read: average and peak, in % of real time. */
-    fun cpuLoad(): String = n.nativeCpuLoad().let { "cpu avg=${(it[0] * 100).toInt()}% peak=${(it[1] * 100).toInt()}%" + (if (it[2] > 0f) " shed=${it[2].toInt()}" else "") + (if (it[3] > 0f) " hint=on" else " hint=off") }
+    fun cpuLoad(): String = n.nativeCpuLoad().let { "cpu avg=${(it[0] * 100).toInt()}% peak=${(it[1] * 100).toInt()}%" + (if (it[2] > 0f) " shed=${it[2].toInt()}" else "") +
+        " hint=" + listOf("none", "unsupported", "refused", "on").getOrElse(it[3].toInt()) { "?" } +
+        " slowest(us) seq=${it[4].toInt()} voices=${it[5].toInt()} poly=${it[6].toInt()} fx=${it[7].toInt()}" }
     val underruns: Int get() = if (direct) n.nativeUsbLate() else n.nativeXruns()
     @Volatile var outputName = "none"
         private set

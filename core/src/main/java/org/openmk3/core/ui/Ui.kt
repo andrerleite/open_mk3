@@ -275,6 +275,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     fun padLabel(slot: Int = selectedSound) = "$groupLetter${slot + 1}"
 
     @Volatile var dupHeld = false
+    @Volatile var selectHeld = false
     private var dupGroup = -1
 
     /** Copies a whole group: sounds (samples, settings, synth patches, zones) and patterns. */
@@ -510,6 +511,15 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             }
             return
         }
+        // SELECT + pad, on every page: focus that pad's sound without playing it
+        if (selectHeld && !page.customPads && page !is WizardPage) {
+            post {
+                selectedSound = slot
+                AppLog.i("Selected ${padLabel(slot)}")
+                dirty = true
+            }
+            return
+        }
         val vel = padVelocity(slot, pressure)
         // Sound first, straight from the input thread: no UI-thread hop on the audio path.
         if (page.playsPads) {
@@ -560,6 +570,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         val name = map.nameForBit(bit)
         if (name == "SHIFT") shiftHeld = down
         if (name == "ERASE") eraseHeld = down
+        if (name == "SELECT") selectHeld = down
         // AUTO: hold to record knob moves; SHIFT + AUTO pins it (leaving the mode unpins)
         if (name == "AUTO" && !page.customLeds) {
             if (down && shiftHeld) autoPinned = !autoPinned

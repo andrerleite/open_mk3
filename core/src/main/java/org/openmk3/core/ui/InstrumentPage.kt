@@ -43,7 +43,7 @@ class InstrumentPage(ui: Ui) : Page(ui) {
                 Item.Level(cat) {
                     PolyPresets.list(ui.ctx).filter { it.category == cat }.map { p ->
                         Item.Load(p.name) {
-                            params[snd, SoundParams.SRC] = SoundParams.SRC_POLY.toFloat()
+                            params.setSource(snd, SoundParams.SRC_POLY)
                             ui.engine.poly.apply(snd, p)
                             ui.engine.poly.save(ui.ctx)
                             done("POLY · ${p.name}" + if (p.author.isNotEmpty()) " (${p.author})" else "")
@@ -59,7 +59,7 @@ class InstrumentPage(ui: Ui) : Page(ui) {
                 else Item.Level(SoundParams.FM_BANKS[b]) {
                     names.mapIndexed { i, n ->
                         Item.Load("${i + 1} ${n.ifEmpty { "—" }}") {
-                            params[snd, SoundParams.SRC] = SoundParams.SRC_FM.toFloat()
+                            params.setSource(snd, SoundParams.SRC_FM)
                             params[snd, SoundParams.FMBANK] = b.toFloat()
                             params[snd, SoundParams.FMPROG] = i.toFloat()
                             done("FM · ${SoundParams.FM_BANKS[b]} ${i + 1} $n")
@@ -71,7 +71,7 @@ class InstrumentPage(ui: Ui) : Page(ui) {
         Item.Level("SYNTH (Plaits models)") {
             SoundParams.MODELS.mapIndexed { i, m ->
                 Item.Load(m) {
-                    params[snd, SoundParams.SRC] = SoundParams.SRC_SYNTH.toFloat()
+                    params.setSource(snd, SoundParams.SRC_SYNTH)
                     params[snd, SoundParams.SMODEL] = i.toFloat()
                     done("SYNTH · $m")
                 }

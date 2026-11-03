@@ -102,7 +102,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     private companion object {
         fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
         val SAMPLER = listOf(
-            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, ENGINE, REV, SRC, GATE), View.WAVE),
+            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, GATE, REV, ENGINE), View.WAVE),
             PageDef("SAMPLE", snd(START, END, -1, -1, LOOP, LSTART, LEND, XFADE), View.WAVE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
             PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
@@ -111,7 +111,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
         val SYNTH = listOf(
-            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, SNOTE, -1, SRC, GATE), View.SCOPE),
+            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, GATE, SNOTE, -1), View.SCOPE),
             PageDef("SYNTH", snd(SMODEL, SHARM, STIMB, SMORPH, SLPG, SDEC, SCOL, SAUX), View.SCOPE),
             PageDef("SYNTH ENV", snd(SFM, STMOD, SMMOD, -1, -1, -1, -1, -1), View.SCOPE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
@@ -121,7 +121,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
         val FM = listOf(
-            PageDef("VOICE", snd(TUNE, VOL, PAN, POLY, -1, -1, SRC, -1), View.SCOPE),
+            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, -1, -1, -1), View.SCOPE),
             PageDef("FM", snd(SoundParams.FMBANK, SoundParams.FMPROG, SoundParams.FMBRIGHT, SoundParams.FMATT, SoundParams.FMREL, SoundParams.FMFB, -1, -1), View.SCOPE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
             PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
@@ -132,7 +132,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         fun ob(vararg i: Int) = i.map { if (it < 0) null else Knob.Poly(it) }
         /** POLY (OB-Xf): OB-Xf's parameter indices, grouped like its panel. */
         val POLY_PAGES = listOf(
-            PageDef("VOICE", listOf(Knob.PolyCategory, Knob.PolyPreset, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(TUNE), null, Knob.Snd(SRC), null), View.SCOPE),
+            PageDef("VOICE", listOf(Knob.PolyCategory, Knob.PolyPreset, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(SRC), Knob.Snd(TUNE), null, null), View.SCOPE),
             PageDef("OSC", ob(12, 14, 13, 20, 16, 17, 18, 19), View.SCOPE),
             PageDef("OSC MOD", ob(29, 28, 30, 21, 22, 25, 15, 23), View.SCOPE),
             PageDef("MIXER", ob(31, 32, 33, 34, 35, 0, 1, 2), View.SCOPE),

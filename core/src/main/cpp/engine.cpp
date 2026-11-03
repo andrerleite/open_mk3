@@ -283,6 +283,9 @@ public:
     // ---- set from Kotlin ----
     std::atomic<float> masterGain{0.7f};
     std::atomic<float> cpuPeak{0.f};
+    // time per section in the current callback, and the breakdown of the slowest one (us)
+    int64_t secAcc[4] = {};
+    std::atomic<int> slowest[4] = {};
     int overload = 0;
     std::atomic<int> shed{0};  // POLY notes released by the overload guard
     double cpuSum = 0.0;
@@ -835,9 +838,9 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     const int64_t startAt = framesDone + offset;
     for (auto& v : voices)
         if (v.sample && v.slot == slot && v.note == std::clamp(note, 0, 127) && std::llabs(v.startAt - startAt) < 48) return;
-    // A chord always gets enough voices for its own notes.
-    // (POLY: the synth patch sets the polyphony)
-    int poly = isPoly ? 64 : std::max(std::clamp(int(P[P_POLY] + 0.5f), 1, 16), std::clamp(chord, 1, 8));
+    // POLYPHONY is strict (1 = monophonic, also for chords); POLY: its patch sets the polyphony
+    (void)chord;
+    int poly = isPoly ? 64 : std::clamp(int(P[P_POLY] + 0.5f), 1, 16);
     while (true) {
         int count = 0;
         Voice* oldestOfSlot = nullptr;
@@ -1263,16 +1266,18 @@ void Engine::runRepeat(int frames) {
 // keeps the audio thread on fast cores at a high enough clock (screen off especially) ----
 #ifndef TEST
 static std::atomic<APerformanceHintSession*> gHint{nullptr};
+static std::atomic<int> gHintState{0};  // 0 not tried, 1 no manager, 2 session refused, 3 on
 static std::atomic<int> gHintTid{0};
 static std::atomic<int64_t> gHintTarget{0};
 static void hintFor(int tid, int64_t targetNs) {
     // a binder call: made from a helper thread, never the audio thread itself
     std::thread([tid, targetNs] {
         APerformanceHintManager* m = APerformanceHint_getManager();
-        if (!m) return;
+        if (!m) { gHintState.store(1); return; }
         int32_t t = tid;
         APerformanceHintSession* s = APerformanceHint_createSession(m, &t, 1, targetNs);
-        if (!s) { LOGI("performance hint: not available"); return; }
+        if (!s) { gHintState.store(2); LOGI("performance hint: session refused"); return; }
+        gHintState.store(3);
         APerformanceHintSession* old = gHint.exchange(s);
         if (old) APerformanceHint_closeSession(old);
         LOGI("performance hint: session for audio thread %d (target %lld us)", tid, (long long)(targetNs / 1000));
@@ -1283,6 +1288,7 @@ static void hintFor(int tid, int64_t targetNs) {
 void Engine::render(float* out, int32_t frames) {
     callbackFrames.store(frames, std::memory_order_relaxed);
     const int64_t t0 = nowNanos();
+    for (auto& a : secAcc) a = 0;
 #ifndef TEST
     {
         // target: half of the callback's time, so there is always headroom
@@ -1306,7 +1312,10 @@ void Engine::render(float* out, int32_t frames) {
     if (auto* s = gHint.load(std::memory_order_acquire)) APerformanceHint_reportActualWorkDuration(s, took > 0 ? took : 1);
 #endif
     const double load = double(took) / (double(frames) * 1e9 / kSampleRate);
-    if (load > cpuPeak.load(std::memory_order_relaxed)) cpuPeak.store(float(load), std::memory_order_relaxed);
+    if (load > cpuPeak.load(std::memory_order_relaxed)) {
+        cpuPeak.store(float(load), std::memory_order_relaxed);
+        for (int k = 0; k < 4; k++) slowest[k].store(int(secAcc[k] / 1000), std::memory_order_relaxed);
+    }
     cpuSum += load;
     cpuN++;
     // overload guard: three late-running callbacks in a row release the oldest POLY note, so
@@ -1475,6 +1484,7 @@ void Engine::renderPoly(int frames, float* pb, const float* fp, float* out, floa
 }
 
 void Engine::renderChunk(float* out, int32_t frames) {
+    const int64_t chunkStart = nowNanos();
     struct Advance { int64_t& f; int n; ~Advance() { f += n; } } advance{framesDone, frames};
     // effects swapped in by Java (allocation happens there; frees happen there too)
     if (fxDirty.exchange(0, std::memory_order_acq_rel)) {
@@ -1547,6 +1557,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         fxResetChunks--;
         for (auto& chain : fxCur) for (auto* e : chain) if (e) e->reset();
     }
+    const int64_t tVoices = nowNanos();
     // 3. voices -> sound buses (sounds with effects) or group buses
     std::memset(out, 0, sizeof(float) * frames * 2);
     for (auto& gb : groupBus) std::memset(gb, 0, sizeof(float) * frames * 2);
@@ -1854,7 +1865,12 @@ void Engine::renderChunk(float* out, int32_t frames) {
             if (v.age > newest[v.slot]) { newest[v.slot] = v.age; newestPos[v.slot] = float(v.pos); }
         }
     }
+    const int64_t tPoly = nowNanos();
     renderPoly(frames, pb, fp, out, sk == 2 ? scopeTap : nullptr, sk, si, active);
+    const int64_t tFx = nowNanos();
+    secAcc[0] += tVoices - chunkStart;  // triggers, sequencer, swaps
+    secAcc[1] += tPoly - tVoices;       // voices
+    secAcc[2] += tFx - tPoly;           // POLY synths
     for (int k = 0; k < (kSlots + 31) / 32; k++) activeMask[k].store(active[k], std::memory_order_relaxed);
     for (int k = 0; k < kSlots; k++) playPos[k].store(newestPos[k], std::memory_order_relaxed);
 
@@ -1941,6 +1957,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         scopeW.store(w, std::memory_order_release);
     }
 
+    secAcc[3] += nowNanos() - tFx;      // effects and mixing
     // 5. master gain, soft clip, meter
     float g = masterGain.load(std::memory_order_relaxed);
     float peak = meterAcc;
@@ -2011,7 +2028,11 @@ private:
     // the isochronous stream), handed to Java through a small queue.
     std::mutex hidLock_;
     std::condition_variable hidCv_;
-    std::deque<std::vector<uint8_t>> hidQueue_;
+    // HID reports for the Java reader: a fixed ring (the audio pump never allocates)
+    static constexpr int kHidRing = 256;
+    std::vector<uint8_t> hidRing_;     // kHidRing x hidSlot_ bytes, sized at start
+    int hidLen_[kHidRing] = {};
+    int hidSlot_ = 0, hidHead_ = 0, hidCount_q = 0;
     int hidCount_ = 0;
 
     int fd_ = -1, outEp_ = 0, outMax_ = 0, inEp_ = 0, inMax_ = 0;
@@ -2212,7 +2233,13 @@ void UsbAudio::pump(bool fromCallback) {
     for (Urb* u : batch_) if (u->hid) {
         if (u->u->status == 0 && u->u->actual_length > 0) {
             std::lock_guard<std::mutex> g(hidLock_);
-            if (hidQueue_.size() < 256) hidQueue_.emplace_back(u->buf.begin(), u->buf.begin() + u->u->actual_length);
+            if (hidCount_q < kHidRing && hidSlot_ > 0) {
+                const int idx = (hidHead_ + hidCount_q) % kHidRing;
+                const int n = std::min(u->u->actual_length, hidSlot_);
+                std::memcpy(hidRing_.data() + size_t(idx) * size_t(hidSlot_), u->buf.data(), size_t(n));
+                hidLen_[idx] = n;
+                hidCount_q++;
+            }
             hidCv_.notify_one();
         }
         u->u->buffer_length = int(u->buf.size());
@@ -2304,15 +2331,15 @@ void UsbAudio::fallbackLoop() {
 
 int UsbAudio::readHid(uint8_t* out, int cap, int timeoutMs) {
     std::unique_lock<std::mutex> g(hidLock_);
-    if (hidQueue_.empty()) {
+    if (hidCount_q == 0) {
         if (!running.load()) return -1;
-        hidCv_.wait_for(g, std::chrono::milliseconds(timeoutMs), [this] { return !hidQueue_.empty() || !running.load(); });
+        hidCv_.wait_for(g, std::chrono::milliseconds(timeoutMs), [this] { return hidCount_q > 0 || !running.load(); });
     }
-    if (hidQueue_.empty()) return running.load() ? 0 : -1;
-    std::vector<uint8_t> r = std::move(hidQueue_.front());
-    hidQueue_.pop_front();
-    int n = std::min(cap, int(r.size()));
-    std::memcpy(out, r.data(), size_t(n));
+    if (hidCount_q == 0) return running.load() ? 0 : -1;
+    const int n = std::min(cap, hidLen_[hidHead_]);
+    std::memcpy(out, hidRing_.data() + size_t(hidHead_) * size_t(hidSlot_), size_t(n));
+    hidHead_ = (hidHead_ + 1) % kHidRing;
+    hidCount_q--;
     return n;
 }
 
@@ -2370,7 +2397,9 @@ bool UsbAudio::start(int fd, int outEp, int outMax, int inEp, int inMax,
     }
     {
         std::lock_guard<std::mutex> g(hidLock_);
-        hidQueue_.clear();
+        hidHead_ = 0; hidCount_q = 0;
+        hidSlot_ = std::max(64, int(hidMax));
+        hidRing_.assign(size_t(kHidRing) * size_t(hidSlot_), 0);
     }
     hidCount_ = 0;
     for (auto& u : urbs_) if (u->hid) hidCount_++;
@@ -2535,16 +2564,18 @@ JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat
 /** Audio CPU load since the last call: [average, peak] as fractions of real time. */
 JNIEXPORT jfloatArray JNICALL JNI_FN(nativeCpuLoad)(JNIEnv* env, jobject) {
 #ifndef TEST
-    const float hint = gHint.load() ? 1.f : 0.f;
+    const float hint = float(gHintState.load());
 #else
     const float hint = 0.f;
 #endif
-    float v[4] = {gEngine.cpuN > 0 ? float(gEngine.cpuSum / double(gEngine.cpuN)) : 0.f,
-                  gEngine.cpuPeak.exchange(0.f), float(gEngine.shed.exchange(0)), hint};
+    float v[8] = {gEngine.cpuN > 0 ? float(gEngine.cpuSum / double(gEngine.cpuN)) : 0.f,
+                  gEngine.cpuPeak.exchange(0.f), float(gEngine.shed.exchange(0)), hint,
+                  float(gEngine.slowest[0].load()), float(gEngine.slowest[1].load()),
+                  float(gEngine.slowest[2].load()), float(gEngine.slowest[3].load())};
     gEngine.cpuSum = 0.0;
     gEngine.cpuN = 0;
-    jfloatArray a = env->NewFloatArray(4);
-    env->SetFloatArrayRegion(a, 0, 4, v);
+    jfloatArray a = env->NewFloatArray(8);
+    env->SetFloatArrayRegion(a, 0, 8, v);
     return a;
 }
 JNIEXPORT void JNICALL JNI_FN(nativeSetMasterGain)(JNIEnv*, jobject, jfloat g) { gEngine.masterGain.store(g); }
