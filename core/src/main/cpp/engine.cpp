@@ -278,6 +278,11 @@ class Engine {
 public:
     // ---- set from Kotlin ----
     std::atomic<float> masterGain{0.7f};
+    std::atomic<float> cpuPeak{0.f};
+    int overload = 0;
+    std::atomic<int> shed{0};  // POLY notes released by the overload guard
+    double cpuSum = 0.0;
+    int64_t cpuN = 0;
     // ---- perform FX on the master (played with the touch strip) ----
     static constexpr int kPfxRing = 1 << 17;   // ~2.7 s of the master output
     float pfxRing[kPfxRing][2] = {};
@@ -1236,8 +1241,25 @@ void Engine::runRepeat(int frames) {
 
 void Engine::render(float* out, int32_t frames) {
     callbackFrames.store(frames, std::memory_order_relaxed);
+    const int64_t t0 = nowNanos();
     for (int off = 0; off < frames; off += kChunk)
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
+    // CPU load: render time over the audio it made (peak and average, read by the heartbeat)
+    const double load = double(nowNanos() - t0) / (double(frames) * 1e9 / kSampleRate);
+    if (load > cpuPeak.load(std::memory_order_relaxed)) cpuPeak.store(float(load), std::memory_order_relaxed);
+    cpuSum += load;
+    cpuN++;
+    // overload guard: three late-running callbacks in a row release the oldest POLY note, so
+    // the audio thread (real-time priority) never starves the screen and the controller
+    if (load > 0.85) {
+        if (++overload >= 3) {
+            overload = 0;
+            Voice* o = nullptr;
+            for (auto& v : voices)
+                if (v.sample && v.pinst >= 0 && !v.released && (!o || v.age < o->age)) o = &v;
+            if (o) { o->released = true; o->fromSeq = false; shed.fetch_add(1, std::memory_order_relaxed); }
+        }
+    } else overload = 0;
 }
 
 /**
@@ -2449,6 +2471,16 @@ JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat
     gEngine.pushTrigger(slot, vel);
 }
 
+/** Audio CPU load since the last call: [average, peak] as fractions of real time. */
+JNIEXPORT jfloatArray JNICALL JNI_FN(nativeCpuLoad)(JNIEnv* env, jobject) {
+    float v[3] = {gEngine.cpuN > 0 ? float(gEngine.cpuSum / double(gEngine.cpuN)) : 0.f,
+                  gEngine.cpuPeak.exchange(0.f), float(gEngine.shed.exchange(0))};
+    gEngine.cpuSum = 0.0;
+    gEngine.cpuN = 0;
+    jfloatArray a = env->NewFloatArray(3);
+    env->SetFloatArrayRegion(a, 0, 3, v);
+    return a;
+}
 JNIEXPORT void JNICALL JNI_FN(nativeSetMasterGain)(JNIEnv*, jobject, jfloat g) { gEngine.masterGain.store(g); }
 
 JNIEXPORT void JNICALL JNI_FN(nativeTransport)(JNIEnv*, jobject, jint cmd) {

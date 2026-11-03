@@ -368,7 +368,7 @@ class Mk3Service : Service() {
                 "displayKB=${d.displayBytes / 1024} frames=${u.framesSent} | audio buf=${e.bufferFrames}fr " +
                 "underruns=${e.underruns} worstTrig=${"%.1f".format(e.worstTriggerToRenderMs)}ms " +
                 "input=${if (e.direct || e.inputOpen) "on peak=${"%.3f".format(e.takeInputPeak())}" else "off"} " +
-                "path=${if (e.direct) "direct-usb" else "aaudio"} | ${p.line()}"
+                "path=${if (e.direct) "direct-usb" else "aaudio"} ${e.cpuLoad()} | ${p.line()}"
         )
         e.worstTriggerToRenderMs = 0f
         AppLog.flush()

@@ -221,10 +221,10 @@ FM notes keep playing their release after note-off, like the original instrument
 | CONTROL | Bend up / down, bend osc 2 only, vibrato wave / rate, env inverts |
 | SLOP / VOICE PAN | Per-voice analog variation and the pan of voices 1–8 |
 
-A POLY sound plays its own polyphony (set in the patch; the sound's POLYPHONY does not apply)
+A POLY sound plays its own polyphony (set in the patch, up to 8 voices and 4 unison voices on the phone; the high-quality oversampling mode stays off; the sound's POLYPHONY does not apply)
 with its own envelopes and filter; the sound's volume, pan, effects, the PITCH strip (patch bend
 range) and MOD strip (vibrato) apply. Up to four sounds can use POLY at once (the quietest one is
-taken when a fifth plays). Stepped switches move one step per knob notch.
+taken when a fifth plays). Stepped switches move one step per knob notch. Turning through presets shows their names; the patch loads when the knob rests. If the audio engine runs late repeatedly, the oldest POLY note is released so the app stays responsive.
 
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.

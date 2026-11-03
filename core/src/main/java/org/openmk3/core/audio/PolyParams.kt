@@ -120,5 +120,6 @@ object PolyPresets {
         return out
     }
 
-    fun categories(ctx: Context): List<String> = list(ctx).map { it.category }.distinct()
+    @Volatile private var cats: List<String>? = null
+    fun categories(ctx: Context): List<String> = cats ?: list(ctx).map { it.category }.distinct().also { cats = it }
 }

@@ -63,6 +63,7 @@ object NativeEngine {
     external fun nativeFmLoadBank(index: Int, data: ByteArray): Boolean
     external fun nativeFmPatchName(bank: Int, program: Int): String
     external fun nativePolySet(slot: Int, index: Int, value: Float)
+    external fun nativeCpuLoad(): FloatArray
     external fun nativeSetZone(slot: Int, zone: Int, data: FloatArray?, channels: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativeZoneMap(slot: Int, zone: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativePolyParamCount(): Int
@@ -148,6 +149,8 @@ class AudioEngine(private val ctx: Context) {
     val params: SoundParams = SoundParams.load(ctx)
     /** Effect slots of sounds, groups and the master (saved separately). */
     val fx: FxParams = FxParams.load(ctx)
+    /** Names of the user FM cartridges (USER 1..16), loaded from Download/<app folder>/DX7. */
+    val fmUserBanks = mutableListOf<String>()
     /** POLY source patches (OB-Xf engine), per sound. */
     val poly: PolyParams by lazy { PolyParams(n) }
     /** Sample zones (multisamples) of every sound. */
@@ -169,6 +172,8 @@ class AudioEngine(private val ctx: Context) {
     val phase: Double get() = n.nativePhase()
     val meter: Float get() = n.nativeMeter()
     val bufferFrames: Int get() = n.nativeBufferFrames()
+    /** Audio CPU load since the last read: average and peak, in % of real time. */
+    fun cpuLoad(): String = n.nativeCpuLoad().let { "cpu avg=${(it[0] * 100).toInt()}% peak=${(it[1] * 100).toInt()}%" + if (it[2] > 0f) " shed=${it[2].toInt()}" else "" }
     val underruns: Int get() = if (direct) n.nativeUsbLate() else n.nativeXruns()
     @Volatile var outputName = "none"
         private set
@@ -192,6 +197,7 @@ class AudioEngine(private val ctx: Context) {
         n.nativeSetFxBuffer(fx.buffer)
         n.nativeInitSynths()
         poly.load(ctx)
+        Thread({ PolyPresets.list(ctx); PolyPresets.categories(ctx) }, "poly-presets").start()  // parsed off the UI thread
         params.fmPatchName = { b, p -> n.nativeFmPatchName(b, p) }
         loadFmBanks()
         // re-create the saved effects (each allocates its buffers here, not on the audio thread)
@@ -361,8 +367,6 @@ class AudioEngine(private val ctx: Context) {
     /** True once after the engine wrote repeat / arp hits into the pattern. */
     fun takeRecorded() = n.nativeTakeRecorded()
 
-    /** Names of the user FM cartridges (USER 1..16), loaded from Download/<app folder>/DX7. */
-    val fmUserBanks = mutableListOf<String>()
 
     /** Loads up to 16 DX7 cartridges (.syx, 32 voices each) as the USER FM banks. */
     fun loadFmBanks() {

@@ -12,15 +12,26 @@
 namespace openmk3 {
 namespace {
 
+// Phone CPU budget: voice counts are capped (OB-Xf allows 32, and a factory patch with 32-voice
+// unison costs as much as the rest of the app) and the 2x oversampling mode stays off.
+constexpr int kMaxPolyphony = 8;
+constexpr int kMaxUnisonVoices = 4;
+
 struct Table {
     std::vector<Handler> handlers;
     std::vector<float> defaults;
+    std::vector<float> caps;  // highest allowed value (0..1) per parameter
     Table() {
         const auto& map = obxf::getHandlerMap();
         for (const auto& p : ParameterList) {
+            float cap = 1.f;
+            const float range = p.meta.maxVal - p.meta.minVal;
+            if (p.ID == SynthParam::ID::Polyphony && range > 0.f) cap = (kMaxPolyphony - p.meta.minVal) / range;
+            if (p.ID == SynthParam::ID::UnisonVoices && range > 0.f) cap = (kMaxUnisonVoices - p.meta.minVal) / range;
+            if (p.ID == SynthParam::ID::HQMode) cap = 0.f;
+            caps.push_back(cap);
             auto it = map.find(p.ID);
             handlers.push_back(it != map.end() ? it->second : Handler([](SynthEngine&, float) {}));
-            const float range = p.meta.maxVal - p.meta.minVal;
             defaults.push_back(range > 0.f ? (p.meta.defaultVal - p.meta.minVal) / range : 0.f);
         }
     }
@@ -36,13 +47,16 @@ public:
     explicit PolySynthImpl(float sr) {
         engine.setSampleRate(sr);
         const auto& t = table();
-        for (int i = 0; i < int(t.handlers.size()); i++) t.handlers[i](engine, t.defaults[i]);
+        for (int i = 0; i < int(t.handlers.size()); i++) t.handlers[i](engine, t.defaults[i] < t.caps[i] ? t.defaults[i] : t.caps[i]);
         engine.processPitchWheel(0.f);
         engine.processModWheel(0.f);
     }
     void setParam(int i, float v) override {
         const auto& t = table();
-        if (i >= 0 && i < int(t.handlers.size())) t.handlers[i](engine, v < 0.f ? 0.f : v > 1.f ? 1.f : v);
+        if (i < 0 || i >= int(t.handlers.size())) return;
+        v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+        if (v > t.caps[i]) v = t.caps[i];
+        t.handlers[i](engine, v);
     }
     void noteOn(int note, float velocity) override { engine.processNoteOn(note, velocity, 0); }
     void noteOff(int note) override { engine.processNoteOff(note, 0.f, 0); }

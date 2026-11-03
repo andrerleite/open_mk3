@@ -228,6 +228,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         lastLevel = level; lastSlot = slotIdx; lastPage = pageIdx
         if (dirtySince != 0L) save()
         if (fxDirtySince != 0L) { fx.save(ui.ctx); fxDirtySince = 0L }
+        if (presetAt != 0L) applyPreset()
         if (polyDirtySince != 0L) savePoly()
         ui.engine.setScopeTap(0, 0)
     }
@@ -258,6 +259,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     override fun tick(now: Long): Boolean {
         if (dirtySince != 0L && now - dirtySince > 1500) save()
         if (fxDirtySince != 0L && now - fxDirtySince > 1500) { fx.save(ui.ctx); fxDirtySince = 0L }
+        if (presetAt != 0L && now - presetAt > 250) applyPreset()
         if (polyDirtySince != 0L && now - polyDirtySince > 1500) savePoly()
         updateScopeTap()
         if (showScope()) return true  // live view
@@ -343,10 +345,14 @@ class SoundPage(ui: Ui) : Page(ui) {
     private var presetAcc = 0
     private var polyDirtySince = 0L
     private fun polyChanged() { if (polyDirtySince == 0L) polyDirtySince = SystemClock.uptimeMillis() }
+    private var catCache: Pair<Int, List<PolyPresets.Preset>>? = null
     private fun catPresets(): List<PolyPresets.Preset> {
+        catCache?.let { if (it.first == polyCat) return it.second }
         val cats = PolyPresets.categories(ui.ctx)
         val c = cats.getOrNull(polyCat) ?: return emptyList()
-        return PolyPresets.list(ui.ctx).filter { it.category == c }
+        val l = PolyPresets.list(ui.ctx).filter { it.category == c }
+        catCache = polyCat to l
+        return l
     }
     private inline fun presetStep(delta: Int, f: (Int) -> Unit) {
         presetAcc += delta
@@ -365,7 +371,11 @@ class SoundPage(ui: Ui) : Page(ui) {
         return t
     }
 
-    private fun loadPreset() {
+    /** Turning through presets shows the names; the patch loads once the knob rests. */
+    private var presetAt = 0L
+    private fun loadPreset() { presetAt = SystemClock.uptimeMillis() }
+    private fun applyPreset() {
+        presetAt = 0L
         val p = catPresets().getOrNull(presetIdx) ?: return
         poly.apply(slot, p)
         polyChanged()
