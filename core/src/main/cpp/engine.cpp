@@ -1269,19 +1269,22 @@ static std::atomic<APerformanceHintSession*> gHint{nullptr};
 static std::atomic<int> gHintState{0};  // 0 not tried, 1 no manager, 2 session refused, 3 on
 static std::atomic<int> gHintTid{0};
 static std::atomic<int64_t> gHintTarget{0};
-static void hintFor(int tid, int64_t targetNs) {
-    // a binder call: made from a helper thread, never the audio thread itself
-    std::thread([tid, targetNs] {
-        APerformanceHintManager* m = APerformanceHint_getManager();
-        if (!m) { gHintState.store(1); return; }
-        int32_t t = tid;
-        APerformanceHintSession* s = APerformanceHint_createSession(m, &t, 1, targetNs);
-        if (!s) { gHintState.store(2); LOGI("performance hint: session refused"); return; }
-        gHintState.store(3);
-        APerformanceHintSession* old = gHint.exchange(s);
-        if (old) APerformanceHint_closeSession(old);
-        LOGI("performance hint: session for audio thread %d (target %lld us)", tid, (long long)(targetNs / 1000));
-    }).detach();
+static std::atomic<int> gHintFor{0};  // audio thread the session was made for (or refused)
+/** Creates the session for the current audio thread. Binder calls: called from Java's monitor
+ *  thread, never from the audio thread. Returns the state. */
+static int hintPoll() {
+    const int tid = gHintTid.load();
+    if (tid == 0 || tid == gHintFor.load()) return gHintState.load();
+    gHintFor.store(tid);
+    APerformanceHintManager* m = APerformanceHint_getManager();
+    if (!m) { gHintState.store(1); return 1; }
+    int32_t t = tid;
+    APerformanceHintSession* s = APerformanceHint_createSession(m, &t, 1, gHintTarget.load());
+    if (!s) { gHintState.store(2); return 2; }
+    APerformanceHintSession* old = gHint.exchange(s);
+    if (old) APerformanceHint_closeSession(old);
+    gHintState.store(3);
+    return 3;
 }
 #endif
 
@@ -1295,9 +1298,8 @@ void Engine::render(float* out, int32_t frames) {
         const int64_t target = int64_t(frames) * 500000000LL / kSampleRate;
         const int tid = int(gettid());
         if (tid != gHintTid.load(std::memory_order_relaxed)) {
-            gHintTid.store(tid, std::memory_order_relaxed);
             gHintTarget.store(target, std::memory_order_relaxed);
-            hintFor(tid, target);
+            gHintTid.store(tid, std::memory_order_relaxed);  // the monitor makes the session
         } else if (target != gHintTarget.load(std::memory_order_relaxed)) {
             gHintTarget.store(target, std::memory_order_relaxed);
             if (auto* s = gHint.load(std::memory_order_acquire)) APerformanceHint_updateTargetWorkDuration(s, target);
@@ -2559,6 +2561,16 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetTrigBuffer)(JNIEnv* env, jobject, jobject
 JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat vel) {
     if (slot < 0 || slot >= kSlots) return;
     gEngine.pushTrigger(slot, vel);
+}
+
+/** Performance hint: makes the session for the audio thread if needed; returns its state
+ *  (0 no audio thread yet, 1 unsupported, 2 refused, 3 on). */
+JNIEXPORT jint JNICALL JNI_FN(nativeHintPoll)(JNIEnv*, jobject) {
+#ifndef TEST
+    return hintPoll();
+#else
+    return 0;
+#endif
 }
 
 /** Audio CPU load since the last call: [average, peak] as fractions of real time. */

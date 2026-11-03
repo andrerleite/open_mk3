@@ -52,7 +52,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
-| SELECT + pad | Focus a sound without playing it (on every page, in any pad mode) | ✅ |
+| SELECT + pad | Focus a sound without playing it (on every page, in any pad mode). While SELECT is held the pads light only where a sound is loaded (focused pad brightest) and the right screen shows the group's 16 sounds | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
 | SHIFT + MUTE (Choke) | Choke groups setup | 🟡 (choke and link groups on the PAD MODE page) |
@@ -229,6 +229,7 @@ taken when a fifth plays). Stepped switches move one step per knob notch. Turnin
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
+Oscilloscope (D6 or encoder push, or the SCOPE view): D7 switches FREE (the output scrolling as it plays, default) and LOCKED (aligned on a rising zero crossing so a steady tone stands still); the encoder sets the time window.
 Effect knobs glide (~20 ms) instead of jumping, so turning them while playing does not click.
 A sound switched to SYNTH or FM gets 8 voices if it had 1.
 
@@ -240,6 +241,7 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 | Chorus | Mix, rate, depth, delay, feedback, width |
 | Delay | Mix, time (ms, or note values when synced), feedback, sync, ping-pong, low cut, high cut; page 2: modulation |
 | Reverb | Mix, decay, size, character (DENSE / LUSH / VAST), pre-delay, high cut, low cut; page 2: diffusion, modulation, width, freeze |
+| Filter | Cutoff, resonance, mode, drive, mix, morph, envelope follow; page 2: LFO rate, LFO depth. Modes: LADDER LP24 / LP12 / HP24 (Moog-style 4-pole ladder, saturating) and SEM LP / BP / HP / NOTCH / MORPH (Oberheim SEM-style 2-pole state-variable; MORPH sweeps low-pass → notch → high-pass) |
 
 ## Patterns and scenes
 

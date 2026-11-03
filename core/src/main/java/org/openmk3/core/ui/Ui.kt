@@ -480,6 +480,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             dirty = false
             page.draw(left.canvas, right.canvas, now)
             if (repeatHeld) drawRepeatOverlay(left.canvas, right.canvas)
+            if (selectHeld && !page.customPads && page !is WizardPage) drawSelectOverlay(right.canvas)
             val a = left.flush(dev)
             val b = right.flush(dev)
             if (a > 0 || b > 0) {
@@ -570,7 +571,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         val name = map.nameForBit(bit)
         if (name == "SHIFT") shiftHeld = down
         if (name == "ERASE") eraseHeld = down
-        if (name == "SELECT") selectHeld = down
+        if (name == "SELECT") { selectHeld = down; dirty = true }
         // AUTO: hold to record knob moves; SHIFT + AUTO pins it (leaving the mode unpins)
         if (name == "AUTO" && !page.customLeds) {
             if (down && shiftHeld) autoPinned = !autoPinned
@@ -874,6 +875,17 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
      */
     private fun applyPadLights(now: Long) {
         for (slot in 0 until 16) {
+            // SELECT held: the pads show the group's sounds (lit = loaded, brightest = focused)
+            if (selectHeld) {
+                val sound = snd(slot)
+                val c = soundColour(sound)
+                padLed(slot, when {
+                    slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 1)
+                    else -> 0
+                })
+                continue
+            }
             val custom = page.padLight(slot, now) ?: if (padMode != PadMode.PAD) keyPadLight(slot) else null
             val v = custom ?: run {
                 val sound = snd(slot)
@@ -908,6 +920,31 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private val ovName = Theme.text(13f, Theme.DIM, align = android.graphics.Paint.Align.CENTER)
     private val ovVal = Theme.text(16f, Theme.FG, bold = true, align = android.graphics.Paint.Align.CENTER)
     private val ovTitle = Theme.text(14f, Theme.ACCENT, bold = true)
+
+    /** While SELECT is held: the group's 16 sounds in pad layout on the right screen. */
+    private fun drawSelectOverlay(r: Canvas) {
+        r.drawColor(Theme.BG)
+        r.drawText("SELECT · GROUP $groupLetter", 8f, 22f, ovTitle)
+        val w = 114f; val h = 58f
+        for (slot in 0 until 16) {
+            val col = slot % 4; val row = 3 - slot / 4
+            val x = 4f + col * (w + 4f); val y = 30f + row * (h + 2f)
+            val sound = snd(slot)
+            val loaded = hasSound(sound)
+            val c = org.openmk3.core.mk3.Mk3Colors.rgb(soundColour(sound))
+            val fill = Theme.fill(if (loaded) c else android.graphics.Color.rgb(32, 32, 40))
+            if (loaded && slot != selectedSound) fill.alpha = 110
+            r.drawRoundRect(android.graphics.RectF(x, y, x + w, y + h), 5f, 5f, fill)
+            if (slot == selectedSound) r.drawRoundRect(android.graphics.RectF(x, y, x + w, y + h), 5f, 5f, Theme.stroke(Theme.FG, 3f))
+            val src = engine.params[sound, org.openmk3.core.audio.SoundParams.SRC].toInt()
+            val name = when (src) {
+                1 -> "SYNTH"; 2 -> "FM"; 3 -> engine.poly.patchName[sound]
+                else -> engine.kit[sound].name.ifEmpty { "—" }
+            }
+            r.drawText(padLabel(slot), x + w / 2, y + 18f, ovName)
+            r.drawText(name.take(13), x + w / 2, y + 42f, ovVal)
+        }
+    }
 
     /** While NOTE REPEAT is held: pin, (arp) hold, gate reset, rate presets, knob settings. */
     private fun drawRepeatOverlay(l: Canvas, r: Canvas) {

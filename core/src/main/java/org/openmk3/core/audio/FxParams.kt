@@ -46,7 +46,9 @@ class FxParams {
         const val CHORUS = 2
         const val DELAY = 3
         const val REVERB = 4
-        val TYPES = listOf("EMPTY", "COMPRESSOR", "CHORUS", "DELAY", "REVERB")
+        const val FILTER = 5
+        val TYPES = listOf("EMPTY", "COMPRESSOR", "CHORUS", "DELAY", "REVERB", "FILTER")
+        val FILTER_MODES = listOf("LADDER LP24", "LADDER LP12", "LADDER HP24", "SEM LP", "SEM BP", "SEM HP", "SEM NOTCH", "SEM MORPH")
 
         private fun ms(v: Float) = if (v < 1000f) "${v.roundToInt()} ms" else "%.2f s".format(v / 1000f)
         private fun secs(v: Float) = if (v < 10f) "%.1f s".format(v) else "${v.roundToInt()} s"
@@ -84,6 +86,17 @@ class FxParams {
                 Def(7, "LOW CUT", 10f, 2000f, 80f, 0.004f, ::hz, log = true),
                 Def(8, "HIGH CUT", 500f, 20000f, 9000f, 0.004f, ::hz, log = true),
                 Def(9, "MODULATION", 0f, 1f, 0.1f, 0.002f, ::pct),
+            ),
+            FILTER to listOf(
+                Def(3, "CUTOFF", 20f, 20000f, 2000f, 0.004f, ::hz, log = true),
+                Def(4, "RESONANCE", 0f, 1f, 0.3f, 0.002f, ::pct),
+                Def(2, "MODE", 0f, 7f, 0f, 1f, { "" }, choices = FILTER_MODES),
+                Def(5, "DRIVE", 0f, 1f, 0f, 0.002f, ::pct),
+                Def(7, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
+                Def(6, "MORPH", 0f, 1f, 0.5f, 0.002f, { v -> if (v < 0.25f) "LP" else if (v < 0.75f) (if (kotlin.math.abs(v - 0.5f) < 0.03f) "NOTCH" else "${(v * 100).roundToInt()}%") else "HP" }),
+                Def(10, "ENV FOLLOW", -1f, 1f, 0f, 0.002f, ::pct),
+                Def(8, "LFO RATE", 0.05f, 20f, 1f, 0.004f, { v -> "%.2f Hz".format(v) }, log = true),
+                Def(9, "LFO DEPTH", 0f, 1f, 0f, 0.002f, ::pct),
             ),
             REVERB to listOf(
                 Def(10, "MIX", 0f, 1f, 0.3f, 0.002f, ::pct),

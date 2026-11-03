@@ -155,6 +155,8 @@ class SoundPage(ui: Ui) : Page(ui) {
         var lastPage = 0
         var scopeOn = false
         var scopeWindow = 1024
+        /** Scope: free-running (the output as it plays) or locked to a rising zero crossing. */
+        var scopeFree = true
     }
 
     private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
@@ -286,6 +288,7 @@ class SoundPage(ui: Ui) : Page(ui) {
                 fxChanged()
             }
             "D6", "ENCODER PUSH" -> scopeOn = !scopeOn
+            "D7" -> if (showScope()) scopeFree = !scopeFree
             "D8" -> if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
             "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
             "ENCODER RIGHT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(1)
@@ -311,6 +314,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         l.set("D4")
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) l.set("D5", fx.bypassed(chain, fxSlot))
         l.set("D6", scopeOn)
+        if (showScope()) l.set("D7", !scopeFree)
         if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
     }
 
@@ -522,6 +526,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE)
             r.drawText("BYPASS", 60f, 24f, if (fx.bypassed(chain, fxSlot)) tabOn else tab)
         r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
+        if (showScope()) r.drawText(if (scopeFree) "FREE" else "LOCKED", 300f, 24f, if (scopeFree) tab else tabOn)
         if (isSource && !isSynth && pageIdx == 1)
             r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
         l.drawRect(0f, 34f, 480f, 35f, sep)
@@ -568,13 +573,15 @@ class SoundPage(ui: Ui) : Page(ui) {
         val n = scopeWindow
         ui.engine.scope(scopeBuf)
         val len = scopeBuf.size
-        // find a rising zero crossing so periodic sounds stand still
+        // FREE: the newest audio, scrolling as it plays · LOCKED: aligned on a rising zero crossing
         var start = len - n - 1
-        var k = len - n - 1
-        val limit = max(1, len - n - 4096)
-        while (k > limit) {
-            if (scopeBuf[k - 1] <= 0f && scopeBuf[k] > 0f) { start = k; break }
-            k--
+        if (!scopeFree) {
+            var k = len - n - 1
+            val limit = max(1, len - n - 4096)
+            while (k > limit) {
+                if (scopeBuf[k - 1] <= 0f && scopeBuf[k] > 0f) { start = k; break }
+                k--
+            }
         }
         var peak = 0.05f
         for (i in start until start + n) peak = max(peak, abs(scopeBuf[i]))

@@ -64,6 +64,7 @@ object NativeEngine {
     external fun nativeFmPatchName(bank: Int, program: Int): String
     external fun nativePolySet(slot: Int, index: Int, value: Float)
     external fun nativeCpuLoad(): FloatArray
+    external fun nativeHintPoll(): Int
     external fun nativeSetZone(slot: Int, zone: Int, data: FloatArray?, channels: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativeZoneMap(slot: Int, zone: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativePolyParamCount(): Int
@@ -172,8 +173,18 @@ class AudioEngine(private val ctx: Context) {
     val phase: Double get() = n.nativePhase()
     val meter: Float get() = n.nativeMeter()
     val bufferFrames: Int get() = n.nativeBufferFrames()
+    private var hintState = -1
+    /** Asks Android for a performance hint session for the audio thread (logged once per change). */
+    fun pollHint() {
+        val st = n.nativeHintPoll()
+        if (st != hintState) {
+            hintState = st
+            if (st > 0) AppLog.i("Performance hint: " + listOf("", "not supported on this phone", "refused for the audio thread", "on for the audio thread")[st.coerceIn(0, 3)])
+        }
+    }
+
     /** Audio CPU load since the last read: average and peak, in % of real time. */
-    fun cpuLoad(): String = n.nativeCpuLoad().let { "cpu avg=${(it[0] * 100).toInt()}% peak=${(it[1] * 100).toInt()}%" + (if (it[2] > 0f) " shed=${it[2].toInt()}" else "") +
+    fun cpuLoad(): String = pollHint().let { n.nativeCpuLoad() }.let { "cpu avg=${(it[0] * 100).toInt()}% peak=${(it[1] * 100).toInt()}%" + (if (it[2] > 0f) " shed=${it[2].toInt()}" else "") +
         " hint=" + listOf("none", "unsupported", "refused", "on").getOrElse(it[3].toInt()) { "?" } +
         " slowest(us) seq=${it[4].toInt()} voices=${it[5].toInt()} poly=${it[6].toInt()} fx=${it[7].toInt()}" }
     val underruns: Int get() = if (direct) n.nativeUsbLate() else n.nativeXruns()
@@ -255,6 +266,7 @@ class AudioEngine(private val ctx: Context) {
         monitor = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "audio-monitor") }.apply {
             scheduleWithFixedDelay({
                 try {
+                    pollHint()
                     if (n.nativeTune()) {
                         AppLog.i("Audio: stream error, reopened (buffer ${bufferFrames}fr)")
                         lastX = 0

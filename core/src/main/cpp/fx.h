@@ -15,7 +15,7 @@
 namespace openmk3 {
 
 constexpr int kFxParams = 16;
-enum FxType { FX_NONE = 0, FX_COMPRESSOR = 1, FX_CHORUS = 2, FX_DELAY = 3, FX_REVERB = 4, FX_TYPES = 5 };
+enum FxType { FX_NONE = 0, FX_COMPRESSOR = 1, FX_CHORUS = 2, FX_DELAY = 3, FX_REVERB = 4, FX_FILTER = 5, FX_TYPES = 6 };
 
 class Effect {
 public:
@@ -434,12 +434,126 @@ private:
     bool gPrimed_ = false;
 };
 
+// ---------------------------------------------------------------------------------------
+// Filter: multi-mode, in two families, both zero-delay-feedback (topology-preserving) designs:
+//  ladder (Moog style): four one-pole stages in a resonant feedback loop, saturating input;
+//    taps give 24 dB and 12 dB low-pass and (by mixing the stages) 24 dB high-pass
+//  state-variable (Oberheim SEM style): 12 dB, low / band / high-pass, notch, and a morph from
+//    low-pass through notch to high-pass
+//  p2 mode, p3 cutoff Hz, p4 resonance (0..1), p5 drive (0..1), p6 morph (0..1), p7 mix,
+//  p8 LFO rate Hz, p9 LFO depth (0..1 = +-4 octaves), p10 envelope follow (-1..1 = +-4 octaves)
+
+class Filter : public Effect {
+public:
+    enum Mode { LADDER_LP24, LADDER_LP12, LADDER_HP24, SVF_LP, SVF_BP, SVF_HP, SVF_NOTCH, SVF_MORPH, MODES };
+
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const int mode = std::clamp(int(p[2] + 0.5f), 0, MODES - 1);
+        const float cutT = std::clamp(p[3], 20.f, 20000.f);
+        const float resT = std::clamp(p[4], 0.f, 1.f);
+        const float driveT = std::clamp(p[5], 0.f, 1.f);
+        const float morphT = std::clamp(p[6], 0.f, 1.f);
+        const float mixT = std::clamp(p[7], 0.f, 1.f);
+        const float lfoHz = std::clamp(p[8], 0.05f, 20.f);
+        const float lfoDepth = std::clamp(p[9], 0.f, 1.f) * 4.f;
+        const float envAmt = std::clamp(p[10], -1.f, 1.f) * 4.f;
+        const float gc = glideCoef(sr);
+        const float envAtt = onePoleCoef(0.005f, sr), envRel = onePoleCoef(0.15f, sr);
+        const bool ladder = mode <= LADDER_HP24;
+        float g = 0.f;
+        for (int i = 0; i < frames; i++) {
+            const float cut = cutG_.next(cutT, gc), res = resG_.next(resT, gc);
+            const float drive = driveG_.next(driveT, gc), morph = morphG_.next(morphT, gc), mix = mixG_.next(mixT, gc);
+            const float inL = io[i * 2], inR = io[i * 2 + 1];
+            // envelope follower on the input
+            const float a = std::max(std::fabs(inL), std::fabs(inR));
+            env_ = a + (a > env_ ? envAtt : envRel) * (env_ - a);
+            // control rate (every 16 samples): modulated cutoff -> integrator gain
+            if ((ctl_++ & 15) == 0) {
+                lfoPh_ += 16.f * lfoHz / sr;
+                if (lfoPh_ >= 1.f) lfoPh_ -= 1.f;
+                const float lfo = std::sin(6.2831853f * lfoPh_);
+                const float oct = lfo * lfoDepth + envAmt * std::min(1.f, env_ * 2.f);
+                const float fc = std::clamp(cut * std::exp2(oct), 20.f, 0.45f * sr);
+                g_ = std::tan(3.14159265f * fc / sr);
+            }
+            g = g_;
+            const float dg = 1.f + drive * 9.f;  // drive into the saturator
+            float out[2];
+            const float in[2] = {inL, inR};
+            for (int c = 0; c < 2; c++) {
+                if (ladder) {
+                    // ZDF ladder: y4 = G^4 u + sigma, u = x - k y4 (solved without a unit delay)
+                    const float G = g / (1.f + g);
+                    const float k = res * 4.1f;
+                    float* st = lad_[c];
+                    const float b0 = st[0] / (1.f + g), b1 = st[1] / (1.f + g), b2 = st[2] / (1.f + g), b3 = st[3] / (1.f + g);
+                    const float G2 = G * G, G3 = G2 * G, G4 = G3 * G;
+                    const float sigma = G3 * b0 + G2 * b1 + G * b2 + b3;
+                    // bass loss of the ladder at high resonance is partly made up at the input
+                    float x = in[c] * (1.f + 0.5f * k * (mode == LADDER_HP24 ? 0.f : 1.f));
+                    float u = (x - k * sigma) / (1.f + k * G4);
+                    u = std::tanh(u * dg) / std::tanh(dg);
+                    float y[4];
+                    float v = u;
+                    for (int s2 = 0; s2 < 4; s2++) {
+                        const float w = (v - st[s2]) * G;
+                        y[s2] = w + st[s2];
+                        st[s2] = y[s2] + w;
+                        v = y[s2];
+                    }
+                    out[c] = mode == LADDER_LP24 ? y[3]
+                           : mode == LADDER_LP12 ? y[1]
+                           : u - 4.f * y[0] + 6.f * y[1] - 4.f * y[2] + y[3];
+                } else {
+                    // ZDF state-variable filter (two integrators)
+                    const float R = 1.f - 0.985f * res;  // damping: low = resonant
+                    float* st = svf_[c];
+                    float x = std::tanh(in[c] * dg) / std::tanh(dg);
+                    const float hp = (x - (2.f * R + g) * st[0] - st[1]) / (1.f + 2.f * R * g + g * g);
+                    const float bp = g * hp + st[0];
+                    st[0] = g * hp + bp;
+                    const float lp = g * bp + st[1];
+                    st[1] = g * bp + lp;
+                    const float notch = lp + hp;
+                    switch (mode) {
+                        case SVF_LP: out[c] = lp; break;
+                        case SVF_BP: out[c] = bp * 2.f * R; break;  // unity peak
+                        case SVF_HP: out[c] = hp; break;
+                        case SVF_NOTCH: out[c] = notch; break;
+                        default:
+                            out[c] = morph < 0.5f ? lp + (notch - lp) * (morph * 2.f)
+                                                  : notch + (hp - notch) * (morph * 2.f - 1.f);
+                    }
+                }
+                if (!(out[c] == out[c]) || std::fabs(out[c]) > 1e4f) { out[c] = 0.f; reset(); }  // never blow up
+            }
+            io[i * 2] = inL + (out[0] - inL) * mix;
+            io[i * 2 + 1] = inR + (out[1] - inR) * mix;
+        }
+    }
+
+    void reset() override {
+        for (auto& c : lad_) for (float& v : c) v = 0.f;
+        for (auto& c : svf_) for (float& v : c) v = 0.f;
+        env_ = 0.f;
+    }
+
+private:
+    float lad_[2][4] = {};
+    float svf_[2][2] = {};
+    float g_ = 0.1f, env_ = 0.f, lfoPh_ = 0.f;
+    unsigned ctl_ = 0;
+    Glide cutG_, resG_, driveG_, morphG_, mixG_;
+};
+
 inline Effect* createEffect(int type) {
     switch (type) {
         case FX_COMPRESSOR: return new Compressor();
         case FX_CHORUS: return new Chorus();
         case FX_DELAY: return new Delay();
         case FX_REVERB: return new Reverb();
+        case FX_FILTER: return new Filter();
         default: return nullptr;
     }
 }
