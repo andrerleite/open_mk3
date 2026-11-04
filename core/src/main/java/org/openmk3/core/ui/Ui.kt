@@ -167,6 +167,41 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var selectPinned = false
     val selectActive get() = selectHeld || selectPinned
 
+    // ---- short messages over the left screen (SHIFT + pad shortcuts …) ----
+    private var toast = ""
+    private var toastAt = 0L
+    fun toast(t: String) { toast = t; toastAt = SystemClock.uptimeMillis(); AppLog.i(t); dirty = true }
+    private val toastBg = Theme.fill(Color.rgb(40, 40, 52))
+    private val toastText = Theme.text(16f, Theme.OK, bold = true)
+
+    /** The SHIFT + pad shortcuts printed on the pads. */
+    fun shiftShortcut(slot: Int) {
+        val p = engine.pattern
+        val g = group
+        val snd = selectedIndex
+        when (slot) {
+            0, 2 -> toast(if (undo()) "Undo" else "Nothing to undo")
+            1, 3 -> toast(if (redo()) "Redo" else "Nothing to redo")
+            4, 5 -> {
+                // pad 5: quantise the focused sound (pad 6: half way); in SELECT mode: the selected sounds
+                val sounds = if (selectActive) selectedSounds() else listOf(snd)
+                p.quantize(sounds, if (slot == 4) 1f else 0.5f)
+                patternChanged()
+                toast(if (slot == 4) "Quantised" else "Quantised 50 %")
+            }
+            6 -> { p.nudge(snd, -1); patternChanged(); toast("${padLabel()} nudged left") }
+            7 -> { p.nudge(snd, 1); patternChanged(); toast("${padLabel()} nudged right") }
+            8 -> { p.clearGroup(g); patternChanged(); toast("Pattern cleared") }
+            9 -> { p.clearAutomation(g); patternChanged(); toast("Automation cleared (group $groupLetter)") }
+            10 -> { clipboard = p.copyOf(g); toast(if (clipboard != null) "Pattern copied" else "No pattern to copy") }
+            11 -> clipboard?.let { p.paste(g, it); patternChanged(); toast("Pattern pasted") } ?: toast("Clipboard is empty")
+            12 -> { p.transpose(snd, -1); patternChanged(); toast("${padLabel()} notes −1 semitone") }
+            13 -> { p.transpose(snd, 1); patternChanged(); toast("${padLabel()} notes +1 semitone") }
+            14 -> { p.transpose(snd, -12); patternChanged(); toast("${padLabel()} notes −1 octave") }
+            15 -> { p.transpose(snd, 12); patternChanged(); toast("${padLabel()} notes +1 octave") }
+        }
+    }
+
     /** A sound's name: the one given to it, else its sample's. */
     fun soundName(s: Int): String = org.openmk3.core.audio.Names.sound.getOrNull(s)?.takeIf { it.isNotEmpty() } ?: engine.kit[s].name
     /** "GROUP A", with its name when it has one ("GROUP A · Drums"). */
@@ -681,11 +716,16 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 if (stripTouched && now - stripAt > 350) stripRelease()
                 stripLeds()
             }
+            if (toast.isNotEmpty() && now - toastAt >= 1500) dirty = true
             if (!dirty) return
             dirty = false
             page.draw(left.canvas, right.canvas, now)
             if (repeatHeld) drawRepeatOverlay(left.canvas, right.canvas)
             if (recPrepare) drawPrepareOverlay(left.canvas, right.canvas)
+            if (toast.isNotEmpty() && now - toastAt < 1500) {
+                left.canvas.drawRect(0f, 196f, 480f, 226f, toastBg)
+                left.canvas.drawText(toast.take(50), 12f, 217f, toastText)
+            } else if (toast.isNotEmpty()) { toast = ""; dirty = true }
             if (selectActive && !page.customPads && page !is WizardPage) drawSelectOverlay(left.canvas, right.canvas)
             val a = left.flush(dev)
             val b = right.flush(dev)
@@ -716,6 +756,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 AppLog.i("Keyboard base note ${org.openmk3.core.audio.Keys.noteName(keys.baseNote)}")
                 dirty = true
             }
+            return
+        }
+        // SHIFT + pad: the shortcuts printed on the pads (undo, quantise, nudge, copy …), in every
+        // mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that doesn't use the pads itself
+        if (shiftHeld && (page is HomePage || !page.customPads) && page !is WizardPage) {
+            post { shiftShortcut(slot); dirty = true }
             return
         }
         // SELECT + pad, on every page: focus / select that pad's sound without playing it

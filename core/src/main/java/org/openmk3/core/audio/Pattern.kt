@@ -498,7 +498,9 @@ class Pattern {
             for (x in 0 until EXTRA) if (d.xvel[pad][step * EXTRA + x] > 0f) d.xvel[pad][step * EXTRA + x] = (d.xvel[pad][step * EXTRA + x] + velDelta).coerceIn(0.01f, 1f)
         }
         if (semis != 0) {
-            d.note[pad][step] = (d.note[pad][step] + semis).coerceIn(0f, 127f)
+            // a stored 0 means the root note (60)
+            val n0 = d.note[pad][step].let { if (it <= 0f) ROOT.toFloat() else it }
+            d.note[pad][step] = (n0 + semis).coerceIn(1f, 127f)
             for (x in 0 until EXTRA) if (d.xvel[pad][step * EXTRA + x] > 0f) d.xnote[pad][step * EXTRA + x] = (d.xnote[pad][step * EXTRA + x] + semis).coerceIn(0f, 127f)
         }
         // position stays within its step here (the pad is that step)

@@ -36,7 +36,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | PAD MODE | Pads play the group's 16 sounds. From any other page it goes to the pad screen (SHIFT + PAD MODE / KEYBOARD / CHORDS switch the pads without leaving the page). Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound; both work within the group only); press again: hide them | ✅ |
 | KEYBOARD | Pads play the focused sound as notes. Press: switch and show the settings; press again: hide them (pads stay); SHIFT + KEYBOARD: switch without settings. PAD MODE returns to sounds. | ✅ |
 | CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
-| STEP | Pads become the 16 steps of the focused sound | ✅ |
+| STEP | Pads become the 16 steps of the focused sound (a step pad lights for any note starting within half a step of it, recorded live or not). Hold a step: K1 position, K2 note (pitch, you hear it), K3 velocity, K4 length (SHIFT: fine); the encoder also edits it (VOLUME = velocity, SWING = position, TEMPO = pitch) | ✅ |
 | FIXED VEL | Pads ignore pressure (full velocity), on every page | ✅ |
 | SHIFT + FIXED VEL (16 Vel) | The 16 pads play the focused sound at 16 velocities (from pad mode) | ✅ |
 
@@ -70,6 +70,8 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + SELECT | Colour of the focused sound (or AUTO = group colour) | ✅ |
 
 ## SHIFT + pad shortcuts (printed on the pads)
+
+They work in every pad mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that doesn't use the pads for something else. In KEYBOARD / CHORDS, pads 13–16 move the keyboard layout instead.
 
 | Pad | Function | Status |
 |---|---|---|

@@ -273,7 +273,6 @@ class HomePage(ui: Ui) : Page(ui) {
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         val p = pattern
         when {
-            shift && mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD -> { shiftPad(slot) }
             duplicate -> {
                 if (dupSource < 0) { dupSource = slot; message("Duplicate ${ui.padLabel(slot)} to… (hit the target pad)") }
                 else { duplicateSound(dupSource, slot); dupSource = -1 }
@@ -435,7 +434,36 @@ class HomePage(ui: Ui) : Page(ui) {
         return true
     }
 
+    /** STEP mode, a step held: K1 position, K2 note (pitch), K3 velocity, K4 length. */
+    private val stepKnobAcc = IntArray(4)
+    private fun stepKnob(knob: Int, delta: Int): Boolean {
+        if (mode != Mode.STEP || knob > 3) return false
+        val held = (0 until 16).firstOrNull { ui.padPressure[it] > 0 } ?: return false
+        val snd = sd(selected)
+        val st = noteAtPos(snd, padPos(held)) ?: return true
+        val fine = if (shift) 0.2f else 1f
+        when (knob) {
+            0 -> pattern.editStep(snd, st, posDelta = delta * 0.004f * fine)
+            1 -> {
+                stepKnobAcc[1] += delta
+                if (kotlin.math.abs(stepKnobAcc[1]) < 12) return true
+                pattern.editStep(snd, st, semis = if (stepKnobAcc[1] > 0) 1 else -1)
+                stepKnobAcc[1] = 0
+                // hear the new pitch
+                val nn = pattern.noteOf(snd, st)
+                ui.engine.noteOn(snd, nn, pattern.vel(snd, st).coerceAtLeast(0.3f))
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ ui.engine.noteOff(snd, nn) }, 250)
+            }
+            2 -> pattern.editStep(snd, st, velDelta = delta * 0.004f * fine)
+            3 -> pattern.setNoteLength(snd, st, pattern.noteLength(snd, st) + delta * 0.01f * fine * maxOf(1f, g))
+        }
+        stepEdited = true
+        changed()
+        return true
+    }
+
     override fun onKnob(knob: Int, delta: Int) {
+        if (stepKnob(knob, delta)) return
         if (keysKnob(knob, delta)) return
         if (padSettingsKnob(knob, delta)) return
         val e = ui.engine
@@ -537,34 +565,6 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     /** SHIFT + pads (labels printed on the pads). Returns true when handled. */
-    private fun shiftPad(slot: Int): Boolean {
-        val g = ui.group
-        val snd = sd(selected)
-        when (slot) {
-            0, 2 -> message(if (ui.undo()) "Undo" else "Nothing to undo")
-            1, 3 -> message(if (ui.redo()) "Redo" else "Nothing to redo")
-            4, 5 -> {
-                // SHIFT + pad 5: quantise the focused sound (pad 6: half way); with SELECT held: the group
-                val sounds = if (select) (0 until 16).map { sd(it) } else listOf(snd)
-                pattern.quantize(sounds, if (slot == 4) 1f else 0.5f)
-                changed()
-                message(if (slot == 4) "Quantised" else "Quantised 50 %")
-            }
-            6 -> { pattern.nudge(snd, -1); changed(); message("${ui.padLabel()} nudged left") }
-            7 -> { pattern.nudge(snd, 1); changed(); message("${ui.padLabel()} nudged right") }
-            8 -> { pattern.clearGroup(g); changed(); message("Pattern cleared") }
-            9 -> { pattern.clearAutomation(g); changed(); message("Automation cleared (group ${ui.groupLetter})") }
-            10 -> { ui.clipboard = pattern.copyOf(g); message(if (ui.clipboard != null) "Pattern copied" else "No pattern to copy") }
-            11 -> ui.clipboard?.let { pattern.paste(g, it); changed(); message("Pattern pasted") } ?: message("Clipboard is empty")
-            12 -> { pattern.transpose(snd, -1); changed(); message("${ui.padLabel()} notes −1 semitone") }
-            13 -> { pattern.transpose(snd, 1); changed(); message("${ui.padLabel()} notes +1 semitone") }
-            14 -> { pattern.transpose(snd, -12); changed(); message("${ui.padLabel()} notes −1 octave") }
-            15 -> { pattern.transpose(snd, 12); changed(); message("${ui.padLabel()} notes +1 octave") }
-            else -> return false
-        }
-        return true
-    }
-
     // =====================================================================================
     // screens
     // =====================================================================================
@@ -683,7 +683,7 @@ class HomePage(ui: Ui) : Page(ui) {
             msg.isNotEmpty() && android.os.SystemClock.uptimeMillis() - msgAt < 2500 -> msg
             pattern.countingIn -> "Count-in…"
             duplicate -> "DUPLICATE: hit the source pad, then the target"
-            shift && mode == Mode.PAD -> "SHIFT + pad: 1 undo · 2 redo · 7/8 nudge · 9 clear · 11/12 copy/paste"
+            shift -> "SHIFT + pad: 1 undo · 2 redo · 7/8 nudge · 9 clear · 11/12 copy/paste"
             encMode == Enc.VOLUME -> "Encoder: master volume"
             encMode == Enc.SWING -> "Encoder: swing"
             encMode == Enc.VELOCITY -> "Encoder: velocity of ${ui.padLabel()}'s notes"
@@ -694,12 +694,11 @@ class HomePage(ui: Ui) : Page(ui) {
             select -> "SELECT: hit a pad to choose a sound"
             mute -> "MUTE: hit pads to mute / unmute"
             solo -> "SOLO: hit pads to solo / unsolo"
-            mode == Mode.STEP -> "Pads = steps of ${ui.padLabel()} · ◀ ▶ sound"
+            mode == Mode.STEP -> "Steps of ${ui.padLabel()} · hold a step: K1 pos K2 note K3 vel K4 len"
             rec -> "Recording: play the pads"
             else -> "K1 vol · K2 sens · K3 tempo · K4 swing"
         }
         l.drawText(h, 16f, 180f, hint)
-
         val p = power
         l.drawText(
             "${if (e.direct) "USB direct" else "Android audio"} ${"%.0f".format(e.bufferFrames * 1000.0 / 48000)} ms · glitches ${e.underruns}" +
@@ -708,6 +707,20 @@ class HomePage(ui: Ui) : Page(ui) {
         )
         l.drawRect(16f, 250f, 464f, 262f, cell)
         l.drawRect(16f, 250f, 16f + 448f * e.meter.coerceIn(0f, 1f), 262f, if (e.meter > 0.95f) warnFill else ok)
+        // STEP mode with a step held: that note's settings on K1–K4
+        if (mode == Mode.STEP) {
+            val held = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
+            val st = held?.let { noteAtPos(sd(selected), padPos(it)) }
+            if (st != null) {
+                val snd = sd(selected)
+                l.drawRect(0f, 222f, 480f, 272f, Theme.fill(Theme.BG))
+                knobLabel(l, 0, "POSITION", "%+.2f".format(pattern.noteOffset(snd, st)))
+                knobLabel(l, 1, "NOTE", org.openmk3.core.audio.Keys.noteName(pattern.noteOf(snd, st)))
+                knobLabel(l, 2, "VELOCITY", "${(pattern.vel(snd, st) * 127).toInt()}")
+                knobLabel(l, 3, "LENGTH", "%.2f".format(pattern.noteLength(snd, st)))
+            }
+        }
+
     }
 
     /** [s] if it fits in [w] px, else "…" + as much of its end as fits. */
