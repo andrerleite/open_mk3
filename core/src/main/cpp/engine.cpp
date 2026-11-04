@@ -687,7 +687,8 @@ private:
             openmk3::Effect* e = fxCur[chain][k];
             if (e && q[0] > 0.5f && q[1] < 0.5f) {
                 // compressor side-chain: a group's bus (this chunk if already processed, else the last)
-                const int sc = int(q[0] + 0.5f) == openmk3::FX_COMPRESSOR ? int(q[9] + 0.5f) : 0;
+                const int ty = int(q[0] + 0.5f);
+                const int sc = (ty == openmk3::FX_COMPRESSOR || ty == openmk3::FX_GATE) ? int(q[9] + 0.5f) : 0;
                 if (sc >= 1 && sc <= kGroups) { e->key = keyBus[sc - 1]; e->keyFrames = keyFrames[sc - 1]; }
                 else { e->key = nullptr; e->keyFrames = 0; }
                 e->process(buf, frames, q, bpm, float(kSampleRate));

@@ -15,7 +15,9 @@
 namespace openmk3 {
 
 constexpr int kFxParams = 16;
-enum FxType { FX_NONE = 0, FX_COMPRESSOR = 1, FX_CHORUS = 2, FX_DELAY = 3, FX_REVERB = 4, FX_FILTER = 5, FX_TYPES = 6 };
+enum FxType { FX_NONE = 0, FX_COMPRESSOR = 1, FX_CHORUS = 2, FX_DELAY = 3, FX_REVERB = 4, FX_FILTER = 5,
+              FX_GATE = 6, FX_LIMITER = 7, FX_EQ = 8, FX_FLANGER = 9, FX_PHASER = 10, FX_DISTORTION = 11,
+              FX_LOFI = 12, FX_TRANSIENT = 13, FX_TYPES = 14 };
 
 class Effect {
 public:
@@ -553,6 +555,297 @@ private:
     Glide cutG_, resG_, driveG_, morphG_, mixG_;
 };
 
+
+// ---------------------------------------------------------------------------------------
+// Gate: opens above the threshold, holds, then closes down to RANGE.
+//  p2 threshold dB, p3 attack ms, p4 hold ms, p5 release ms, p6 range dB (attenuation when closed)
+
+class Gate : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float thr = dbToGain(std::clamp(p[2], -80.f, 0.f));
+        const float att = onePoleCoef(std::clamp(p[3], 0.05f, 100.f) / 1000.f, sr);
+        const int hold = int(std::clamp(p[4], 0.f, 1000.f) / 1000.f * sr);
+        const float rel = onePoleCoef(std::clamp(p[5], 5.f, 3000.f) / 1000.f, sr);
+        const float floorG = dbToGain(-std::clamp(p[6], 0.f, 80.f));
+        float closed = 0.f;
+        for (int i = 0; i < frames; i++) {
+            float l = io[i * 2], r = io[i * 2 + 1];
+            float lvl = key && keyFrames > 0 ? std::max(std::fabs(key[std::min(i, keyFrames - 1) * 2]), std::fabs(key[std::min(i, keyFrames - 1) * 2 + 1]))
+                                             : std::max(std::fabs(l), std::fabs(r));
+            if (lvl >= thr) holdLeft_ = hold;
+            const float target = (lvl >= thr || holdLeft_ > 0) ? 1.f : floorG;
+            if (holdLeft_ > 0) holdLeft_--;
+            const float c = target > g_ ? att : rel;
+            g_ = target + c * (g_ - target);
+            io[i * 2] = l * g_;
+            io[i * 2 + 1] = r * g_;
+            closed = std::max(closed, gainToDb(1.f / std::max(g_, 1e-6f)));
+        }
+        meter = closed;
+    }
+private:
+    float g_ = 1.f;
+    int holdLeft_ = 0;
+};
+
+// ---------------------------------------------------------------------------------------
+// Limiter: 1.5 ms look-ahead, the gain reaches the needed reduction before the peak arrives.
+//  p2 ceiling dB (-24..0), p3 release ms, p4 input gain dB (0..24)
+
+class Limiter : public Effect {
+public:
+    Limiter() { dl_.init(256); dr_.init(256); }
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float ceil = dbToGain(std::clamp(p[2], -24.f, 0.f));
+        const float rel = onePoleCoef(std::clamp(p[3], 5.f, 2000.f) / 1000.f, sr);
+        const float inG = dbToGain(std::clamp(p[4], 0.f, 24.f));
+        const int la = std::clamp(int(0.0015f * sr), 1, 200);
+        const float attC = std::exp(-1.f / float(la) * 3.f);
+        float maxGr = 0.f;
+        for (int i = 0; i < frames; i++) {
+            float l = io[i * 2] * inG, r = io[i * 2 + 1] * inG;
+            dl_.write(l); dr_.write(r);
+            const float pk = std::max(std::fabs(l), std::fabs(r));
+            // peak hold over the look-ahead window
+            if (pk >= hold_) { hold_ = pk; holdLeft_ = la; } else if (--holdLeft_ <= 0) { hold_ *= 0.999f; }
+            const float target = hold_ > ceil ? ceil / hold_ : 1.f;
+            g_ = target < g_ ? target + attC * (g_ - target) : target + rel * (g_ - target);
+            const float ol = dl_.tap(la) * g_, orr = dr_.tap(la) * g_;
+            io[i * 2] = std::clamp(ol, -ceil, ceil);
+            io[i * 2 + 1] = std::clamp(orr, -ceil, ceil);
+            maxGr = std::max(maxGr, gainToDb(1.f / std::max(g_, 1e-6f)));
+        }
+        meter = maxGr;
+    }
+    void reset() override { dl_.clear(); dr_.clear(); hold_ = 0.f; g_ = 1.f; }
+private:
+    DelayLine dl_, dr_;
+    float hold_ = 0.f, g_ = 1.f;
+    int holdLeft_ = 0;
+};
+
+// ---------------------------------------------------------------------------------------
+// Biquad (RBJ cookbook), stereo.
+
+struct Biquad {
+    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    float z1[2] = {}, z2[2] = {};
+    void peak(float f, float gDb, float q, float sr) {
+        const float A = std::pow(10.f, gDb / 40.f), w = 6.2831853f * std::clamp(f, 10.f, sr * 0.45f) / sr;
+        const float al = std::sin(w) / (2.f * std::max(q, 0.1f)), c = std::cos(w);
+        set(1 + al * A, -2 * c, 1 - al * A, 1 + al / A, -2 * c, 1 - al / A);
+    }
+    void shelf(float f, float gDb, bool high, float sr) {
+        const float A = std::pow(10.f, gDb / 40.f), w = 6.2831853f * std::clamp(f, 10.f, sr * 0.45f) / sr;
+        const float c = std::cos(w), al = std::sin(w) / 2.f * std::sqrt(2.f), sA = 2.f * std::sqrt(A) * al;
+        if (!high) set(A * ((A + 1) - (A - 1) * c + sA), 2 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - sA),
+                       (A + 1) + (A - 1) * c + sA, -2 * ((A - 1) + (A + 1) * c), (A + 1) + (A - 1) * c - sA);
+        else set(A * ((A + 1) + (A - 1) * c + sA), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sA),
+                 (A + 1) - (A - 1) * c + sA, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sA);
+    }
+    void set(float nb0, float nb1, float nb2, float na0, float na1, float na2) {
+        b0 = nb0 / na0; b1 = nb1 / na0; b2 = nb2 / na0; a1 = na1 / na0; a2 = na2 / na0;
+    }
+    inline float run(float x, int c) {
+        const float y = b0 * x + z1[c];
+        z1[c] = b1 * x - a1 * y + z2[c];
+        z2[c] = b2 * x - a2 * y;
+        return y;
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// EQ: low shelf, two peaks, high shelf.
+//  p2 low freq, p3 low gain dB · p4 mid 1 freq, p5 gain, p6 Q · p7 mid 2 freq, p8 gain, p9 Q
+//  p10 high freq, p11 high gain dB
+
+class Eq : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        float key[10];
+        for (int k = 0; k < 10; k++) key[k] = p[2 + k];
+        if (std::memcmp(key, last_, sizeof(key)) != 0) {
+            std::memcpy(last_, key, sizeof(key));
+            b_[0].shelf(p[2], std::clamp(p[3], -24.f, 24.f), false, sr);
+            b_[1].peak(p[4], std::clamp(p[5], -24.f, 24.f), p[6], sr);
+            b_[2].peak(p[7], std::clamp(p[8], -24.f, 24.f), p[9], sr);
+            b_[3].shelf(p[10], std::clamp(p[11], -24.f, 24.f), true, sr);
+        }
+        for (int i = 0; i < frames; i++)
+            for (int c = 0; c < 2; c++) {
+                float x = io[i * 2 + c];
+                for (auto& b : b_) x = b.run(x, c);
+                io[i * 2 + c] = x;
+            }
+    }
+private:
+    Biquad b_[4];
+    float last_[10] = {-1};
+};
+
+// ---------------------------------------------------------------------------------------
+// Flanger: a short modulated delay with feedback.
+//  p2 rate Hz, p3 depth, p4 feedback (-0.95..0.95), p5 mix, p6 delay ms (0.1..10), p7 stereo (LFO phase)
+
+class Flanger : public Effect {
+public:
+    Flanger() { dl_.init(48000 / 40); dr_.init(48000 / 40); }
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float inc = std::clamp(p[2], 0.01f, 10.f) / sr;
+        const float depth = std::clamp(p[3], 0.f, 1.f), fb = std::clamp(p[4], -0.95f, 0.95f);
+        const float mixT = std::clamp(p[5], 0.f, 1.f), base = std::clamp(p[6], 0.1f, 10.f) * 0.001f * sr;
+        const float ph = std::clamp(p[7], 0.f, 1.f) * 0.5f;
+        const float gc = glideCoef(sr);
+        for (int i = 0; i < frames; i++) {
+            const float mix = mixG_.next(mixT, gc);
+            phase_ += inc; if (phase_ >= 1.f) phase_ -= 1.f;
+            const float ml = 0.5f - 0.5f * std::cos(6.2831853f * phase_);
+            float pr = phase_ + ph; if (pr >= 1.f) pr -= 1.f;
+            const float mr = 0.5f - 0.5f * std::cos(6.2831853f * pr);
+            const float l = io[i * 2], r = io[i * 2 + 1];
+            // the delay sweeps from DELAY down towards zero by DEPTH
+            const float yl = dl_.read(1.f + base * (1.f - depth * 0.95f * ml));
+            const float yr = dr_.read(1.f + base * (1.f - depth * 0.95f * mr));
+            dl_.write(l + yl * fb); dr_.write(r + yr * fb);
+            io[i * 2] = l * (1.f - mix * 0.5f) + yl * mix * 0.5f;
+            io[i * 2 + 1] = r * (1.f - mix * 0.5f) + yr * mix * 0.5f;
+        }
+    }
+    void reset() override { dl_.clear(); dr_.clear(); }
+private:
+    DelayLine dl_, dr_;
+    float phase_ = 0.f;
+    Glide mixG_;
+};
+
+// ---------------------------------------------------------------------------------------
+// Phaser: a chain of modulated first-order all-passes with feedback.
+//  p2 rate Hz, p3 depth, p4 feedback (-0.95..0.95), p5 mix, p6 stages (2..12), p7 centre Hz
+
+class Phaser : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float inc = std::clamp(p[2], 0.01f, 10.f) / sr;
+        const float depth = std::clamp(p[3], 0.f, 1.f), fb = std::clamp(p[4], -0.95f, 0.95f);
+        const float mixT = std::clamp(p[5], 0.f, 1.f);
+        const int stages = std::clamp(int(p[6] + 0.5f), 1, 6) * 2;
+        const float centre = std::clamp(p[7], 100.f, 8000.f);
+        const float gc = glideCoef(sr);
+        for (int i = 0; i < frames; i++) {
+            const float mix = mixG_.next(mixT, gc);
+            phase_ += inc; if (phase_ >= 1.f) phase_ -= 1.f;
+            for (int c = 0; c < 2; c++) {
+                float ph = phase_ + (c ? 0.25f : 0.f); if (ph >= 1.f) ph -= 1.f;
+                const float m = std::sin(6.2831853f * ph);
+                const float f = centre * std::exp2(depth * 2.f * m);
+                const float t = std::tan(3.14159265f * std::clamp(f, 20.f, sr * 0.45f) / sr);
+                const float a = (t - 1.f) / (t + 1.f);
+                float x = io[i * 2 + c] + last_[c] * fb;
+                for (int k = 0; k < stages; k++) {
+                    const float y = a * x + s_[c][k];
+                    s_[c][k] = x - a * y;
+                    x = y;
+                }
+                last_[c] = x;
+                io[i * 2 + c] = io[i * 2 + c] * (1.f - mix * 0.5f) + x * mix * 0.5f;
+            }
+        }
+    }
+    void reset() override { std::memset(s_, 0, sizeof(s_)); last_[0] = last_[1] = 0.f; }
+private:
+    float s_[2][12] = {};
+    float last_[2] = {};
+    float phase_ = 0.f;
+    Glide mixG_;
+};
+
+// ---------------------------------------------------------------------------------------
+// Distortion: drive into a shaper (soft, hard, fold, tube), a tone low-pass, output level.
+//  p2 drive dB (0..48), p3 type (0 soft, 1 hard, 2 fold, 3 tube), p4 tone Hz, p5 mix, p6 output dB
+
+class Distortion : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float gT = dbToGain(std::clamp(p[2], 0.f, 48.f));
+        const int type = std::clamp(int(p[3] + 0.5f), 0, 3);
+        const float tone = lpCoef(std::clamp(p[4], 200.f, 20000.f), sr);
+        const float mixT = std::clamp(p[5], 0.f, 1.f), outT = dbToGain(std::clamp(p[6], -24.f, 12.f));
+        const float gc = glideCoef(sr);
+        for (int i = 0; i < frames; i++) {
+            const float g = gG_.next(gT, gc), mix = mixG_.next(mixT, gc), out = outG_.next(outT, gc);
+            for (int c = 0; c < 2; c++) {
+                const float x = io[i * 2 + c];
+                float y = x * g;
+                switch (type) {
+                    case 0: y = std::tanh(y); break;
+                    case 1: y = std::clamp(y, -1.f, 1.f); break;
+                    case 2: y = std::sin(std::clamp(y, -20.f, 20.f) * 1.5707963f); break;
+                    default: y = y >= 0.f ? 1.f - std::exp(-y) : -(1.f - std::exp(y * 1.4f)) / 1.4f * 1.2f; break;  // asymmetric
+                }
+                lp_[c] = y + tone * (lp_[c] - y);
+                // the gain compensates the drive, so turning it up mostly changes the colour
+                const float wet = lp_[c] * out / std::max(1.f, std::sqrt(g) * 0.5f);
+                io[i * 2 + c] = x * (1.f - mix) + wet * mix;
+            }
+        }
+    }
+private:
+    float lp_[2] = {};
+    Glide gG_, mixG_, outG_;
+};
+
+// ---------------------------------------------------------------------------------------
+// Lo-fi: sample-rate and bit reduction.
+//  p2 sample rate Hz (500..48000), p3 bits (1..16), p4 mix
+
+class Lofi : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float step = std::clamp(p[2], 500.f, sr) / sr;
+        const float q = std::exp2(std::clamp(p[3], 1.f, 16.f) - 1.f);
+        const float mix = std::clamp(p[4], 0.f, 1.f);
+        for (int i = 0; i < frames; i++) {
+            ph_ += step;
+            if (ph_ >= 1.f) { ph_ -= 1.f; h_[0] = io[i * 2]; h_[1] = io[i * 2 + 1]; }
+            for (int c = 0; c < 2; c++) {
+                const float y = std::round(h_[c] * q) / q;
+                io[i * 2 + c] = io[i * 2 + c] * (1.f - mix) + y * mix;
+            }
+        }
+    }
+private:
+    float ph_ = 1.f, h_[2] = {};
+};
+
+// ---------------------------------------------------------------------------------------
+// Transient shaper: a fast and a slow envelope; where the fast one leads (attacks) ATTACK sets
+// the gain, where it trails (the tail) SUSTAIN does.
+//  p2 attack (-1..1), p3 sustain (-1..1), p4 output dB
+
+class Transient : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float atk = std::clamp(p[2], -1.f, 1.f), sus = std::clamp(p[3], -1.f, 1.f);
+        const float out = dbToGain(std::clamp(p[4], -24.f, 12.f));
+        const float fa = onePoleCoef(0.001f, sr), fr = onePoleCoef(0.03f, sr);
+        const float sa = onePoleCoef(0.03f, sr), srl = onePoleCoef(0.3f, sr);
+        for (int i = 0; i < frames; i++) {
+            const float l = io[i * 2], r = io[i * 2 + 1];
+            const float x = std::max(std::fabs(l), std::fabs(r));
+            fast_ = x + (x > fast_ ? fa : fr) * (fast_ - x);
+            slow_ = x + (x > slow_ ? sa : srl) * (slow_ - x);
+            const float ratio = (fast_ + 1e-5f) / (slow_ + 1e-5f);
+            float g = ratio > 1.f ? std::pow(ratio, atk) : std::pow(1.f / ratio, sus);
+            g = std::clamp(g, 0.25f, 4.f) * out;  // ±12 dB
+            io[i * 2] = l * g;
+            io[i * 2 + 1] = r * g;
+        }
+    }
+private:
+    float fast_ = 0.f, slow_ = 0.f;
+};
+
 inline Effect* createEffect(int type) {
     switch (type) {
         case FX_COMPRESSOR: return new Compressor();
@@ -560,6 +853,14 @@ inline Effect* createEffect(int type) {
         case FX_DELAY: return new Delay();
         case FX_REVERB: return new Reverb();
         case FX_FILTER: return new Filter();
+        case FX_GATE: return new Gate();
+        case FX_LIMITER: return new Limiter();
+        case FX_EQ: return new Eq();
+        case FX_FLANGER: return new Flanger();
+        case FX_PHASER: return new Phaser();
+        case FX_DISTORTION: return new Distortion();
+        case FX_LOFI: return new Lofi();
+        case FX_TRANSIENT: return new Transient();
         default: return nullptr;
     }
 }

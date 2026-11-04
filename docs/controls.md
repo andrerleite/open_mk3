@@ -256,6 +256,14 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 | Effect | Parameters |
 |---|---|
 | Compressor | Threshold, ratio, attack, release, makeup, mix, knee, SIDECHAIN (OFF or a group A–H: that group drives the compression, e.g. a kick group ducking the bass; gain reduction shown on the scope) |
+| Gate | Threshold, range, attack, hold, release, side-chain (a group opens it) |
+| Limiter | Input gain, ceiling, release (1.5 ms look-ahead, never above the ceiling) |
+| EQ | Low shelf, two peaks (frequency, gain, Q), high shelf |
+| Flanger | Mix, rate, depth, feedback, delay, stereo |
+| Phaser | Mix, rate, depth, feedback, stages (2–12), centre frequency |
+| Distortion | Drive, type (soft / hard / fold / tube), tone, mix, output |
+| Lo-fi | Sample rate, bits, mix |
+| Transient | Attack, sustain (±12 dB), output |
 | Chorus | Mix, rate, depth, delay, feedback, width |
 | Delay | Mix, time (ms, or note values when synced), feedback, sync, ping-pong, low cut, high cut; page 2: modulation |
 | Reverb | Mix, decay, size, character (DENSE / LUSH / VAST), pre-delay, high cut, low cut; page 2: diffusion, modulation, width, freeze |

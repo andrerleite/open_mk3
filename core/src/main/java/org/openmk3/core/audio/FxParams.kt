@@ -47,7 +47,16 @@ class FxParams {
         const val DELAY = 3
         const val REVERB = 4
         const val FILTER = 5
-        val TYPES = listOf("EMPTY", "COMPRESSOR", "CHORUS", "DELAY", "REVERB", "FILTER")
+        const val GATE = 6
+        const val LIMITER = 7
+        const val EQ = 8
+        const val FLANGER = 9
+        const val PHASER = 10
+        const val DISTORTION = 11
+        const val LOFI = 12
+        const val TRANSIENT = 13
+        val TYPES = listOf("EMPTY", "COMPRESSOR", "CHORUS", "DELAY", "REVERB", "FILTER",
+            "GATE", "LIMITER", "EQ", "FLANGER", "PHASER", "DISTORTION", "LO-FI", "TRANSIENT")
         val FILTER_MODES = listOf("LADDER LP24", "LADDER LP12", "LADDER HP24", "SEM LP", "SEM BP", "SEM HP", "SEM NOTCH", "SEM MORPH")
 
         private fun ms(v: Float) = if (v < 1000f) "${v.roundToInt()} ms" else "%.2f s".format(v / 1000f)
@@ -99,6 +108,64 @@ class FxParams {
                 Def(10, "ENV FOLLOW", -1f, 1f, 0f, 0.002f, ::pct),
                 Def(8, "LFO RATE", 0.05f, 20f, 1f, 0.004f, { v -> "%.2f Hz".format(v) }, log = true),
                 Def(9, "LFO DEPTH", 0f, 1f, 0f, 0.002f, ::pct),
+            ),
+            GATE to listOf(
+                Def(2, "THRESHOLD", -80f, 0f, -40f, 0.05f, ::db),
+                Def(6, "RANGE", 0f, 80f, 80f, 0.05f, { v -> "−${v.roundToInt()} dB" }),
+                Def(3, "ATTACK", 0.05f, 100f, 1f, 0.004f, { v -> "%.1f ms".format(v) }, log = true),
+                Def(4, "HOLD", 0f, 1000f, 20f, 0.5f, ::ms),
+                Def(5, "RELEASE", 5f, 3000f, 100f, 0.004f, ::ms, log = true),
+                Def(9, "SIDECHAIN", 0f, 8f, 0f, 1f, { "" }, choices = listOf("OFF") + ('A'..'H').map { "GROUP $it" }),
+            ),
+            LIMITER to listOf(
+                Def(4, "INPUT", 0f, 24f, 0f, 0.02f, ::db),
+                Def(2, "CEILING", -24f, 0f, -0.3f, 0.02f, ::db),
+                Def(3, "RELEASE", 5f, 2000f, 80f, 0.004f, ::ms, log = true),
+            ),
+            EQ to listOf(
+                Def(3, "LOW GAIN", -24f, 24f, 0f, 0.02f, ::db),
+                Def(5, "MID 1 GAIN", -24f, 24f, 0f, 0.02f, ::db),
+                Def(8, "MID 2 GAIN", -24f, 24f, 0f, 0.02f, ::db),
+                Def(11, "HIGH GAIN", -24f, 24f, 0f, 0.02f, ::db),
+                Def(2, "LOW FREQ", 20f, 1000f, 100f, 0.004f, ::hz, log = true),
+                Def(4, "MID 1 FREQ", 60f, 8000f, 500f, 0.004f, ::hz, log = true),
+                Def(7, "MID 2 FREQ", 200f, 16000f, 3000f, 0.004f, ::hz, log = true),
+                Def(10, "HIGH FREQ", 1000f, 20000f, 8000f, 0.004f, ::hz, log = true),
+                Def(6, "MID 1 Q", 0.1f, 12f, 1f, 0.004f, { v -> "%.2f".format(v) }, log = true),
+                Def(9, "MID 2 Q", 0.1f, 12f, 1f, 0.004f, { v -> "%.2f".format(v) }, log = true),
+            ),
+            FLANGER to listOf(
+                Def(5, "MIX", 0f, 1f, 0.5f, 0.002f, ::pct),
+                Def(2, "RATE", 0.01f, 10f, 0.3f, 0.004f, { v -> "%.2f Hz".format(v) }, log = true),
+                Def(3, "DEPTH", 0f, 1f, 0.7f, 0.002f, ::pct),
+                Def(4, "FEEDBACK", -0.95f, 0.95f, 0.5f, 0.002f, ::pct),
+                Def(6, "DELAY", 0.1f, 10f, 2f, 0.004f, { v -> "%.1f ms".format(v) }, log = true),
+                Def(7, "STEREO", 0f, 1f, 0.5f, 0.002f, ::pct),
+            ),
+            PHASER to listOf(
+                Def(5, "MIX", 0f, 1f, 0.5f, 0.002f, ::pct),
+                Def(2, "RATE", 0.01f, 10f, 0.4f, 0.004f, { v -> "%.2f Hz".format(v) }, log = true),
+                Def(3, "DEPTH", 0f, 1f, 0.7f, 0.002f, ::pct),
+                Def(4, "FEEDBACK", -0.95f, 0.95f, 0.4f, 0.002f, ::pct),
+                Def(6, "STAGES", 1f, 6f, 2f, 1f, { "" }, choices = listOf("2", "4", "6", "8", "10", "12").let { listOf("") + it }),
+                Def(7, "CENTRE", 100f, 8000f, 800f, 0.004f, ::hz, log = true),
+            ),
+            DISTORTION to listOf(
+                Def(2, "DRIVE", 0f, 48f, 12f, 0.05f, ::db),
+                Def(3, "TYPE", 0f, 3f, 0f, 1f, { "" }, choices = listOf("SOFT", "HARD", "FOLD", "TUBE")),
+                Def(4, "TONE", 200f, 20000f, 8000f, 0.004f, ::hz, log = true),
+                Def(5, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
+                Def(6, "OUTPUT", -24f, 12f, 0f, 0.02f, ::db),
+            ),
+            LOFI to listOf(
+                Def(2, "SAMPLE RATE", 500f, 48000f, 12000f, 0.004f, ::hz, log = true),
+                Def(3, "BITS", 1f, 16f, 8f, 0.02f, { v -> "%.1f bit".format(v) }),
+                Def(4, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
+            ),
+            TRANSIENT to listOf(
+                Def(2, "ATTACK", -1f, 1f, 0f, 0.002f, ::pct),
+                Def(3, "SUSTAIN", -1f, 1f, 0f, 0.002f, ::pct),
+                Def(4, "OUTPUT", -24f, 12f, 0f, 0.02f, ::db),
             ),
             REVERB to listOf(
                 Def(10, "MIX", 0f, 1f, 0.3f, 0.002f, ::pct),
