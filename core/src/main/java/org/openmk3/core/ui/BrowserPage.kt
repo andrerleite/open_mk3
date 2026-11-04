@@ -42,6 +42,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         class SoundFile(val file: File) : Entry("♪ " + file.nameWithoutExtension)
         class GroupFile(val file: File) : Entry("▦ " + file.nameWithoutExtension)
         class FxFile(val file: File) : Entry("⚙ " + file.nameWithoutExtension)
+        class Midi(val file: File) : Entry("♫ " + file.nameWithoutExtension)
     }
 
     companion object {
@@ -52,6 +53,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
         private const val ROWS = 10
         /** PREHEAR: landing on a WAV auditions it. */
         var prehear = true
+        /** K2: prehear level (the preview's velocity). */
+        var prehearLevel = 0.8f
     }
 
     private var dir = lastDir?.takeIf { it.isDirectory } ?: ROOT
@@ -100,7 +103,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
     private fun saveFavourites(l: List<String>) { favCache = l.toMutableList(); try { favFile().writeText(org.json.JSONArray(l).toString()) } catch (e: Exception) { AppLog.i("favourites: ${e.message}") } }
 
     private fun entryFile(e: Entry?): File? = when (e) {
-        is Entry.Folder -> e.file; is Entry.Wav -> e.file; is Entry.SoundFile -> e.file; is Entry.GroupFile -> e.file; is Entry.FxFile -> e.file
+        is Entry.Folder -> e.file; is Entry.Wav -> e.file; is Entry.Midi -> e.file; is Entry.SoundFile -> e.file; is Entry.GroupFile -> e.file; is Entry.FxFile -> e.file
         else -> null
     }
 
@@ -123,6 +126,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                 f.extension == org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(f)
                 f.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT -> Entry.SoundFile(f)
                 f.extension == org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(f)
+                f.extension.equals("mid", true) -> Entry.Midi(f)
                 else -> Entry.Wav(f)
             })
         }
@@ -145,13 +149,17 @@ class BrowserPage(ui: Ui) : Page(ui) {
             .sortedBy { it.name.lowercase() }
         val wavs = files.orEmpty().filter { it.isFile && it.extension.equals("wav", true) }
             .sortedBy { it.name.lowercase() }
-        val saved = files.orEmpty().filter { it.isFile && (it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT || it.extension == org.openmk3.core.audio.FxPreset.EXT) }
+        val saved = files.orEmpty().filter { it.isFile && (it.extension.equals("mid", true) || it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT || it.extension == org.openmk3.core.audio.FxPreset.EXT) }
             .sortedBy { it.name.lowercase() }
         entries = buildList {
             add(Entry.BuiltIn())
             if (d.canonicalPath != ROOT.canonicalPath) add(Entry.Up())
             folders.forEach { add(Entry.Folder(it)) }
-            saved.forEach { add(when (it.extension) { org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(it); org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(it); else -> Entry.SoundFile(it) }) }
+            saved.forEach { add(when {
+                it.extension.equals("mid", true) -> Entry.Midi(it)
+                it.extension == org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(it)
+                it.extension == org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(it)
+                else -> Entry.SoundFile(it) }) }
             wavs.forEach { add(Entry.Wav(it)) }
         }
         if (files != null && folders.isEmpty() && wavs.isEmpty() && saved.isEmpty()) {
@@ -190,7 +198,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                     if (token != previewToken) return@post
                     previewed = s
                     info = s.info
-                    if (prehear) ui.engine.preview(s)
+                    if (prehear) ui.engine.preview(s, prehearLevel)
                     ui.invalidate()
                 }
             } catch (ex: Exception) {
@@ -211,6 +219,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                 AppLog.i("Kit: $message")
             }
             is Entry.Up -> if (favView) list(dir) else up()
+            is Entry.Midi -> importMidi(e.file)
             is Entry.Folder -> list(e.file)
             is Entry.Wav -> load(e)
             is Entry.SoundFile -> loadSaved(e.file, group = false)
@@ -278,6 +287,35 @@ class BrowserPage(ui: Ui) : Page(ui) {
         AppLog.i("Kit: ${org.openmk3.core.audio.soundLabel(slot)} = ${s.path} (${s.info})")
         if (!ui.engine.playing) ui.engine.trigger(slot, 0.8f)  // while playing: heard in the pattern
         ui.invalidate()
+    }
+
+    /**
+     * A MIDI file into the focused group's pattern (replacing its notes): several channels go to
+     * the pads by channel (channel 1 = pad 1); a single channel of drum notes (C1 to D#2) goes to
+     * pads 1–16 when the pads are in PAD mode; anything else plays on the focused sound at its pitch.
+     */
+    private fun importMidi(f: File) {
+        val notes = try { org.openmk3.core.audio.MidiFile.read(f) } catch (ex: Exception) { message = "Can't read: ${ex.message}"; return }
+        if (notes.isEmpty()) { message = "No notes in ${f.name}"; return }
+        val chans = notes.map { it.channel }.distinct()
+        val drums = chans.size == 1 && ui.padMode == Ui.PadMode.PAD && notes.all { it.note in 36..51 } && notes.map { it.note }.distinct().size > 1
+        val pad = ui.selectedSound
+        val how: String
+        val rows = notes.map { n ->
+            val target = when {
+                chans.size > 1 -> n.channel
+                drums -> n.note - 36
+                else -> pad
+            }
+            val note = if (drums) org.openmk3.core.audio.Pattern.ROOT else n.note
+            intArrayOf(target, note, n.vel, n.start.toInt(), n.length.toInt())
+        }
+        how = when { chans.size > 1 -> "by channel"; drums -> "drum notes on pads 1–16"; else -> "on ${ui.padLabel()}" }
+        val placed = ui.engine.pattern.importMidi(ui.group, rows)
+        ui.engine.pattern.save(ui.ctx)
+        ui.checkpoint()
+        message = "${f.nameWithoutExtension}: $placed notes $how"
+        AppLog.i("MIDI import ${f.name}: $message")
     }
 
     /** D5 / D6: the previous / next WAV in this folder goes straight onto the target pad. */
@@ -389,6 +427,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
     override fun onKnob(knob: Int, delta: Int) {
         if (knob == 0) ui.engine.masterGain = (ui.engine.masterGain + delta / 300f).coerceIn(0f, 1.5f)
+        if (knob == 1) { prehearLevel = (prehearLevel + delta / 300f).coerceIn(0.05f, 1f); ui.invalidate() }
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
@@ -435,7 +474,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         r.drawText("ENC turn: browse · push: open / load", 16f, 226f, label)
         r.drawText("◀: back · PADS: target · BROWSER: done", 16f, 246f, label)
         r.drawText("D5/D6 load prev/next · D7/D8 zone(s) · D1 quick", 16f, 266f, label)
-        r.drawText("PREHEAR ${if (prehear) "ON" else "OFF"} (D4)", 330f, 120f, label)
+        r.drawText("PREHEAR ${if (prehear) "${(prehearLevel * 100).toInt()}%" else "OFF"}", 330f, 120f, label)
         val zn = ui.engine.zones.of(slot).size
         if (zn > 0) r.drawText("$zn zone(s)", 360f, 28f, label)
     }

@@ -410,6 +410,27 @@ class Pattern {
         writeCell(g, pad, step, d)
     }
 
+    /**
+     * Replaces group [g]'s current pattern (a new one if there is none) with MIDI notes:
+     * (pad, note, velocity 1..127, start and length in [MidiFile.TICKS_PER_STEP] ticks per step).
+     * Notes past 4 bars are left out; the length becomes the bars the notes need. Returns the notes placed.
+     */
+    fun importMidi(g: Int, notes: List<IntArray>): Int {
+        for (pad in 0 until PADS) clear(g * PADS + pad)
+        var placed = 0; var endStep = 0
+        for (n in notes) {
+            val pad = n[0]; if (pad !in 0 until PADS) continue
+            val pos = n[3].toDouble() / MidiFile.TICKS_PER_STEP
+            val step = pos.toInt(); if (step >= STEPS) continue
+            val len = (n[4].toDouble() / MidiFile.TICKS_PER_STEP).toFloat()
+            recordNote(g * PADS + pad, step, n[1].coerceIn(0, 127), (n[2] / 127f).coerceIn(0.01f, 1f), (pos - step).toFloat(), len)
+            placed++
+            endStep = maxOf(endStep, step + 1)
+        }
+        if (placed > 0) setLength(g, ((endStep + 15) / 16 * 16).coerceIn(16, STEPS))
+        return placed
+    }
+
     /** Note length (steps) of a step's notes. */
     fun noteLength(sound: Int, step: Int): Float = cur(sound / PADS)?.len?.get(sound % PADS)?.get(step) ?: 1f
     fun noteOffset(sound: Int, step: Int): Float = cur(sound / PADS)?.off?.get(sound % PADS)?.get(step) ?: 0f

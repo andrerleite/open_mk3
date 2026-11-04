@@ -27,6 +27,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         object New : Item("NEW EMPTY PROJECT")
         class Collect(name: String) : Item("SAVE WITH SAMPLES  \"$name\"  (copies them into its folder)")
         class SaveGroupSamples(letter: Char) : Item("SAVE GROUP $letter WITH SAMPLES…")
+        class ExportMidi(pat: String) : Item("EXPORT PATTERN $pat AS MIDI")
         object Export : Item("EXPORT AUDIO…  (loop or song as WAV)")
         class SaveGroup(letter: Char) : Item("SAVE GROUP $letter…  (kit + patterns)")
         class LoadGroup(val file: File, letter: Char) : Item("GROUP → $letter:  ${file.nameWithoutExtension}")
@@ -70,6 +71,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             if (cur != null) add(Item.Rename(cur))
             if (cur != null) add(Item.Collect(cur))
             add(Item.Export)
+            if (ui.engine.pattern.current[ui.group] >= 0) add(Item.ExportMidi("${ui.groupLetter}${ui.engine.pattern.current[ui.group] + 1}"))
             add(Item.New)
             add(Item.SaveGroup(ui.groupLetter))
             add(Item.SaveGroupSamples(ui.groupLetter))
@@ -427,6 +429,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         when (val it = items.getOrNull(sel)) {
             is Item.Save -> save(Project.currentName(ui.ctx) ?: Project.nextName())
             Item.Export -> { exporting = true; exportState = 0; message = "" }
+            is Item.ExportMidi -> exportMidi()
             Item.SaveNew -> startEdit(Project.suggestName(ui.engine.bpm), false)
             is Item.Rename -> startEdit(Project.currentName(ui.ctx) ?: "", true)
             Item.New -> if (armed != sel) { armed = sel; message = "Push again: unsaved changes are lost" } else {
@@ -454,6 +457,24 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             null -> {}
         }
         ui.invalidate()
+    }
+
+    /** Writes the focused group's pattern as a MIDI file in Exports/. */
+    private fun exportMidi() {
+        val p = ui.engine.pattern
+        val g = ui.group
+        val d = p.copyOf(g) ?: run { message = "No pattern in group ${ui.groupLetter}"; return }
+        val pat = "${ui.groupLetter}${p.current[g] + 1}"
+        val base = "${Project.currentName(ui.ctx) ?: "Open MK3"} ${Project.clean(ui.groupName(g))} ${Project.clean(d.name.ifEmpty { pat })}"
+        message = try {
+            val dir = File(Project.dir.parentFile, "Exports")
+            var i = 1
+            var f: File
+            do { f = File(dir, "%s %03d.mid".format(base, i++)) } while (f.exists())
+            val n = org.openmk3.core.audio.MidiFile.export(f, d, ui.engine.bpm.toDouble()) { pad -> ui.soundName(g * 16 + pad).ifEmpty { "Pad ${pad + 1}" } }
+            AppLog.i("MIDI export: ${f.absolutePath} ($n notes)")
+            "Saved Exports/${f.name} ($n notes)"
+        } catch (e: Exception) { "Can't save: ${e.message}" }
     }
 
     /** Copies the samples [f] uses next to it (in the background) and reports. */
