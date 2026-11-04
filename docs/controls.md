@@ -176,13 +176,18 @@ D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Source | Volume | Pan | Tune | Polyphony (1–16, strict: 1 = one voice, also for chords) | Trigger (one-shot / gate) | Reverse | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) |
-| SAMPLE | Start | End | | | Loop | Loop start | Loop end | Crossfade |
-| AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release | | |
-| FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | | | |
-| MOD ENV | Attack | Decay | → Pitch | → Cutoff | | | | |
-| LFO | Wave | Rate | → Pitch | → Cutoff | → Pan | → Volume | | |
-| VELOCITY | → Volume | → Cutoff | | | | | | |
+| VOICE | Source | Volume | Pan | Polyphony (1–16, strict: 1 = one voice, also for chords) | Legato (polyphony 1: a new key glides the playing voice instead of restarting it) | Glide time (legato) | Bend range (touch strip PITCH, ±0–24 semitones) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz, plain or with a low, low-mid, high-mid or high output filter) |
+| SAMPLE | Start | End | Reverse | Trigger (one-shot / gate) | Loop | Loop start | Loop end | Crossfade |
+| PITCH / ENV | Tune | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) | |
+| FX / FILTER | Compressor (4:1, threshold and make-up follow the amount) | Drive | Sample-rate reduction | Bit reduction | Filter (off / LP 12 / BP / HP / LP 24 / EQ) | Cutoff (EQ: frequency) | Resonance (EQ: bandwidth) | EQ gain (±24 dB) |
+| MOD ENV | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) | | | |
+| MOD DEST | → Pitch | → Cutoff | → Drive | → Pan | | | | |
+| LFO | Wave | Sync (free in Hz / retrigger on each note / locked to the song) | Rate (free) | Speed as a note value (synced) | Start phase | → Pitch | → Cutoff | → Drive |
+| LFO DEST | → Pan | → Volume | | | | | | |
+| VEL / MOD | Velocity → start (positive: later when harder; negative: later when softer) | Velocity → decay | Velocity → cutoff | Velocity → volume | Mod wheel → start | Mod wheel → cutoff | Mod wheel → LFO depth | Mod wheel → pan |
+
+Parameters that do nothing with the current settings (hold with ADSR, glide without legato, EQ
+gain with another filter, rate when the LFO is synced, …) are shown dim.
 
 **Synth pages** (24 models from Mutable Instruments Plaits: analog, waveshaping, FM, granular,
 additive, wavetable, chords, speech, swarm, noise, particles, string, modal, drums, …)

@@ -34,7 +34,7 @@ class SoundParams {
 
     companion object {
         const val SLOTS = Pattern.SOUNDS + 1
-        const val COUNT = 64
+        const val COUNT = 96
 
         // Indices match P_* in engine.cpp and are stable (saved settings depend on them).
         const val TUNE = 0
@@ -96,6 +96,31 @@ class SoundParams {
         const val FMFB = 56
         const val CHOKE = 57
         const val LINK = 58
+        // Sampler (following the hardware sampler's six parameter pages)
+        const val LEGATO = 59
+        const val GLIDE = 60
+        const val PBRANGE = 61
+        const val COMP = 62
+        const val SR = 63
+        const val BITS = 64
+        const val EQGAIN = 65
+        const val MHOLD = 66
+        const val MSUS = 67
+        const val MREL = 68
+        const val MDRIVE = 69
+        const val MPAN = 70
+        const val LPHASE = 71
+        const val LSYNC = 72
+        const val LDIV = 73
+        const val LDRIVE = 74
+        const val VSTART = 75
+        const val VDEC = 76
+        const val MWSTART = 77
+        const val MWCUT = 78
+        const val MWLFO = 79
+        const val MWPAN = 80
+        /** LFO note values when synced (same order as kLfoDivs in the engine). */
+        val LFO_DIVS = listOf("16 BARS", "8 BARS", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4 T", "1/8 T", "1/16 T")
 
         const val SRC_SAMPLER = 0
         const val SRC_SYNTH = 1
@@ -131,7 +156,10 @@ class SoundParams {
                 when { p == 0 -> "C"; p < 0 -> "L${-p}"; else -> "R$p" }
             }),
             Def(POLY, "POLYPHONY", 1f, 16f, 1f, 0.02f, { v -> "${v.roundToInt()}" }),
-            Def(ENGINE, "ENGINE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("STANDARD", "VINTAGE A", "VINTAGE B")),
+            Def(ENGINE, "ENGINE", 0f, 6f, 0f, 1f, { "" }, choices = listOf("STANDARD", "VINTAGE A", "VINTAGE B", "VINT B LOW", "VINT B LO-MID", "VINT B HI-MID", "VINT B HIGH")),
+            Def(LEGATO, "LEGATO", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
+            Def(GLIDE, "GLIDE", 0.002f, 2f, 0.08f, 0.004f, ::secs, log = true),
+            Def(PBRANGE, "BEND RANGE", 0f, 24f, 2f, 0.02f, { v -> "±${v.roundToInt()} st" }),
             Def(REV, "REVERSE", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
             // sample region and loop
             Def(START, "START", 0f, 1f, 0f, 0.0005f, ::pctFine),
@@ -148,7 +176,11 @@ class SoundParams {
             Def(SUS, "SUSTAIN", 0f, 1f, 0.7f, 0.002f, ::pct),
             Def(REL, "RELEASE", 0.005f, 20f, 0.2f, 0.004f, ::secs, log = true),
             // filter
-            Def(FTYPE, "FILTER", 0f, 4f, 0f, 1f, { "" }, choices = listOf("OFF", "LP 12", "BP", "HP", "LP 24")),
+            Def(FTYPE, "FILTER", 0f, 5f, 0f, 1f, { "" }, choices = listOf("OFF", "LP 12", "BP", "HP", "LP 24", "EQ")),
+            Def(EQGAIN, "EQ GAIN", -24f, 24f, 0f, 0.05f, { v -> "%+.1f dB".format(v) }),
+            Def(COMP, "COMP", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(SR, "SAMPLE RATE", 0f, 1f, 0f, 0.002f, { v -> if (v < 0.001f) "OFF" else "${(48000f / (1f + v * v * 47f) / 1000f).let { "%.1f".format(it) }} kHz" }),
+            Def(BITS, "BITS", 0f, 1f, 0f, 0.002f, { v -> if (v < 0.001f) "OFF" else "${(16f - v * 12f).roundToInt()} bit" }),
             Def(CUT, "CUTOFF", 20f, 20000f, 20000f, 0.004f, { v -> if (v >= 1000f) "%.1f kHz".format(v / 1000f) else "${v.roundToInt()} Hz" }, log = true),
             Def(RES, "RESONANCE", 0f, 1f, 0f, 0.002f, ::pct),
             Def(DRIVE, "DRIVE", 0f, 1f, 0f, 0.002f, ::pct),
@@ -157,6 +189,11 @@ class SoundParams {
             Def(MDEC, "DECAY", 0.005f, 20f, 0.2f, 0.004f, ::secs, log = true),
             Def(MPITCH, "→ PITCH", -48f, 48f, 0f, 0.05f, ::semis),
             Def(MCUT, "→ CUTOFF", -8f, 8f, 0f, 0.01f, ::octs),
+            Def(MHOLD, "HOLD", 0f, 10f, 0f, 0.004f, ::secs),
+            Def(MSUS, "SUSTAIN", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(MREL, "RELEASE", 0.005f, 20f, 0.2f, 0.004f, ::secs, log = true),
+            Def(MDRIVE, "→ DRIVE", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(MPAN, "→ PAN", -1f, 1f, 0f, 0.002f, ::pct),
             // LFO
             Def(LWAVE, "WAVE", 0f, 4f, 0f, 1f, { "" }, choices = listOf("SINE", "TRIANGLE", "SAW", "SQUARE", "RANDOM")),
             Def(LRATE, "RATE", 0.01f, 40f, 4f, 0.004f, { v -> if (v < 1f) "%.2f Hz".format(v) else "%.1f Hz".format(v) }, log = true),
@@ -164,9 +201,19 @@ class SoundParams {
             Def(LCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
             Def(LPAN, "→ PAN", 0f, 1f, 0f, 0.002f, ::pct),
             Def(LVOL, "→ VOLUME", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(LPHASE, "PHASE", -0.5f, 0.5f, 0f, 0.002f, { v -> "%+.2f".format(v) }),
+            Def(LSYNC, "SYNC", 0f, 2f, 0f, 1f, { "" }, choices = listOf("FREE", "RETRIG", "LOCK")),
+            Def(LDIV, "SPEED", 0f, 12f, 6f, 1f, { "" }, choices = LFO_DIVS),
+            Def(LDRIVE, "→ DRIVE", 0f, 1f, 0f, 0.002f, ::pct),
             // velocity
             Def(VVOL, "→ VOLUME", 0f, 1f, 1f, 0.002f, ::pct),
             Def(VCUT, "→ CUTOFF", -4f, 4f, 0f, 0.005f, ::octs),
+            Def(VSTART, "VEL → START", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(VDEC, "VEL → DECAY", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(MWSTART, "MW → START", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(MWCUT, "MW → CUTOFF", -10f, 10f, -7f, 0.01f, ::octs),
+            Def(MWLFO, "MW → LFO", 0f, 1f, 0f, 0.002f, ::pct),
+            Def(MWPAN, "MW → PAN", -1f, 1f, 0f, 0.002f, ::pct),
             // trigger mode and source
             Def(GATE, "TRIGGER", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "GATE")),
             Def(SRC, "SOURCE", 0f, 3f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH", "FM", "POLY")),

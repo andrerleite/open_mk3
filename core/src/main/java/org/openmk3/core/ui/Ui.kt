@@ -159,7 +159,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         stripValue = v
         val sp = engine.params
         when (stripMode) {
-            StripMode.PITCH -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = (v - 0.5f) * 4f  // +-2 semitones
+            StripMode.PITCH -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.BEND] = (v - 0.5f) * 2f * sp[selectedIndex, org.openmk3.core.audio.SoundParams.PBRANGE]  // ± bend range
             StripMode.MOD -> sp[selectedIndex, org.openmk3.core.audio.SoundParams.MODW] = v
             StripMode.PERFORM -> if (engine.pattern.performType == 0) engine.pattern.setGroupFilter(group, (v - 0.5f) * 2f)
                 else engine.pattern.setPerform(true, v)

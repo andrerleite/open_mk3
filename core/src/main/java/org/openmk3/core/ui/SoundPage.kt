@@ -104,14 +104,17 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private companion object {
         fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
+        // the sampler's pages, in the order of the hardware sampler's parameter pages
         val SAMPLER = listOf(
-            PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, GATE, REV, ENGINE), View.WAVE),
-            PageDef("SAMPLE", snd(START, END, -1, -1, LOOP, LSTART, LEND, XFADE), View.WAVE),
-            PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
-            PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
-            PageDef("MOD ENV", snd(MATT, MDEC, MPITCH, MCUT, -1, -1, -1, -1), View.MOD),
-            PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
-            PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
+            PageDef("VOICE", snd(SRC, VOL, PAN, POLY, SoundParams.LEGATO, SoundParams.GLIDE, SoundParams.PBRANGE, ENGINE), View.WAVE),
+            PageDef("SAMPLE", snd(START, END, REV, GATE, LOOP, LSTART, LEND, XFADE), View.WAVE),
+            PageDef("PITCH / ENV", snd(TUNE, ENV, ATT, HOLD, DEC, SUS, REL, -1), View.AMP),
+            PageDef("FX / FILTER", snd(SoundParams.COMP, DRIVE, SoundParams.SR, SoundParams.BITS, FTYPE, CUT, RES, SoundParams.EQGAIN), View.FILTER),
+            PageDef("MOD ENV", snd(MATT, SoundParams.MHOLD, MDEC, SoundParams.MSUS, SoundParams.MREL, -1, -1, -1), View.MOD),
+            PageDef("MOD DEST", snd(MPITCH, MCUT, SoundParams.MDRIVE, SoundParams.MPAN, -1, -1, -1, -1), View.MOD),
+            PageDef("LFO", snd(LWAVE, SoundParams.LSYNC, LRATE, SoundParams.LDIV, SoundParams.LPHASE, LPITCH, LCUT, SoundParams.LDRIVE), View.LFO),
+            PageDef("LFO DEST", snd(LPAN, LVOL, -1, -1, -1, -1, -1, -1), View.LFO),
+            PageDef("VEL / MOD", snd(SoundParams.VSTART, SoundParams.VDEC, VCUT, VVOL, SoundParams.MWSTART, SoundParams.MWCUT, SoundParams.MWLFO, SoundParams.MWPAN), View.VEL),
         )
         val SYNTH = listOf(
             PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, GATE, SNOTE, -1), View.SCOPE),
@@ -906,6 +909,13 @@ class SoundPage(ui: Ui) : Page(ui) {
             LSTART, LEND, XFADE -> env != 0 && params[slot, LOOP] > 0.5f
             CUT, RES, DRIVE -> p == DRIVE || params[slot, FTYPE] >= 0.5f
             VCUT -> params[slot, FTYPE] >= 0.5f
+            SoundParams.EQGAIN -> params[slot, FTYPE].roundToInt() == 5
+            SoundParams.GLIDE -> params[slot, SoundParams.LEGATO] > 0.5f && params[slot, POLY].roundToInt() == 1
+            SoundParams.LEGATO -> params[slot, POLY].roundToInt() == 1
+            SoundParams.MHOLD -> env != 2
+            SoundParams.MSUS, SoundParams.MREL -> env == 2
+            LRATE -> params[slot, SoundParams.LSYNC] < 0.5f
+            SoundParams.LDIV -> params[slot, SoundParams.LSYNC] >= 0.5f
             else -> true
         }
     }

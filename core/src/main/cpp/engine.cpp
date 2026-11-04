@@ -125,7 +125,7 @@ constexpr int kFadeOut = 96;
 
 // Per-sound parameters: kSlots x kParams floats in a direct buffer shared with Kotlin
 // (SoundParams.kt). Indices are stable: saved settings depend on them.
-constexpr int kParams = 64;
+constexpr int kParams = 96;
 enum {
     P_TUNE = 0,     // semitones, -36..36 (fractional = fine tune)
     P_VOL = 1,      // dB, -60 (silent) .. +12
@@ -185,7 +185,33 @@ enum {
     P_FMREL = 55,   // FM: release -1..1
     P_FMFB = 56,    // FM: feedback 0..7, < 0 = the patch's
     P_CHOKE = 57,   // choke group 1..16 (0 = the sound's default: none, or built-in hats)
+    // 58 = link group (UI only)
+    P_LEGATO = 59,  // > 0.5 with polyphony 1: new notes glide from the held one (no retrigger)
+    P_GLIDE = 60,   // legato glide time, seconds
+    P_PBRANGE = 61, // pitch bend range, semitones (the PITCH strip)
+    P_COMP = 62,    // per-voice compression 0..1
+    P_SR = 63,      // sample-rate reduction 0..1 (0 = off)
+    P_BITS = 64,    // bit reduction 0..1 (0 = off, 1 = 4 bits)
+    P_EQGAIN = 65,  // EQ filter type: gain, dB (frequency = CUT, bandwidth = RES)
+    P_MHOLD = 66,   // modulation envelope hold, seconds (AHD)
+    P_MSUS = 67,    // modulation envelope sustain 0..1 (ADSR)
+    P_MREL = 68,    // modulation envelope release, seconds (ADSR)
+    P_MDRIVE = 69,  // modulation envelope -> drive, -1..1
+    P_MPAN = 70,    // modulation envelope -> pan, -1..1
+    P_LPHASE = 71,  // LFO start phase, -0.5..0.5
+    P_LSYNC = 72,   // LFO: 0 free (Hz), 1 retrig (note values, restarts per note), 2 lock (song position)
+    P_LDIV = 73,    // LFO note value (index into kLfoDivs) when synced
+    P_LDRIVE = 74,  // LFO -> drive, 0..1
+    P_VSTART = 75,  // velocity -> start, -1..1 (positive: later when played harder)
+    P_VDEC = 76,    // velocity -> decay, -1..1
+    P_MWSTART = 77, // mod wheel -> start, -1..1
+    P_MWCUT = 78,   // mod wheel -> cutoff, octaves
+    P_MWLFO = 79,   // mod wheel -> LFO depth, 0..1 (1: the wheel sets the whole depth)
+    P_MWPAN = 80,   // mod wheel -> pan, -1..1
 };
+/** LFO note values when synced, in quarter notes: 16 bars .. 1/32. */
+static constexpr float kLfoDivs[] = {64.f, 32.f, 16.f, 8.f, 4.f, 2.f, 1.f, 0.5f, 0.25f, 0.125f, 2.f / 3.f, 1.f / 3.f, 1.f / 6.f};
+constexpr int kLfoDivCount = int(sizeof(kLfoDivs) / sizeof(kLfoDivs[0]));
 static float kDefaultParams[kParams];
 static bool initDefaults() {
     float* d = kDefaultParams;
@@ -194,6 +220,7 @@ static bool initDefaults() {
     d[P_MDEC] = 0.2f; d[P_LRATE] = 4; d[P_VVOL] = 1;
     d[P_SMODEL] = 8; d[P_SNOTE] = 60; d[P_SHARM] = 0.5f; d[P_STIMB] = 0.5f; d[P_SMORPH] = 0.5f;
     d[P_SDEC] = 0.5f; d[P_SCOL] = 0.5f; d[P_SLPG] = 1; d[P_FMFB] = -1;
+    d[P_GLIDE] = 0.08f; d[P_PBRANGE] = 2; d[P_MREL] = 0.2f; d[P_LDIV] = 6; d[P_MWCUT] = -7;
     return true;
 }
 static bool gDefaultsReady = initDefaults();
@@ -224,6 +251,12 @@ struct Voice {
     int mStage = 0;
     int mCount = 0;
     float mLevel = 0.f;
+    float glide = 0.f;     // legato: pitch offset (semitones) gliding back to 0
+    float mRelFrom = 0.f;  // modulation envelope level when its release started
+    // sampler FX: per-voice compressor, sample-rate / bit reduction, vintage output filters
+    float compEnv = 0.f;
+    float sPhase = 1.f, sHeld[2] = {0, 0};
+    float vf1[2] = {0, 0}, vf2[2] = {0, 0};
     // LFO
     float lfoPhase = 0.f;
     float lfoHeld = 0.f;
@@ -845,6 +878,19 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     // POLYPHONY is strict (1 = monophonic, also for chords); POLY: its patch sets the polyphony
     (void)chord;
     int poly = isPoly ? 64 : std::clamp(int(P[P_POLY] + 0.5f), 1, 16);
+    // legato (polyphony 1): a note played while another is held glides to the new pitch
+    // without restarting the sample or the envelopes
+    if (poly == 1 && !isPoly && !isFm && P[P_LEGATO] > 0.5f) {
+        for (auto& h : voices) {
+            if (!h.sample || h.slot != slot || h.released || h.fadeOut >= 0 || h.pinst >= 0) continue;
+            const int nn = std::clamp(note, 0, 127);
+            h.glide += float(h.note - nn);
+            h.note = nn;
+            h.fromSeq = fromSeq;
+            h.gate = gate;
+            return;
+        }
+    }
     while (true) {
         int count = 0;
         Voice* oldestOfSlot = nullptr;
@@ -905,6 +951,14 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     }
     float a = std::clamp(P[P_START], 0.f, 1.f);
     float b = std::clamp(P[P_END], 0.f, 1.f);
+    // velocity and mod wheel move the start point (positive: later; negative velocity amount:
+    // later when played softer), within the play range
+    {
+        const float vs = std::clamp(P[P_VSTART], -1.f, 1.f);
+        float shift = vs >= 0.f ? vs * vel : -vs * (1.f - vel);
+        shift += std::clamp(P[P_MWSTART], -1.f, 1.f) * std::clamp(P[P_MODW], 0.f, 1.f);
+        a = std::clamp(a + (b - a) * std::clamp(shift, -1.f, 1.f) * 0.9f, 0.f, std::max(0.f, b - 0.0005f));
+    }
     int sf = int(a * float(s->frames));
     int ef = int(b * float(s->frames));
     if (ef <= sf) ef = std::min(s->frames, sf + 1);
@@ -929,6 +983,9 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
     v.rnd = uint32_t(voiceAge * 2654435761u) | 1u;
     v.zoneShift = zoneShift;
+    // LFO start phase; LOCK follows the song position instead (set while rendering)
+    v.lfoPhase = std::clamp(P[P_LPHASE], -0.5f, 0.5f);
+    if (v.lfoPhase < 0.f) v.lfoPhase += 1.f;
     if (isSynth) {
         v.startF = 0;
         v.endF = 1;
@@ -1625,28 +1682,67 @@ void Engine::renderChunk(float* out, int32_t frames) {
         const float basePan = std::clamp(P[P_PAN], -1.f, 1.f);
         const float tune = std::clamp(P[P_TUNE], -48.f, 48.f);
         int ftype = int(P[P_FTYPE] + 0.5f);
-        if (ftype < 1 || ftype > 4) ftype = 0;
+        if (ftype < 1 || ftype > 5) ftype = 0;
         const float modw = std::clamp(P[P_MODW], 0.f, 1.f);
-        if (ftype == 0 && modw > 0.01f) ftype = 1;  // MOD on a sound without a filter: add a low-pass
-        const float baseCut = std::clamp(P[P_CUT], 20.f, 20000.f) * std::exp2(-7.f * modw);
-        const float bend = std::clamp(P[P_BEND], -24.f, 24.f);
-        const float fk = 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
-        const float drive = std::clamp(P[P_DRIVE], 0.f, 1.f);
-        const float dg = 1.f + drive * 15.f;
-        const float dnorm = 1.f / std::tanh(dg);
-        const int engine = int(P[P_ENGINE] + 0.5f);
-        const float vStep = engine == 1 ? 26040.f / kSr : engine == 2 ? 40000.f / kSr : 0.f;
+        const float mwCut = std::clamp(P[P_MWCUT], -10.f, 10.f);
+        if (ftype == 0 && modw > 0.01f && mwCut < -0.01f) ftype = 1;  // MOD closing a sound without a filter: add a low-pass
+        const float baseCut = std::clamp(P[P_CUT], 20.f, 20000.f) * std::exp2(mwCut * modw);
+        const float bend = std::clamp(P[P_BEND], -48.f, 48.f);
+        // EQ (type 5): RES sets the bandwidth (2 octaves .. 0.1); other types: resonance
+        const float fk = ftype == 5 ? 2.f - 1.9f * std::clamp(P[P_RES], 0.f, 1.f) : 2.f - 1.96f * std::clamp(P[P_RES], 0.f, 1.f);
+        const float eqGain = std::pow(10.f, std::clamp(P[P_EQGAIN], -24.f, 24.f) / 20.f);
+        const float driveBase = std::clamp(P[P_DRIVE], 0.f, 1.f);
+        const float mDrive = std::clamp(P[P_MDRIVE], -1.f, 1.f), lDrive = std::clamp(P[P_LDRIVE], 0.f, 1.f);
+        const float mPan = std::clamp(P[P_MPAN], -1.f, 1.f), mwPan = std::clamp(P[P_MWPAN], -1.f, 1.f);
+        const float lfoDepth = 1.f - std::clamp(P[P_MWLFO], 0.f, 1.f) * (1.f - modw);
+        // engines: 1 vintage A (12-bit, 26 kHz), 2 vintage B (12-bit, 40 kHz), 3-6 vintage B with
+        // its output filter: 3 low-pass, 4 low-mid band, 5 high-mid band, 6 high-pass
+        const int engine = std::clamp(int(P[P_ENGINE] + 0.5f), 0, 6);
+        const float vStep = engine == 1 ? 26040.f / kSr : engine >= 2 ? 40000.f / kSr : 0.f;
+        float vLp = 0.f, vHp = 0.f;  // one-pole coefficients of the vintage output filter
+        if (engine >= 3) {
+            const float lpHz = engine == 3 ? 3500.f : engine == 4 ? 5000.f : engine == 5 ? 11000.f : 20000.f;
+            const float hpHz = engine == 3 ? 0.f : engine == 4 ? 120.f : engine == 5 ? 450.f : 1500.f;
+            vLp = std::exp(-6.2831853f * lpHz / kSr);
+            vHp = hpHz > 0.f ? std::exp(-6.2831853f * hpHz / kSr) : 0.f;
+        }
+        // sampler FX: compression, sample-rate and bit reduction
+        const float comp = std::clamp(P[P_COMP], 0.f, 1.f);
+        const float compThr = std::pow(10.f, (-6.f - 24.f * comp) / 20.f);
+        const float compMake = std::pow(compThr, -0.45f);  // automatic make-up: about 60% of the reduction at full scale
+        const float srAmt = std::clamp(P[P_SR], 0.f, 1.f);
+        const float srStep = srAmt > 0.001f ? 1.f / (1.f + srAmt * srAmt * 47.f) : 0.f;
+        const float bitsAmt = std::clamp(P[P_BITS], 0.f, 1.f);
+        const float bitQ = bitsAmt > 0.001f ? std::exp2(15.f - bitsAmt * 11.f) : 0.f;
+        // legato glide: semitones left fall to 0 over the GLIDE time
+        const float glideCoef = std::exp(-float(kBlock) / (std::max(0.002f, P[P_GLIDE]) * kSr * 0.25f));
         // envelopes (frames / per-sample coefficients)
         const int attF = int(std::max(0.f, P[P_ATT]) * kSr);
         const int holdF = int(std::max(0.f, P[P_HOLD]) * kSr);
-        const float decCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_DEC]) * kSr)));
+        // velocity -> decay: up to 4x longer / shorter
+        const float decSec = std::max(0.005f, P[P_DEC]) * std::exp2(std::clamp(P[P_VDEC], -1.f, 1.f) * 4.f * (v.vel - 0.5f));
+        const float decCoef = float(std::exp(std::log(1e-4) / (decSec * kSr)));
         const float sus = std::clamp(P[P_SUS], 0.f, 1.f);
         const float relCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_REL]) * kSr)));
         const int mAttF = int(std::max(0.f, P[P_MATT]) * kSr);
+        const int mHoldF = int(std::max(0.f, P[P_MHOLD]) * kSr);
         const float mDecCoef = float(std::exp(std::log(1e-3) / (std::max(0.005f, P[P_MDEC]) * kSr)));
+        const float mSus = v.envType == 2 ? std::clamp(P[P_MSUS], 0.f, 1.f) : 0.f;  // matches the amp envelope type
+        const float mRelCoef = float(std::exp(std::log(1e-3) / (std::max(0.005f, P[P_MREL]) * kSr)));
         const float mPitch = P[P_MPITCH], mCut = P[P_MCUT];
         const int lWave = int(P[P_LWAVE] + 0.5f);
-        const float lInc = std::clamp(P[P_LRATE], 0.01f, 40.f) / kSr;
+        // LFO rate: Hz (FREE) or a note value at the song tempo (RETRIG / LOCK)
+        const int lSync = std::clamp(int(P[P_LSYNC] + 0.5f), 0, 2);
+        double lBpm = 120.0;
+        if (float* pq = pattern.load(std::memory_order_relaxed)) lBpm = pq[OFF_BPM];
+        if (!(lBpm >= 20.0 && lBpm <= 400.0)) lBpm = 120.0;
+        const float lDivQ = kLfoDivs[std::clamp(int(P[P_LDIV] + 0.5f), 0, kLfoDivCount - 1)];
+        const float lInc = lSync == 0 ? std::clamp(P[P_LRATE], 0.01f, 40.f) / kSr : float(lBpm / 60.0 / lDivQ) / kSr;
+        if (lSync == 2) {  // LOCK: the phase follows the song position, the same for every note
+            const double quarters = (wasPlaying ? seqPhase : double(framesDone) * lBpm / 60.0 / kSr * 4.0) / 4.0;
+            float ph = float(std::fmod(quarters / lDivQ + double(std::clamp(P[P_LPHASE], -0.5f, 0.5f)) + 1.0, 1.0));
+            v.lfoPhase = ph;
+        }
         const float lPitch = P[P_LPITCH], lCut = P[P_LCUT];
         const float lPan = std::clamp(P[P_LPAN], 0.f, 1.f), lVol = std::clamp(P[P_LVOL], 0.f, 1.f);
         const float velCut = P[P_VCUT] * (v.vel - 1.f);
@@ -1720,8 +1816,14 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 case 4: lfo = v.lfoHeld; break;                                            // random
                 default: lfo = std::sin(6.2831853f * v.lfoPhase); break;                   // sine
             }
+            lfo *= lfoDepth;  // the mod wheel can scale the LFO depth
             const float me = v.mLevel;
-            const double rate = std::pow(2.0, double(tune + bend + float(v.note - kRootNote) - v.zoneShift + me * mPitch + lfo * lPitch) / 12.0);
+            v.glide *= glideCoef;
+            if (std::fabs(v.glide) < 0.001f) v.glide = 0.f;
+            const double rate = std::pow(2.0, double(tune + bend + v.glide + float(v.note - kRootNote) - v.zoneShift + me * mPitch + lfo * lPitch) / 12.0);
+            const float drive = std::clamp(driveBase + me * mDrive + std::fabs(lfo) * lDrive, 0.f, 1.f);
+            const float dg = 1.f + drive * 15.f;
+            const float dnorm = 1.f / std::tanh(dg);
             const double step = v.rev ? -rate : rate;
             float fa1 = 0.f, fa2 = 0.f, fa3 = 0.f;
             if (ftype) {
@@ -1732,7 +1834,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 fa2 = fg * fa1;
                 fa3 = fg * fa2;
             }
-            const float pan = std::clamp(basePan + lfo * lPan, -1.f, 1.f);
+            const float pan = std::clamp(basePan + lfo * lPan + me * mPan + modw * mwPan, -1.f, 1.f);
             const float trem = 1.f - lVol * (0.5f - 0.5f * lfo);
             const float g = vol * velGain * trem;
             const float gl = g * (pan > 0.f ? 1.f - pan : 1.f);
@@ -1746,7 +1848,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 fmPool[v.fm]->render(synthOut, blockEnd - i);
                 for (int k = 0; k < blockEnd - i; k++) synthAux[k] = synthOut[k];
             } else if (synth) {
-                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + bend + me * mPitch + lfo * lPitch;
+                sp.note = std::clamp(P[P_SNOTE], 0.f, 127.f) + float(v.note - kRootNote) + tune + bend + v.glide + me * mPitch + lfo * lPitch;
                 synthPool[v.synth]->render(sp, !v.released, synthOut, synthAux, blockEnd - i);
             }
             const int blockStart = i;
@@ -1827,6 +1929,27 @@ void Engine::renderChunk(float* out, int32_t frames) {
                     xs[0] = v.vHeld[0];
                     xs[1] = v.vHeld[1];
                 }
+                if (engine >= 3)
+                    for (int c = 0; c < 2; c++) {
+                        v.vf1[c] = xs[c] + vLp * (v.vf1[c] - xs[c]);         // low-pass
+                        float y = v.vf1[c];
+                        if (vHp > 0.f) { v.vf2[c] = y + vHp * (v.vf2[c] - y); y -= v.vf2[c]; }  // high-pass
+                        xs[c] = y;
+                    }
+                // sampler FX: sample rate, bits, compression
+                if (srStep > 0.f) {
+                    v.sPhase += srStep;
+                    if (v.sPhase >= 1.f) { v.sPhase -= 1.f; v.sHeld[0] = xs[0]; v.sHeld[1] = xs[1]; }
+                    xs[0] = v.sHeld[0]; xs[1] = v.sHeld[1];
+                }
+                if (bitQ > 0.f) for (int c = 0; c < 2; c++) xs[c] = std::round(xs[c] * bitQ) / bitQ;
+                if (comp > 0.001f) {
+                    const float lvl = std::max(std::fabs(xs[0]), std::fabs(xs[1]));
+                    v.compEnv = lvl > v.compEnv ? lvl + 0.2f * (v.compEnv - lvl) : v.compEnv * 0.9995f;  // fast attack, ~40 ms release
+                    float gr = 1.f;
+                    if (v.compEnv > compThr) gr = std::pow(compThr / v.compEnv, 0.75f);  // 4:1
+                    xs[0] *= gr * compMake; xs[1] *= gr * compMake;
+                }
                 if (drive > 0.001f)
                     for (int c = 0; c < 2; c++) xs[c] = std::tanh(xs[c] * dg) * dnorm;
                 if (ftype) {
@@ -1837,7 +1960,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
                         float v2 = v.ic2[c] + fa2 * v.ic1[c] + fa3 * v3;
                         v.ic1[c] = 2.f * v1 - v.ic1[c];
                         v.ic2[c] = 2.f * v2 - v.ic2[c];
-                        float y = ftype == 2 ? fk * v1 : ftype == 3 ? x - fk * v1 - v2 : v2;
+                        float y = ftype == 2 ? fk * v1 : ftype == 3 ? x - fk * v1 - v2
+                                : ftype == 5 ? x + (eqGain - 1.f) * fk * v1 : v2;  // 5: EQ (peak / dip)
                         if (ftype == 4) {  // second low-pass stage: 24 dB/octave
                             float w3 = y - v.jc2[c];
                             float w1 = fa1 * v.jc1[c] + fa2 * w3;
@@ -1865,12 +1989,19 @@ void Engine::renderChunk(float* out, int32_t frames) {
             }
             // ---- advance control-rate modulators by the block just rendered ----
             const int adv = kBlock;
+            // modulation envelope: AHD, or ADSR when the amp envelope is ADSR
+            if (v.envType == 2 && v.released && v.mStage < 4) { v.mStage = 4; v.mRelFrom = v.mLevel; }
             if (v.mStage == 0) {
                 v.mCount += adv;
-                if (v.mCount >= mAttF) { v.mStage = 1; v.mLevel = 1.f; }
+                if (v.mCount >= mAttF) { v.mStage = 1; v.mCount = 0; v.mLevel = 1.f; }
                 else v.mLevel = float(v.mCount) / float(std::max(1, mAttF));
+            } else if (v.mStage == 1) {
+                v.mCount += adv;
+                if (v.mCount >= mHoldF) v.mStage = 2;
+            } else if (v.mStage == 2) {
+                v.mLevel = mSus + (v.mLevel - mSus) * std::pow(mDecCoef, float(adv));
             } else {
-                v.mLevel *= std::pow(mDecCoef, float(adv));
+                v.mLevel *= std::pow(mRelCoef, float(adv));
             }
             v.lfoPhase += lInc * adv;
             if (v.lfoPhase >= 1.f) {
