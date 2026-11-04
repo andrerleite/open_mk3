@@ -541,6 +541,16 @@ class AudioEngine(private val ctx: Context) {
     }
 
     /** Puts effect [type] in a chain slot, with its default settings. */
+    /** Swaps two effect slots of a chain (the effects keep their settings; tails restart). */
+    fun swapFx(chain: Int, a: Int, b: Int) {
+        if (a == b || a !in 0 until FxParams.SLOTS || b !in 0 until FxParams.SLOTS) return
+        val va = FloatArray(FxParams.PER_SLOT) { fx[chain, a, it] }
+        val vb = FloatArray(FxParams.PER_SLOT) { fx[chain, b, it] }
+        n.nativeSetFx(chain, a, vb[0].toInt()); n.nativeSetFx(chain, b, va[0].toInt())
+        for (i in 0 until FxParams.PER_SLOT) { fx[chain, a, i] = vb[i]; fx[chain, b, i] = va[i] }
+        fx.save(ctx)
+    }
+
     fun setFx(chain: Int, slot: Int, type: Int) {
         fx.setType(chain, slot, type)
         n.nativeSetFx(chain, slot, type)

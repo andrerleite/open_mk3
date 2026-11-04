@@ -178,7 +178,7 @@ their settings are saved with the kit and in projects.
 | Encoder turn / D4 | Choose the slot (shown side by side, each with an icon; "+" = empty). Sound: slot 1 is the source (SAMPLER, SYNTH, FM or POLY), slots 2–4 effects. Group and master: 4 effect slots. SHIFT + encoder: zoom the waveform / scope |
 | D5 | Bypass the selected effect |
 | D6 or encoder push | Oscilloscope over the other views (the selected sound, group or master) |
-| ◀ ▶ | Parameter pages of the selected slot |
+| ◀ ▶ | Parameter pages of the selected slot (SHIFT + ◀ ▶ on an effect: move it to the slot before / after) |
 | Knobs | Parameters. SHIFT: fine steps. SHIFT + touching a knob: default. On an effect slot, K1 on the first page chooses the effect. |
 | D8 | Sampler SAMPLE page: ZERO-X snap for start, end, loop start and loop end (turning it on also moves the current markers to the nearest zero crossings) |
 | Encoder / tilt | Zoom / scroll the waveform (sampler VOICE and SAMPLE pages) |

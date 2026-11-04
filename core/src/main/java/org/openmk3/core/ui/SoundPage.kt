@@ -307,8 +307,9 @@ class SoundPage(ui: Ui) : Page(ui) {
                     else if (showScope() && level == 2) { scopePost = !scopePost; updateScopeTap() }
             "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
             "ENCODER RIGHT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(1)
-            "PAGE LEFT" -> pageIdx = (pageIdx + n - 1) % n
-            "PAGE RIGHT" -> pageIdx = (pageIdx + 1) % n
+            // SHIFT + ◀ ▶ on an effect: move it to the slot before / after (swapping)
+            "PAGE LEFT" -> if (shift && !isSource) moveFx(-1) else pageIdx = (pageIdx + n - 1) % n
+            "PAGE RIGHT" -> if (shift && !isSource) moveFx(1) else pageIdx = (pageIdx + 1) % n
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.stopPressed()
             "RESTART" -> e.transportRestart()
@@ -408,6 +409,16 @@ class SoundPage(ui: Ui) : Page(ui) {
         poly.apply(slot, p)
         polyChanged()
         org.openmk3.core.AppLog.i("POLY ${ui.padLabel()}: ${p.category} / ${p.name}")
+    }
+
+    /** Moves the selected effect one slot earlier / later in its chain. */
+    private fun moveFx(d: Int) {
+        val to = fxSlot + d
+        val toIdx = slotIdx + d
+        if (to !in 0 until FxParams.SLOTS || toIdx !in (if (level == 2) 1 else 0) until slotCount) return
+        ui.engine.swapFx(chain, fxSlot, to)
+        slotIdx += d
+        org.openmk3.core.AppLog.i("FX ${levelName()}: moved to slot ${slotIdx + 1}")
     }
 
     private var typeAcc = 0
