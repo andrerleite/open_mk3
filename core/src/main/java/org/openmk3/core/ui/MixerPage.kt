@@ -10,11 +10,13 @@ import org.openmk3.core.mk3.Mk3Colors
 import kotlin.math.roundToInt
 
 /**
- * MIXER: eight channel strips on the knobs.
- *  D1 GROUPS (the 8 groups) · D2 SOUNDS (the focused group's sounds, ◀ ▶: 1–8 / 9–16)
- *  D5 VOLUME / D6 PAN / D7 SEND A / D8 SEND B (groups): what the knobs change · encoder: master volume
- *  SHIFT + D7 / D8: the return's effects (PLUG-IN) · returns start as a reverb (A) and a delay (B)
- *  Pads: focus (and play) a sound · GROUP buttons: focus a group · MIXER: back
+ * MIXER (mix mode): eight channel strips, as on the hardware.
+ *  4D encoder ▲ groups · ▼ the focused group's sounds (◀ ▶ page buttons: 1–8 / 9–16)
+ *  D1–D8: focus the channel above · MUTE / SOLO + D1–D8: mute / solo it
+ *  Knobs: the shown parameter of each channel · encoder push: VOLUME → PAN → SEND A → SEND B (groups)
+ *  Encoder turn: that parameter of the focused channel · SHIFT + encoder: master volume
+ *  SHIFT + D7 / D8: the returns' effects (PLUG-IN) · returns start as a reverb (A) and a delay (B)
+ *  Pads / GROUP buttons: focus (the strips follow) · MIXER: back
  */
 class MixerPage(ui: Ui) : Page(ui) {
 
@@ -32,6 +34,8 @@ class MixerPage(ui: Ui) : Page(ui) {
     private val p = ui.engine.pattern
     private val params = ui.engine.params
     private var shift = false
+    private var muteHeld = false
+    private var soloHeld = false
     private var dirtySince = 0L
 
     private val dLabel = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
@@ -99,12 +103,11 @@ class MixerPage(ui: Ui) : Page(ui) {
 
     override fun lights(l: Lights) {
         l.set("MIXER", true)
-        l.set("D1", groupsLevel)
-        l.set("D2", !groupsLevel)
-        l.set("D5", !panMode && sendMode < 0)
-        l.set("D6", panMode && sendMode < 0)
-        l.set("D7", sendMode == 0)
-        l.set("D8", sendMode == 1)
+        for (i in 0 until 8) {
+            val ch = channel(i)
+            l.set("D${i + 1}", if (groupsLevel) ch == ui.group else ch == ui.selectedIndex)
+        }
+        l.set("MUTE", muteHeld); l.set("SOLO", soloHeld)
         if (!groupsLevel) { l.set("PAGE LEFT", soundPage == 1); l.set("PAGE RIGHT", soundPage == 0) }
         l.set("PLAY", ui.engine.playing)
         l.set("STOP")
@@ -112,19 +115,34 @@ class MixerPage(ui: Ui) : Page(ui) {
     }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
-        if (name == "SHIFT") { shift = down; return }
+        when (name) {
+            "SHIFT" -> { shift = down; return }
+            "MUTE" -> { muteHeld = down; return }
+            "SOLO" -> { soloHeld = down; return }
+        }
         if (!down) return
         val e = ui.engine
+        if (name != null && name.length == 2 && name[0] == 'D' && name[1] in '1'..'8') {
+            val i = name[1] - '1'
+            val ch = channel(i)
+            when {
+                shift && (i == 6 || i == 7) -> { if (org.openmk3.core.Edition.full) { SoundPageNav.openReturn = i - 6; ui.show(SoundPage(ui)) } }
+                muteHeld -> if (groupsLevel) p.groupMute[ch] = !p.groupMute[ch] else p.mute[ch] = !p.mute[ch]
+                soloHeld -> if (groupsLevel) p.groupSolo[ch] = !p.groupSolo[ch] else p.solo[ch] = !p.solo[ch]
+                groupsLevel -> ui.selectGroup(ch)
+                else -> ui.selectedSound = ch % 16
+            }
+            changed()
+            return
+        }
         when (name) {
-            "D1" -> groupsLevel = true
-            "D2" -> groupsLevel = false
-            "D5" -> { panMode = false; sendMode = -1 }
-            "D6" -> { panMode = true; sendMode = -1 }
-            "D7", "D8" -> {
-                val a = if (name == "D7") 0 else 1
-                if (shift) {
-                    if (org.openmk3.core.Edition.full) { SoundPageNav.openReturn = a; ui.show(SoundPage(ui)) }
-                } else { sendMode = a; groupsLevel = true }
+            "ENCODER UP" -> groupsLevel = true
+            "ENCODER DOWN" -> { groupsLevel = false; soundPage = ui.selectedSound / 8 }
+            "ENCODER PUSH" -> {
+                // VOLUME → PAN → SEND A → SEND B (sends: groups only)
+                val mode = when { sendMode >= 0 -> 2 + sendMode; panMode -> 1; else -> 0 }
+                val next = (mode + 1) % (if (groupsLevel) 4 else 2)
+                panMode = next == 1; sendMode = if (next >= 2) next - 2 else -1
             }
             "PAGE LEFT" -> soundPage = 0
             "PAGE RIGHT" -> soundPage = 1
@@ -167,10 +185,16 @@ class MixerPage(ui: Ui) : Page(ui) {
         changed()
     }
 
+    /** The encoder: the shown parameter of the focused channel. */
     override fun onEncoder(delta: Int) {
-        val e = ui.engine
-        e.masterGain = (e.masterGain + delta * 0.02f).coerceIn(0f, 1.5f)
+        // SHIFT + encoder: the master volume
+        if (shift) { ui.engine.masterGain = (ui.engine.masterGain + delta * 0.02f).coerceIn(0f, 1.5f); return }
+        val i = (0 until 8).firstOrNull { val ch = channel(it); if (groupsLevel) ch == ui.group else ch == ui.selectedIndex }
+        if (i == null) { if (!groupsLevel) soundPage = ui.selectedSound / 8; return }
+        onKnob(i, delta * 4)
     }
+
+    override fun onGroup(g: Int) { ui.selectGroup(g) }
 
     private fun db(v: Float) = if (v <= -59.9f) "-∞" else "%+.1f".format(v)
     private fun pan(v: Float) = (v * 100).roundToInt().let { if (it == 0) "C" else if (it < 0) "L${-it}" else "R$it" }
@@ -178,12 +202,13 @@ class MixerPage(ui: Ui) : Page(ui) {
     override fun draw(l: Canvas, r: Canvas, now: Long) {
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
-        l.drawText("GROUPS", 60f, 24f, if (groupsLevel) dOn else dLabel)
-        l.drawText("SOUNDS", 180f, 24f, if (!groupsLevel) dOn else dLabel)
-        r.drawText("VOLUME", 60f, 24f, if (!panMode) dOn else dLabel)
-        r.drawText("PAN", 180f, 24f, if (panMode && sendMode < 0) dOn else dLabel)
-        r.drawText("SEND A", 300f, 24f, if (sendMode == 0) dOn else dLabel)
-        r.drawText("SEND B", 420f, 24f, if (sendMode == 1) dOn else dLabel)
+        // D1–D8: the channel names above the strips (focus)
+        for (i in 0 until 8) {
+            val ch = channel(i)
+            val c = if (i < 4) l else r
+            val focused = if (groupsLevel) ch == ui.group else ch == ui.selectedIndex
+            c.drawText(if (groupsLevel) "${'A' + ch}" else "${(ch % 16) + 1}", 60f + (i % 4) * 120f, 24f, if (focused) dOn else dLabel)
+        }
         // master meter (after the master volume), horizontal
         run {
             val x0 = 8f; val x1 = 472f; val y0 = 40f; val y1 = 48f
@@ -194,8 +219,8 @@ class MixerPage(ui: Ui) : Page(ui) {
             if (xl > xg) r.drawRect(xg, y0, minOf(xl, xy), y1, meterYellow)
             if (xl > xy) r.drawRect(xy, y0, xl, y1, meterRed)
         }
-        val master = "MASTER ${"%.0f".format(ui.engine.masterGain * 100)}% (encoder)"
-        l.drawText(if (groupsLevel) "Groups · $master" else "Group ${ui.groupLetter} sounds ${soundPage * 8 + 1}–${soundPage * 8 + 8} · $master", 8f, 52f, title)
+        val what = when { sendMode >= 0 -> "SEND ${'A' + sendMode}"; panMode -> "PAN"; else -> "VOLUME" }
+        l.drawText((if (groupsLevel) "GROUPS" else "${ui.groupTitle()} · ${soundPage * 8 + 1}–${soundPage * 8 + 8}") + " · $what (push: next) · master ${"%.0f".format(ui.engine.masterGain * 100)}%", 8f, 52f, title)
         for (i in 0 until 8) {
             val c = if (i < 4) l else r
             val x = 60f + (i % 4) * 120f
