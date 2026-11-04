@@ -1011,8 +1011,10 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     const int choke = P[P_CHOKE] > 0.5f ? std::clamp(int(P[P_CHOKE] + 0.5f), 1, 16) : s->choke;
     if (choke != 0) {
         // a sound silences the others of its choke group (e.g. closed hat -> open hat): fade, not cut
+        // choke groups belong to their group (as on the hardware): pads of other groups never choke
+        const int grp = slot / kPads;
         for (auto& v : voices)
-            if (v.sample && v.slot != slot && v.choke == choke && v.fadeOut < 0) {
+            if (v.sample && v.slot != slot && v.slot < kSounds && v.slot / kPads == grp && v.choke == choke && v.fadeOut < 0) {
                 if (!v.rev && v.endF - v.pos > kSampleRate / 4) gCuts.push(v.slot, 2, slot, fromSeq);
                 v.fadeOut = kFadeOut;
             }

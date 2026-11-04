@@ -33,7 +33,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| PAD MODE | Pads play the group's 16 sounds. From any other page it goes to the pad screen (SHIFT + PAD MODE / KEYBOARD / CHORDS switch the pads without leaving the page). Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound); press again: hide them | ✅ |
+| PAD MODE | Pads play the group's 16 sounds. From any other page it goes to the pad screen (SHIFT + PAD MODE / KEYBOARD / CHORDS switch the pads without leaving the page). Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound; both work within the group only); press again: hide them | ✅ |
 | KEYBOARD | Pads play the focused sound as notes. Press: switch and show the settings; press again: hide them (pads stay); SHIFT + KEYBOARD: switch without settings. PAD MODE returns to sounds. | ✅ |
 | CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
