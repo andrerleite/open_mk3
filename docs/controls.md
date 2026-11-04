@@ -264,6 +264,10 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 | Distortion | Drive, type (soft / hard / fold / tube), tone, mix, output |
 | Lo-fi | Sample rate, bits, mix |
 | Transient | Attack, sustain (±12 dB), output |
+| Saturator | Drive, warmth, tone, mix (tape-like, level-compensated) |
+| Tremolo | Depth, rate (or synced 1/1–1/32), shape (sine / triangle / square), mode (tremolo / auto-pan) |
+| Freq shift | Shift (±2000 Hz), mix, stereo (the right side shifts the other way) |
+| Ring mod | Frequency, mix |
 | Chorus | Mix, rate, depth, delay, feedback, width |
 | Delay | Mix, time (ms, or note values when synced), feedback, sync, ping-pong, low cut, high cut; page 2: modulation |
 | Reverb | Mix, decay, size, character (DENSE / LUSH / VAST), pre-delay, high cut, low cut; page 2: diffusion, modulation, width, freeze |

@@ -55,8 +55,13 @@ class FxParams {
         const val DISTORTION = 11
         const val LOFI = 12
         const val TRANSIENT = 13
+        const val SATURATOR = 14
+        const val TREMOLO = 15
+        const val FREQSHIFT = 16
+        const val RINGMOD = 17
         val TYPES = listOf("EMPTY", "COMPRESSOR", "CHORUS", "DELAY", "REVERB", "FILTER",
-            "GATE", "LIMITER", "EQ", "FLANGER", "PHASER", "DISTORTION", "LO-FI", "TRANSIENT")
+            "GATE", "LIMITER", "EQ", "FLANGER", "PHASER", "DISTORTION", "LO-FI", "TRANSIENT",
+            "SATURATOR", "TREMOLO", "FREQ SHIFT", "RING MOD")
         val FILTER_MODES = listOf("LADDER LP24", "LADDER LP12", "LADDER HP24", "SEM LP", "SEM BP", "SEM HP", "SEM NOTCH", "SEM MORPH")
 
         private fun ms(v: Float) = if (v < 1000f) "${v.roundToInt()} ms" else "%.2f s".format(v / 1000f)
@@ -166,6 +171,29 @@ class FxParams {
                 Def(2, "ATTACK", -1f, 1f, 0f, 0.002f, ::pct),
                 Def(3, "SUSTAIN", -1f, 1f, 0f, 0.002f, ::pct),
                 Def(4, "OUTPUT", -24f, 12f, 0f, 0.02f, ::db),
+            ),
+            SATURATOR to listOf(
+                Def(2, "DRIVE", 0f, 24f, 6f, 0.02f, ::db),
+                Def(3, "WARMTH", 0f, 1f, 0.3f, 0.002f, ::pct),
+                Def(4, "TONE", 1000f, 20000f, 12000f, 0.004f, ::hz, log = true),
+                Def(5, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
+            ),
+            TREMOLO to listOf(
+                Def(3, "DEPTH", 0f, 1f, 0.6f, 0.002f, ::pct),
+                Def(2, "RATE", 0.05f, 30f, 4f, 0.004f, { v -> "%.2f Hz".format(v) }, log = true),
+                Def(4, "SHAPE", 0f, 2f, 0f, 1f, { "" }, choices = listOf("SINE", "TRIANGLE", "SQUARE")),
+                Def(5, "MODE", 0f, 1f, 0f, 1f, { "" }, choices = listOf("TREMOLO", "AUTO-PAN")),
+                Def(6, "SYNC", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
+                Def(7, "SYNC RATE", 0f, 5f, 2f, 1f, { "" }, choices = listOf("1/1", "1/2", "1/4", "1/8", "1/16", "1/32")),
+            ),
+            FREQSHIFT to listOf(
+                Def(2, "SHIFT", -2000f, 2000f, 50f, 0.2f, { v -> "%+.1f Hz".format(v) }),
+                Def(3, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
+                Def(4, "STEREO", 0f, 1f, 0f, 1f, { "" }, choices = OFF_ON),
+            ),
+            RINGMOD to listOf(
+                Def(2, "FREQUENCY", 1f, 5000f, 300f, 0.004f, ::hz, log = true),
+                Def(3, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
             ),
             REVERB to listOf(
                 Def(10, "MIX", 0f, 1f, 0.3f, 0.002f, ::pct),

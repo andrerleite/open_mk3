@@ -17,7 +17,8 @@ namespace openmk3 {
 constexpr int kFxParams = 16;
 enum FxType { FX_NONE = 0, FX_COMPRESSOR = 1, FX_CHORUS = 2, FX_DELAY = 3, FX_REVERB = 4, FX_FILTER = 5,
               FX_GATE = 6, FX_LIMITER = 7, FX_EQ = 8, FX_FLANGER = 9, FX_PHASER = 10, FX_DISTORTION = 11,
-              FX_LOFI = 12, FX_TRANSIENT = 13, FX_TYPES = 14 };
+              FX_LOFI = 12, FX_TRANSIENT = 13, FX_SATURATOR = 14, FX_TREMOLO = 15, FX_FREQSHIFT = 16,
+              FX_RINGMOD = 17, FX_TYPES = 18 };
 
 class Effect {
 public:
@@ -846,6 +847,129 @@ private:
     float fast_ = 0.f, slow_ = 0.f;
 };
 
+// ---------------------------------------------------------------------------------------
+// Saturator: tape-like warmth: a soft, slightly asymmetric curve with a gentle high roll-off,
+// level-compensated.  p2 drive dB (0..24), p3 warmth (asymmetry 0..1), p4 tone Hz, p5 mix
+
+class Saturator : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float g = dbToGain(std::clamp(p[2], 0.f, 24.f));
+        const float bias = std::clamp(p[3], 0.f, 1.f) * 0.3f;
+        const float tone = lpCoef(std::clamp(p[4], 1000.f, 20000.f), sr);
+        const float mix = std::clamp(p[5], 0.f, 1.f);
+        const float comp = 1.f / std::tanh(g * 0.5f + 1e-3f) * 0.5f;
+        const float dc = std::tanh(bias);
+        for (int i = 0; i < frames; i++)
+            for (int c = 0; c < 2; c++) {
+                const float x = io[i * 2 + c];
+                float y = (std::tanh(x * g * 0.5f + bias) - dc) * comp;
+                lp_[c] = y + tone * (lp_[c] - y);
+                hp_[c] += 0.0005f * (lp_[c] - hp_[c]);  // removes the offset the bias adds
+                io[i * 2 + c] = x * (1.f - mix) + (lp_[c] - hp_[c]) * mix;
+            }
+    }
+private:
+    float lp_[2] = {}, hp_[2] = {};
+};
+
+// ---------------------------------------------------------------------------------------
+// Tremolo / auto-pan: an LFO on the level (or on the balance), free in Hz or synced.
+//  p2 rate Hz, p3 depth, p4 shape (0 sine, 1 triangle, 2 square), p5 mode (0 tremolo, 1 auto-pan),
+//  p6 sync (0 off, 1 on: p7 = note value 0 1/1 .. 5 1/32)
+
+class Tremolo : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double bpm, float sr) override {
+        static constexpr float kDiv[] = {4.f, 2.f, 1.f, 0.5f, 0.25f, 0.125f};  // in beats
+        float hz = std::clamp(p[2], 0.05f, 30.f);
+        if (p[6] > 0.5f) hz = float(bpm / 60.0) / kDiv[std::clamp(int(p[7] + 0.5f), 0, 5)];
+        const float inc = hz / sr, depth = std::clamp(p[3], 0.f, 1.f);
+        const int shape = std::clamp(int(p[4] + 0.5f), 0, 2);
+        const bool pan = p[5] > 0.5f;
+        for (int i = 0; i < frames; i++) {
+            ph_ += inc; if (ph_ >= 1.f) ph_ -= 1.f;
+            float m = shape == 0 ? std::sin(6.2831853f * ph_) : shape == 1 ? 1.f - 4.f * std::fabs(ph_ - 0.5f) : (ph_ < 0.5f ? 1.f : -1.f);
+            sm_ += 0.02f * (m - sm_);  // softens the square's edges
+            if (shape == 2) m = sm_;
+            if (pan) {
+                const float a = 0.5f + 0.5f * m * depth;
+                io[i * 2] *= std::sqrt(1.f - a) * 1.4142f;
+                io[i * 2 + 1] *= std::sqrt(a) * 1.4142f;
+            } else {
+                const float g = 1.f - depth * (0.5f - 0.5f * m);
+                io[i * 2] *= g; io[i * 2 + 1] *= g;
+            }
+        }
+    }
+private:
+    float ph_ = 0.f, sm_ = 0.f;
+};
+
+// ---------------------------------------------------------------------------------------
+// Hilbert pair (two all-pass chains 90° apart over the audio band), for frequency shifting.
+
+struct Hilbert {
+    // coefficients of the two 4-stage second-order all-pass chains (a classic 90° design)
+    static constexpr float kA[4] = {0.6923878f, 0.9360654f, 0.9882295f, 0.9987488f};
+    static constexpr float kB[4] = {0.4021921f, 0.8561711f, 0.9722910f, 0.9952885f};
+    float xa[4][2] = {}, ya[4][2] = {}, xb[4][2] = {}, yb[4][2] = {};
+    float bDelay = 0.f;
+    static inline float stage(float x, float a2, float* xs, float* ys) {
+        const float y = a2 * (x + ys[1]) - xs[1];
+        xs[1] = xs[0]; xs[0] = x; ys[1] = ys[0]; ys[0] = y;
+        return y;
+    }
+    inline void run(float x, float& re, float& im) {
+        float a = x, b = x;
+        for (int k = 0; k < 4; k++) { a = stage(a, kA[k] * kA[k], xa[k], ya[k]); b = stage(b, kB[k] * kB[k], xb[k], yb[k]); }
+        re = a; im = bDelay; bDelay = b;
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// Frequency shifter: every frequency moves by the same number of Hz (inharmonic, metallic).
+//  p2 shift Hz (-2000..2000), p3 mix, p4 stereo (the right channel shifts the other way)
+
+class FreqShifter : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float hz = std::clamp(p[2], -2000.f, 2000.f), mix = std::clamp(p[3], 0.f, 1.f);
+        const bool stereo = p[4] > 0.5f;
+        const float inc = hz / sr;
+        for (int i = 0; i < frames; i++) {
+            ph_ += inc; ph_ -= std::floor(ph_);
+            const float c = std::cos(6.2831853f * ph_), s = std::sin(6.2831853f * ph_);
+            for (int ch = 0; ch < 2; ch++) {
+                float re, im;
+                h_[ch].run(io[i * 2 + ch], re, im);
+                const float y = (ch == 1 && stereo) ? re * c - im * s : re * c + im * s;
+                io[i * 2 + ch] = io[i * 2 + ch] * (1.f - mix) + y * mix;
+            }
+        }
+    }
+private:
+    Hilbert h_[2];
+    float ph_ = 0.f;
+};
+
+// ---------------------------------------------------------------------------------------
+// Ring modulator: the signal times a sine (bell-like, robotic).  p2 frequency Hz, p3 mix
+
+class RingMod : public Effect {
+public:
+    void process(float* io, int frames, const float* p, double, float sr) override {
+        const float inc = std::clamp(p[2], 1.f, 5000.f) / sr, mix = std::clamp(p[3], 0.f, 1.f);
+        for (int i = 0; i < frames; i++) {
+            ph_ += inc; ph_ -= std::floor(ph_);
+            const float m = std::sin(6.2831853f * ph_);
+            for (int c = 0; c < 2; c++) io[i * 2 + c] = io[i * 2 + c] * (1.f - mix) + io[i * 2 + c] * m * mix;
+        }
+    }
+private:
+    float ph_ = 0.f;
+};
+
 inline Effect* createEffect(int type) {
     switch (type) {
         case FX_COMPRESSOR: return new Compressor();
@@ -861,6 +985,10 @@ inline Effect* createEffect(int type) {
         case FX_DISTORTION: return new Distortion();
         case FX_LOFI: return new Lofi();
         case FX_TRANSIENT: return new Transient();
+        case FX_SATURATOR: return new Saturator();
+        case FX_TREMOLO: return new Tremolo();
+        case FX_FREQSHIFT: return new FreqShifter();
+        case FX_RINGMOD: return new RingMod();
         default: return nullptr;
     }
 }
