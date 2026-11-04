@@ -205,16 +205,9 @@ class HomePage(ui: Ui) : Page(ui) {
                         mute -> Mk3Colors.value(c, if (p.mute[snd]) 0 else 3)
                         else -> Mk3Colors.value(c, if (p.solo[snd]) 3 else 0)
                     }
-                } else if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot) else {
-                    val hot = flash && (now - ui.engine.lastTrigMs[sd(slot)] in 0..120 || ui.padPressure[slot] > 0)
-                    when {
-                        !ui.hasSound(sd(slot)) -> 0
-                        !p.audible(sd(slot)) -> if (hot) Mk3Colors.value(c, 0) else 0
-                        hot -> Mk3Colors.value(c, 2)
-                        slot == selected -> Mk3Colors.value(c, 1)
-                        else -> Mk3Colors.value(c, 0)
-                    }
-                }
+                } else if (ui.padMode != Ui.PadMode.PAD) ui.keyPadLight(slot)
+                else if (flash) ui.soundPadLight(slot, now)
+                else if (ui.hasSound(sd(slot))) Mk3Colors.value(c, if (slot == selected) 1 else 0) else 0
                 Mode.STEP -> {
                     val s = stepForSlot(slot)
                     val pos = padPos(slot)
@@ -231,11 +224,10 @@ class HomePage(ui: Ui) : Page(ui) {
                     }
                 }
             }
-            if (v != lastLed[slot]) {
-                lastLed[slot] = v
-                ui.padLed(slot, v)
-                any = true
-            }
+            // written every frame (the device only sends changes): a cache here went stale whenever
+            // something else (SELECT mode, a page change) lit the pads
+            if (v != lastLed[slot]) { lastLed[slot] = v; any = true }
+            ui.padLed(slot, v)
         }
         return any
     }

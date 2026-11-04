@@ -567,8 +567,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (page.tick(now)) dirty = true
             if (lock.tick(now)) dirty = true
             engine.pattern.songTick(engine.playing)
+            engine.pollHeld(selectedIndex)
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
+            else if (selectActive && page !is WizardPage) applySelectPads()
             if (page !is WizardPage) {
                 if (stripTouched && now - stripAt > 350) stripRelease()
                 stripLeds()
@@ -1022,32 +1024,50 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
      * that have a sample, brighter for the focused one, bright while playing.
      */
     private fun applyPadLights(now: Long) {
+        if (selectActive) { applySelectPads(); return }
         for (slot in 0 until 16) {
-            // SELECT held: the pads show the group's sounds (lit = loaded, brightest = focused)
-            if (selectActive) {
-                val sound = snd(slot)
-                val c = soundColour(sound)
-                padLed(slot, when {
-                    slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
-                    isSelected(sound) -> org.openmk3.core.mk3.Mk3Colors.value(if (hasSound(sound)) c else org.openmk3.core.mk3.Mk3Colors.WHITE, 2)
-                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
-                    else -> 0
-                })
-                continue
-            }
             val custom = page.padLight(slot, now) ?: if (padMode != PadMode.PAD) keyPadLight(slot) else null
-            val v = custom ?: run {
-                val sound = snd(slot)
-                val c = soundColour(sound)
-                val hot = now - engine.lastTrigMs[sound] in 0..120 || padPressure[slot] > 0
-                when {
-                    hot -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
-                    slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 2)
-                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
-                    else -> 0
-                }
-            }
-            padLed(slot, v)
+            padLed(slot, custom ?: soundPadLight(slot, now))
+        }
+    }
+
+    /** SELECT mode: the group's sounds (focused brightest, selected bright, loaded dim). */
+    private var paintingSelect = false
+    private fun applySelectPads() {
+        paintingSelect = true
+        for (slot in 0 until 16) {
+            val sound = snd(slot)
+            val c = soundColour(sound)
+            padLed(slot, when {
+                slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+                isSelected(sound) -> org.openmk3.core.mk3.Mk3Colors.value(if (hasSound(sound)) c else org.openmk3.core.mk3.Mk3Colors.WHITE, 2)
+                hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
+                else -> 0
+            })
+        }
+        paintingSelect = false
+    }
+
+    /**
+     * A pad is "playing" while it is pressed, while its sound holds a note (a live note until the
+     * pad is let go, a sequencer note for its length), and for a short flash after any trigger.
+     */
+    fun padPlaying(slot: Int, now: Long): Boolean {
+        val sound = snd(slot)
+        return padPressure[slot] > 0 || engine.heldSound(sound) || now - engine.lastTrigMs[sound] in 0..90
+    }
+
+    /** PAD mode: empty dark, loaded dim, focused brighter, playing brightest; muted pads only flash dimly. */
+    fun soundPadLight(slot: Int, now: Long): Int {
+        val sound = snd(slot)
+        if (!hasSound(sound)) return 0
+        val c = soundColour(sound)
+        val playing = padPlaying(slot, now)
+        return when {
+            !engine.pattern.audible(sound) -> if (playing) org.openmk3.core.mk3.Mk3Colors.value(c, 0) else 0
+            playing -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+            slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 1)
+            else -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
         }
     }
 
@@ -1055,6 +1075,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     fun keyPadLight(slot: Int): Int {
         val c = soundColour(selectedIndex)
         if (padPressure[slot] > 0) return org.openmk3.core.mk3.Mk3Colors.value(c, 3)
+        // notes sounding now (played live, by the sequencer or the arpeggiator) light their keys
+        val sounding = when (padMode) {
+            PadMode.KEYBOARD -> engine.heldNote(keys.noteFor(slot))
+            PadMode.CHORDS -> keys.chordFor(slot).let { ch -> ch.isNotEmpty() && ch.all { engine.heldNote(it) } }
+            else -> false
+        }
+        if (sounding) return org.openmk3.core.mk3.Mk3Colors.value(c, 3)
         return when (padMode) {
             PadMode.KEYBOARD -> org.openmk3.core.mk3.Mk3Colors.value(c, if (keys.isRoot(keys.noteFor(slot))) 2 else 0)
             PadMode.CHORDS -> org.openmk3.core.mk3.Mk3Colors.value(c, if (keys.isRoot(keys.chordFor(slot)[0])) 2 else 0)
@@ -1139,6 +1166,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
 
     fun padLed(slot: Int, value: Int) {
+        // SELECT mode owns the pads: other pages' writes would make them flicker
+        if (selectActive && !paintingSelect && page !is WizardPage && page !is PalettePage) return
         val hid = map.padSlotToHid[slot]
         val idx = map.padLeds[hid]
         if (idx >= 0) dev.setPadLed(idx, value)

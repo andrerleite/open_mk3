@@ -412,6 +412,20 @@ public:
     float pfxHoldPh = 1.f;
     void runPerform(float* out, int frames, const float* p, double bpm);
     std::atomic<float*> pattern{nullptr};
+    /** Sounds with a note held (not released) right now, and the held notes of [watchSlot]: pad lights. */
+    std::atomic<uint32_t> heldSnd[4] = {};
+    std::atomic<uint32_t> heldNotes[4] = {};
+    std::atomic<int> watchSlot{-1};
+    void publishHeld() {
+        uint32_t sn[4] = {}, nt[4] = {};
+        const int w = watchSlot.load(std::memory_order_relaxed);
+        for (auto& v : voices) {
+            if (!v.sample || v.released || v.fadeOut >= 0 || v.slot >= kSounds) continue;
+            sn[v.slot >> 5] |= 1u << (v.slot & 31);
+            if (v.slot == w) nt[(v.note >> 5) & 3] |= 1u << (v.note & 31);
+        }
+        for (int k = 0; k < 4; k++) { heldSnd[k].store(sn[k], std::memory_order_relaxed); heldNotes[k].store(nt[k], std::memory_order_relaxed); }
+    }
     std::atomic<int64_t*> lastTrigMs{nullptr};   // 16 x int64, CLOCK_MONOTONIC ms
     std::atomic<float*> params{nullptr};         // kSlots x kParams
     std::atomic<bool> playRequested{false};
@@ -1494,6 +1508,7 @@ void Engine::render(float* out, int32_t frames) {
 #endif
     for (int off = 0; off < frames; off += kChunk)
         renderChunk(out + off * 2, std::min(kChunk, int(frames) - off));
+    publishHeld();
     // CPU load: render time over the audio it made (peak and average, read by the heartbeat)
     const int64_t took = nowNanos() - t0;
 #if defined(__ANDROID__) && !defined(OPENMK3_HOST_TEST)
@@ -2965,6 +2980,13 @@ JNIEXPORT jintArray JNICALL JNI_FN(nativeTakeCuts)(JNIEnv* env, jobject, jint fr
     jintArray a = env->NewIntArray(jsize(out.size()));
     if (a) env->SetIntArrayRegion(a, 0, jsize(out.size()), out.data());
     return a;
+}
+/** [held sounds 4 words, held notes of the watched sound 4 words]; sets the sound to watch. */
+JNIEXPORT void JNICALL JNI_FN(nativeHeld)(JNIEnv* env, jobject, jint watch, jintArray out) {
+    gEngine.watchSlot.store(watch, std::memory_order_relaxed);
+    jint t[8];
+    for (int k = 0; k < 4; k++) { t[k] = jint(gEngine.heldSnd[k].load(std::memory_order_relaxed)); t[4 + k] = jint(gEngine.heldNotes[k].load(std::memory_order_relaxed)); }
+    env->SetIntArrayRegion(out, 0, 8, t);
 }
 JNIEXPORT void JNICALL JNI_FN(nativeUsbStop)(JNIEnv*, jobject) { gUsb.stop(); }
 JNIEXPORT jboolean JNICALL JNI_FN(nativeUsbRunning)(JNIEnv*, jobject) { return gUsb.running.load() ? JNI_TRUE : JNI_FALSE; }

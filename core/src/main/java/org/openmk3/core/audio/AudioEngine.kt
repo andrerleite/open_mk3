@@ -43,6 +43,8 @@ object NativeEngine {
                                 hidEp: Int, hidMax: Int): Boolean
     external fun nativeHidRead(buf: ByteArray, timeoutMs: Int): Int
     external fun nativeUsbStop()
+    /** Held (sounding, not released) sounds and notes of [watch], for the pad lights. */
+    external fun nativeHeld(watch: Int, out: IntArray)
     /** Sounds cut before their end since [from]: [count, (slot, reason, by, fromSeq)…]. */
     external fun nativeTakeCuts(from: Int): IntArray
     /** Output on the phone (the direct USB driver then sends the MK3 silence). */
@@ -150,6 +152,12 @@ class AudioEngine(private val ctx: Context) {
     }
     private val trigBuf: ByteBuffer = ByteBuffer.allocateDirect(Pattern.SOUNDS * 8).order(ByteOrder.nativeOrder())
     val lastTrigMs = TrigTimes(trigBuf)
+
+    private val held = IntArray(8)
+    /** Reads which sounds (and which notes of [watch]) are held now: once per screen frame. */
+    fun pollHeld(watch: Int) = n.nativeHeld(watch, held)
+    fun heldSound(s: Int) = s in 0 until 128 && (held[s shr 5] ushr (s and 31)) and 1 != 0
+    fun heldNote(note: Int) = note in 0 until 128 && (held[4 + (note shr 5)] ushr (note and 31)) and 1 != 0
 
     var pattern: Pattern = Pattern()
         set(v) {

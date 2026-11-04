@@ -31,6 +31,34 @@ object Project {
         return "Project %03d".format(i)
     }
 
+    private val WORDS_A = listOf("Night", "Velvet", "Dusty", "Neon", "Golden", "Lazy", "Deep", "Broken", "Midnight", "Electric",
+        "Hazy", "Silver", "Smoky", "Lost", "Warm", "Liquid", "Cosmic", "Rusty", "Quiet", "Heavy", "Faded", "Crystal", "Low", "Bright")
+    private val WORDS_B = listOf("Groove", "Drift", "Pulse", "Echo", "Riddim", "Loop", "Bounce", "Swing", "Shuffle", "Stomp", "Haze",
+        "Motion", "Ritual", "Tape", "Signal", "Fever", "Dream", "Cipher", "Static", "Theory", "Garden", "Engine", "Wave", "Session")
+
+    /** A name to start from: two words and the tempo ("Velvet Drift 126"), not taken yet. */
+    fun suggestName(bpm: Double): String {
+        val r = java.util.Random()
+        repeat(50) {
+            val n = "${WORDS_A[r.nextInt(WORDS_A.size)]} ${WORDS_B[r.nextInt(WORDS_B.size)]} ${bpm.toInt()}"
+            if (!File(dir, "$n.$EXT").exists()) return n
+        }
+        return nextName()
+    }
+
+    /** Keeps names usable as file names. */
+    fun clean(name: String) = name.replace(Regex("[\\\\/:*?\"<>|]"), "").trim().take(40)
+
+    /** Renames a saved project (and the current one, if it is that). Returns false if the name is taken. */
+    fun rename(ctx: Context, from: String, to: String): Boolean {
+        val t = clean(to)
+        if (t.isEmpty()) return false
+        val a = File(dir, "$from.$EXT"); val b = File(dir, "$t.$EXT")
+        if (b.exists() || !a.exists() || !a.renameTo(b)) return false
+        if (currentName(ctx) == from) setCurrent(ctx, t)
+        return true
+    }
+
     fun save(ctx: Context, e: AudioEngine, colours: IntArray, keys: Keys, name: String): File {
         val j = JSONObject()
         j.put("version", 1)

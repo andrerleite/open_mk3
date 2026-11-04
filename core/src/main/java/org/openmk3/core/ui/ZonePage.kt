@@ -69,10 +69,19 @@ class ZonePage(ui: Ui) : Page(ui) {
     }
 
     private var saveAt = 0L
+    private var heldKey = 0L
     override fun tick(now: Long): Boolean {
         if (saveAt != 0L && now - saveAt > 1500) { zones.save(ui.ctx); saveAt = 0L }
+        // redraw when the notes playing change (they light up on the key map)
+        var h = 0L
+        for (n in 0 until 128) if (ui.engine.heldNote(n)) h = h * 131 + n + 1
+        if (h != heldKey) { heldKey = h; return true }
         return false
     }
+    private val keyLine = Theme.fill(android.graphics.Color.rgb(48, 48, 60))
+    private val keyLineC = Theme.fill(android.graphics.Color.rgb(85, 85, 105))
+    private val blackKey = Theme.fill(android.graphics.Color.rgb(26, 26, 33))
+    private val playFill = Theme.fill(android.graphics.Color.argb(150, 255, 255, 255))
     override fun onExit() { if (saveAt != 0L) zones.save(ui.ctx) }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
@@ -224,10 +233,17 @@ class ZonePage(ui: Ui) : Page(ui) {
         val x0 = 16f; val w = 448f; val lo = 24; val hi = 108
         fun kx(n: Int) = x0 + (n - lo).coerceIn(0, hi - lo) * w / (hi - lo)
         r.drawRect(x0, 50f, x0 + w, 206f, keyBg)
+        // a lane per key: black keys darker, a line between keys, brighter at every C
+        for (n in lo until hi) {
+            if ((n % 12) in intArrayOf(1, 3, 6, 8, 10)) r.drawRect(kx(n), 50f, kx(n + 1), 206f, blackKey)
+            r.drawRect(kx(n), 50f, kx(n) + 1f, 206f, if (n % 12 == 0) keyLineC else keyLine)
+        }
+        // notes playing now (live, sequencer, arpeggiator)
+        for (n in lo until hi) if (ui.engine.heldNote(n)) r.drawRect(kx(n), 50f, maxOf(kx(n + 1), kx(n) + 2f), 206f, playFill)
         for ((i, zn) in list.withIndex()) {
             val y = 54f + (i % 12) * 12f
             val c = Theme.fill(Mk3Colors.rgb(ui.soundColour(snd)))
-            c.alpha = if (i == sel) 255 else 110
+            c.alpha = if (i == sel || (zn.lo..zn.hi).any { ui.engine.heldNote(it) }) 255 else 110
             r.drawRect(kx(zn.lo), y, maxOf(kx(zn.hi + 1), kx(zn.lo) + 3f), y + 9f, c)
             r.drawRect(kx(zn.root), y - 1f, kx(zn.root) + 2f, y + 10f, Theme.fill(Theme.FG))
         }

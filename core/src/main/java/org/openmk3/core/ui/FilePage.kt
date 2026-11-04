@@ -9,15 +9,19 @@ import java.io.File
 import java.util.concurrent.Executors
 
 /**
- * FILE: save, save as new, new project, and the saved projects (newest first).
+ * FILE: save, save as (with a suggested name you can edit), rename, new project, and the saved
+ * projects (newest first).
  *  Encoder turn / ◀ ▶: move · encoder push or D8: do it (loading and NEW ask for a second push)
+ *  Name editor: encoder turn (or K2) = the letter at the cursor · ◀ ▶ / tilt (or K1) = cursor ·
+ *  D5 suggest another name · D6 delete · D7 cancel · D8 OK · SHIFT + encoder: upper / lower case
  *  SHIFT + FILE (anywhere): quick save · FILE: back
  */
 class FilePage(ui: Ui) : Page(ui) {
 
     private sealed class Item(val label: String) {
         class Save(name: String) : Item("SAVE  \"$name\"")
-        object SaveNew : Item("SAVE AS NEW PROJECT")
+        object SaveNew : Item("SAVE AS…  (name it)")
+        class Rename(name: String) : Item("RENAME  \"$name\"")
         object New : Item("NEW EMPTY PROJECT")
         class Load(val file: File) : Item(file.nameWithoutExtension)
     }
@@ -48,6 +52,7 @@ class FilePage(ui: Ui) : Page(ui) {
         items = buildList {
             if (cur != null) add(Item.Save(cur))
             add(Item.SaveNew)
+            if (cur != null) add(Item.Rename(cur))
             add(Item.New)
             Project.list().forEach { add(Item.Load(it)) }
         }
@@ -55,8 +60,63 @@ class FilePage(ui: Ui) : Page(ui) {
         ui.invalidate()
     }
 
+    // ---- the name editor ----
+    private var editing = false
+    private var renaming = false
+    private val name = StringBuilder()
+    private var cursor = 0
+    private var shift = false
+    private var knobAcc = IntArray(2)
+    private val CHARS = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.&'()#!"
+
+    private fun startEdit(initial: String, rename: Boolean) {
+        editing = true; renaming = rename
+        name.setLength(0); name.append(initial)
+        cursor = name.length
+        message = ""
+    }
+
+    /** Changes the letter at the cursor (past the end: adds one). */
+    private fun turnChar(d: Int) {
+        if (cursor >= name.length) name.append(if (d > 0) 'A' else ' ').also { if (d < 0) {} }
+        else {
+            val c = name[cursor]
+            if (shift && c.isLetter()) { name.setCharAt(cursor, if (c.isUpperCase()) c.lowercaseChar() else c.uppercaseChar()); return }
+            val i = CHARS.indexOf(c).coerceAtLeast(0)
+            name.setCharAt(cursor, CHARS[Math.floorMod(i + d, CHARS.length)])
+        }
+    }
+
+    private fun moveCursor(d: Int) { cursor = (cursor + d).coerceIn(0, minOf(name.length, 39)) }
+
+    private fun finishEdit() {
+        val n = Project.clean(name.toString())
+        if (n.isEmpty()) { message = "Can't use an empty name"; return }
+        if (renaming) {
+            val cur = Project.currentName(ui.ctx) ?: return
+            message = if (Project.rename(ui.ctx, cur, n)) "Renamed to \"$n\"" else "Can't rename: \"$n\" exists"
+            editing = false
+            refresh()
+        } else {
+            if (java.io.File(Project.dir, "$n.${Project.EXT}").exists()) { message = "\"$n\" exists: change the name"; return }
+            editing = false
+            save(n)
+        }
+    }
+
+    override fun onKnob(knob: Int, delta: Int) {
+        if (!editing || knob > 1) return
+        knobAcc[knob] += delta
+        if (kotlin.math.abs(knobAcc[knob]) < 12) return
+        val d = if (knobAcc[knob] > 0) 1 else -1
+        knobAcc[knob] = 0
+        if (knob == 0) moveCursor(d) else turnChar(d)
+        ui.invalidate()
+    }
+
     override fun lights(l: Lights) {
         l.set("FILE", true)
+        if (editing) { l.set("D5", "D6", "D7"); l.set("D8", true); l.set("SHIFT", shift); l.set("PAGE LEFT", "PAGE RIGHT"); return }
         l.set("D8", armed >= 0)
         l.set("PAGE LEFT", "PAGE RIGHT")
     }
@@ -69,10 +129,28 @@ class FilePage(ui: Ui) : Page(ui) {
         ui.invalidate()
     }
 
-    override fun onEncoder(delta: Int) = move(delta)
+    override fun onEncoder(delta: Int) { if (editing) { turnChar(delta); ui.invalidate() } else move(delta) }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
+        if (name == "SHIFT") { shift = down; return }
         if (!down) return
+        if (editing) {
+            when (name) {
+                "PAGE LEFT", "ENCODER LEFT" -> moveCursor(-1)
+                "PAGE RIGHT", "ENCODER RIGHT" -> moveCursor(1)
+                "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
+                "D6" -> if (cursor > 0 || cursor < this.name.length) {
+                    // delete the letter before the cursor (at the end) or under it
+                    if (cursor >= this.name.length && cursor > 0) { this.name.deleteCharAt(cursor - 1); cursor-- }
+                    else if (cursor < this.name.length) this.name.deleteCharAt(cursor)
+                }
+                "D7" -> { editing = false; message = "Cancelled" }
+                "D8", "ENCODER PUSH" -> finishEdit()
+                "FILE" -> ui.showHome()
+            }
+            ui.invalidate()
+            return
+        }
         when (name) {
             "ENCODER PUSH", "D8" -> activate()
             "ENCODER UP", "PAGE LEFT" -> move(-1)
@@ -85,7 +163,8 @@ class FilePage(ui: Ui) : Page(ui) {
         if (busy) return
         when (val it = items.getOrNull(sel)) {
             is Item.Save -> save(Project.currentName(ui.ctx) ?: Project.nextName())
-            Item.SaveNew -> save(Project.nextName())
+            Item.SaveNew -> startEdit(Project.suggestName(ui.engine.bpm), false)
+            is Item.Rename -> startEdit(Project.currentName(ui.ctx) ?: "", true)
             Item.New -> if (armed != sel) { armed = sel; message = "Push again: unsaved changes are lost" } else {
                 Project.clear(ui.ctx, ui.engine)
                 KitStore.save(ui.ctx, ui.engine.kit)
@@ -130,9 +209,31 @@ class FilePage(ui: Ui) : Page(ui) {
         }
     }
 
+    private val nameText = Theme.text(26f, Theme.FG, bold = true)
+    private val cursorFill = Theme.fill(Theme.ACCENT)
+
+    private fun drawEditor(l: Canvas, r: Canvas, now: Long) {
+        l.drawText(if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
+        val n = name.toString()
+        val x0 = 16f
+        val y = 120f
+        l.drawText(n, x0, y, nameText)
+        // cursor: under the letter it changes (a block past the end)
+        val cx = x0 + nameText.measureText(n, 0, cursor.coerceAtMost(n.length))
+        val cw = if (cursor < n.length) nameText.measureText(n, cursor, cursor + 1).coerceAtLeast(8f) else 14f
+        if ((now / 400) % 2 == 0L || true) l.drawRect(cx, y + 6f, cx + cw, y + 10f, cursorFill)
+        l.drawText("Encoder: letter · ◀ ▶: cursor · SHIFT + encoder: case", 16f, 170f, label)
+        l.drawText("K1 cursor · K2 letter", 16f, 192f, label)
+        listOf("SUGGEST", "DELETE", "CANCEL", if (renaming) "RENAME" else "SAVE").forEachIndexed { i, t -> r.drawText(t, 60f + i * 120f, 24f, dLabel) }
+        r.drawText("A name is suggested: keep it, change it,", 16f, 70f, label)
+        r.drawText("or press D5 for another one", 16f, 92f, label)
+        if (message.isNotEmpty()) r.drawText(message.take(44), 16f, 220f, if (message.startsWith("Can't") || message.contains("exists")) warn else ok)
+    }
+
     override fun draw(l: Canvas, r: Canvas, now: Long) {
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
+        if (editing) { drawEditor(l, r, now); return }
         l.drawText("FILE", 16f, 30f, title)
         l.drawText(Project.currentName(ui.ctx)?.let { "Project: $it" } ?: "Unsaved project", 90f, 29f, label)
         for (i in 0 until 8) {
