@@ -22,9 +22,14 @@ class PatternData(var length: Int = 16) {
     /** An automation lane: a sound parameter's value per step (NaN = no point). */
     class Lane(val pad: Int, val param: Int, val values: FloatArray = FloatArray(Pattern.STEPS) { Float.NaN })
     val lanes = mutableListOf<Lane>()
+    /** Name given to the pattern (empty: shown as its group letter and number). */
+    var name = ""
+    /** Colour 1..16, 0 = the group's colour. */
+    var colour = 0
 
     fun copy(): PatternData {
         val c = PatternData(length)
+        c.name = name; c.colour = colour
         for (p in 0 until Pattern.PADS) {
             vel[p].copyInto(c.vel[p]); note[p].copyInto(c.note[p])
             xvel[p].copyInto(c.xvel[p]); xnote[p].copyInto(c.xnote[p])
@@ -58,6 +63,8 @@ class PatternData(var length: Int = 16) {
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("length", length)
+        if (name.isNotEmpty()) put("name", name)
+        if (colour != 0) put("colour", colour)
         val ev = JSONArray()
         for (p in 0 until Pattern.PADS) for (t in 0 until Pattern.STEPS) {
             if (vel[p][t] > 0f) ev.put(JSONArray(listOf(p, t, -1, vel[p][t].toDouble(), note[p][t].toInt(), len[p][t].toDouble(), off[p][t].toDouble())))
@@ -76,6 +83,7 @@ class PatternData(var length: Int = 16) {
     companion object {
         fun fromJson(j: JSONObject): PatternData {
             val d = PatternData(j.optInt("length", 16).coerceIn(1, Pattern.STEPS))
+            d.name = j.optString("name", ""); d.colour = j.optInt("colour", 0).coerceIn(0, 16)
             val ev = j.optJSONArray("events") ?: JSONArray()
             for (i in 0 until ev.length()) {
                 val e = ev.getJSONArray(i)
@@ -235,6 +243,9 @@ class Pattern {
     val queued = IntArray(GROUPS) { -1 }
     /** Scenes: the pattern of each group (-1 = none); null = empty scene slot. */
     val scenes = arrayOfNulls<IntArray>(SLOTS)
+    /** Scene names (empty: "Scene n") and colours (0 = none). */
+    val sceneNames = Array(SLOTS) { "" }
+    val sceneColours = IntArray(SLOTS)
     var currentScene = -1
 
     /** Length (steps) of each group's playing pattern; 16 when the group has none. */
@@ -732,6 +743,7 @@ class Pattern {
 
     fun deleteScene(idx: Int) {
         scenes[idx] = null
+        sceneNames[idx] = ""; sceneColours[idx] = 0
         if (currentScene == idx) currentScene = -1
         song.removeAll { it % 1000 == idx }
         songPos = songPos.coerceIn(0, maxOf(0, song.size - 1))
@@ -894,7 +906,8 @@ class Pattern {
             })
         })
         put("scenes", JSONArray().apply {
-            for (i in 0 until SLOTS) scenes[i]?.let { put(JSONObject().put("slot", i).put("patterns", JSONArray(it.toList()))) }
+            for (i in 0 until SLOTS) scenes[i]?.let { put(JSONObject().put("slot", i).put("patterns", JSONArray(it.toList()))
+                .put("name", sceneNames[i]).put("colour", sceneColours[i])) }
         })
         put("currentScene", currentScene)
         put("song", JSONArray(song.toList()))
@@ -920,7 +933,7 @@ class Pattern {
         j.optJSONArray("groupPan")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupPan(g, a.getDouble(g).toFloat()) }
         j.optJSONArray("groupSwing")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) setGroupSwing(g, a.getDouble(g).toFloat()) }
         for (g in 0 until GROUPS) { patterns[g].fill(null); current[g] = -1; queued[g] = -1 }
-        scenes.fill(null)
+        scenes.fill(null); sceneNames.fill(""); sceneColours.fill(0)
         song.clear(); songMode = false; songPos = 0; songJump = -1
         if (j.optInt("version", 1) >= 3) {
             val gs = j.optJSONArray("groups") ?: JSONArray()
@@ -939,7 +952,10 @@ class Pattern {
                 val o = sc.getJSONObject(i)
                 val slot = o.optInt("slot", i)
                 val a = o.getJSONArray("patterns")
-                if (slot in 0 until SLOTS) scenes[slot] = IntArray(GROUPS) { if (it < a.length()) a.getInt(it) else -1 }
+                if (slot in 0 until SLOTS) {
+                    scenes[slot] = IntArray(GROUPS) { if (it < a.length()) a.getInt(it) else -1 }
+                    sceneNames[slot] = o.optString("name", ""); sceneColours[slot] = o.optInt("colour", 0).coerceIn(0, 16)
+                }
             }
             currentScene = j.optInt("currentScene", -1)
             song.clear()

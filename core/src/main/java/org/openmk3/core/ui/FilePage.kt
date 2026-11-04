@@ -16,7 +16,9 @@ import java.util.concurrent.Executors
  *  D5 suggest another name · D6 delete · D7 cancel · D8 OK · SHIFT + encoder: upper / lower case
  *  SHIFT + FILE (anywhere): quick save · FILE: back
  */
-class FilePage(ui: Ui) : Page(ui) {
+class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? = null) : Page(ui) {
+    /** Opened only to name a pattern (3) or scene (4) from PATTERN / SCENE mode: returns there. */
+    private fun doneDirect(): Boolean { if (back == null) return false; ui.show(back); return true }
 
     private sealed class Item(val label: String) {
         class Save(name: String) : Item("SAVE  \"$name\"")
@@ -50,7 +52,11 @@ class FilePage(ui: Ui) : Page(ui) {
     private val selFill = Theme.fill(android.graphics.Color.rgb(60, 60, 80))
     private val dLabel = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
 
-    override fun onEnter() = refresh()
+    override fun onEnter() {
+        refresh()
+        if (directName == 3) { nameTarget = 3; startEdit(ui.engine.pattern.let { p -> p.patterns[ui.group][p.current[ui.group]]?.name?.ifEmpty { null } } ?: "${ui.groupLetter}${ui.engine.pattern.current[ui.group] + 1}", false) }
+        if (directName == 4) { nameTarget = 4; startEdit(ui.engine.pattern.let { p -> p.sceneNames[p.currentScene].ifEmpty { "Scene ${p.currentScene + 1}" } }, false) }
+    }
 
     override fun onExit() { worker.shutdown() }
 
@@ -223,9 +229,16 @@ class FilePage(ui: Ui) : Page(ui) {
             val t = nameTarget
             nameTarget = 0
             editing = false
-            if (t == 1) org.openmk3.core.audio.Names.sound[ui.selectedIndex] = n else org.openmk3.core.audio.Names.group[ui.group] = n
-            org.openmk3.core.audio.Names.save(ui.ctx)
-            message = if (t == 1) "${ui.padLabel()} is now \"$n\"" else "Group ${ui.groupLetter} is now \"$n\""
+            val p = ui.engine.pattern
+            when (t) {
+                1 -> org.openmk3.core.audio.Names.sound[ui.selectedIndex] = n
+                2 -> org.openmk3.core.audio.Names.group[ui.group] = n
+                3 -> p.patterns[ui.group].getOrNull(p.current[ui.group])?.name = n
+                4 -> if (p.currentScene >= 0) p.sceneNames[p.currentScene] = n
+            }
+            if (t <= 2) org.openmk3.core.audio.Names.save(ui.ctx) else { p.save(ui.ctx); ui.checkpoint() }
+            message = when (t) { 1 -> "${ui.padLabel()} is now \"$n\""; 2 -> "Group ${ui.groupLetter} is now \"$n\""; 3 -> "Pattern is now \"$n\""; else -> "Scene is now \"$n\"" }
+            if (doneDirect()) { ui.toast(message); return }
             refresh()
             return
         }
@@ -335,7 +348,7 @@ class FilePage(ui: Ui) : Page(ui) {
                 "ENCODER PUSH" -> if (shift) { putGridChar(true); gridTyped = true } else finishEdit()
                 "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
                 "D6" -> if (cursor < this.name.length) this.name.deleteCharAt(cursor) else backspace()
-                "D7" -> { editing = false; savingGroup = false; savingSound = false; nameTarget = 0; message = "Cancelled" }
+                "D7" -> { editing = false; savingGroup = false; savingSound = false; nameTarget = 0; message = "Cancelled"; if (doneDirect()) return }
                 "D8" -> finishEdit()
                 "FILE" -> ui.showHome()
             }
@@ -454,7 +467,7 @@ class FilePage(ui: Ui) : Page(ui) {
     private val cursorFill = Theme.fill(Theme.ACCENT)
 
     private fun drawEditor(l: Canvas, r: Canvas, now: Long) {
-        l.drawText(if (nameTarget == 1) "NAME SOUND ${ui.padLabel()}" else if (nameTarget == 2) "NAME GROUP ${ui.groupLetter}" else if (savingSound) "SAVE SOUND ${ui.padLabel()}" else if (savingGroup) "SAVE GROUP ${ui.groupLetter}" else if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
+        l.drawText(if (nameTarget == 3) "NAME PATTERN ${ui.groupLetter}${ui.engine.pattern.current[ui.group] + 1}" else if (nameTarget == 4) "NAME SCENE ${ui.engine.pattern.currentScene + 1}" else if (nameTarget == 1) "NAME SOUND ${ui.padLabel()}" else if (nameTarget == 2) "NAME GROUP ${ui.groupLetter}" else if (savingSound) "SAVE SOUND ${ui.padLabel()}" else if (savingGroup) "SAVE GROUP ${ui.groupLetter}" else if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
         val n = name.toString()
         val x0 = 16f
         val y = 120f

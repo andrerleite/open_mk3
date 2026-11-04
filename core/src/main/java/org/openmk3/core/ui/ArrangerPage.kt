@@ -184,7 +184,7 @@ class ArrangerPage(ui: Ui) : Page(ui) {
             val playingHere = p.songMode && idx == p.songPos && ui.engine.playing
             r.drawRoundRect(rect, 5f, 5f, if (playingHere) boxPlay else if (idx == cursor) boxSel else box)
             if (idx == cursor) r.drawRoundRect(rect, 5f, 5f, outline)
-            r.drawText("S${sc + 1}", x + w / 2, y + 22f, cell)
+            r.drawText(p.sceneNames[sc].ifEmpty { "S${sc + 1}" }.take(8), x + w / 2, y + 22f, cell)
             r.drawText("${idx + 1} · ${p.sectionLength(idx) / 16}b" + if (idx == p.songJump) " ▶" else "", x + w / 2, y + 40f, small)
             if (playingHere) {
                 val pr = p.sectionProgress()

@@ -19,6 +19,8 @@ import org.openmk3.core.mk3.Mk3Colors
  * PATTERN: K1 length (16 steps per turn notch; SHIFT: single steps), D5 duplicate to the next
  * free slot, D6 delete, D7 double, D8 clear notes.
  * SCENE: D5 duplicate, D6 delete, D8 update the scene with the patterns playing now.
+ * Both: SHIFT + D5 names the current pattern / scene; SHIFT + D6 picks its colour (the pads show
+ * the 16 colours, hit one; SHIFT + D6 again clears it back to the group's colour).
  * Hold the mode button for a quick look (release returns); a short press keeps the mode on.
  */
 class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
@@ -35,6 +37,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     private var shift = false
     private var message = ""
     private var lenAcc = 0
+    /** Picking the current pattern's / scene's colour on the pads. */
+    private var picking = false
 
     private val title = Theme.text(20f, Theme.ACCENT, bold = true)
     private val big = Theme.text(22f, Theme.FG, bold = true)
@@ -80,11 +84,28 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
 
     override fun padLight(slot: Int, now: Long): Int? = null
 
+    /** Colour of slot [i] (its own colour, else the group's / white). */
+    private fun colourOf(i: Int): Int {
+        val own = if (kind == Kind.PATTERN) p.patterns[g][i]?.colour ?: 0 else p.sceneColours[i]
+        return if (own > 0) own else if (kind == Kind.PATTERN) groupColour(g) else Mk3Colors.WHITE
+    }
+
+    private fun currentIdx() = if (kind == Kind.PATTERN) p.current[g] else p.currentScene
+    private fun ownColour(): Int = currentIdx().let { cur -> if (cur < 0) 0 else if (kind == Kind.PATTERN) p.patterns[g][cur]?.colour ?: 0 else p.sceneColours[cur] }
+    private fun setOwnColour(c: Int) {
+        val cur = currentIdx(); if (cur < 0) return
+        if (kind == Kind.PATTERN) p.patterns[g][cur]?.colour = c else p.sceneColours[cur] = c
+    }
+
     private fun updatePads(now: Long) {
-        val c = if (kind == Kind.PATTERN) groupColour(g) else Mk3Colors.WHITE
+        if (picking) {
+            for (i in 0 until 16) ui.padLed(i, Mk3Colors.value(i + 1, if (i + 1 == ownColour()) 3 else 1))
+            return
+        }
         val blink = (now / 200) % 2 == 0L
         for (i in 0 until 16) {
             val i = s(i)
+            val c = colourOf(i)
             val v = when {
                 isQueued(i) -> if (blink) Mk3Colors.value(c, 3) else Mk3Colors.value(c, 0)
                 isCurrent(i) -> Mk3Colors.value(c, 3)
@@ -109,6 +130,13 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+        if (picking) {
+            setOwnColour(slot + 1)
+            picking = false
+            message = "${name(currentIdx())} colour ${slot + 1}"
+            changed()
+            return
+        }
         val i = s(slot)
         when {
             erase -> {
@@ -121,7 +149,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
                     if (has(i)) { dupSource = i; message = "Duplicate ${name(i)} to… (hit the target pad)" }
                 } else {
                     if (kind == Kind.PATTERN) p.duplicatePattern(g, dupSource, i)
-                    else p.scenes[dupSource]?.let { p.scenes[i] = it.copyOf() }
+                    else p.scenes[dupSource]?.let { p.scenes[i] = it.copyOf(); p.sceneNames[i] = p.sceneNames[dupSource]; p.sceneColours[i] = p.sceneColours[dupSource] }
                     message = "${name(dupSource)} → ${name(i)}"
                     dupSource = -1
                 }
@@ -146,6 +174,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     }
 
     private fun name(i: Int) = if (kind == Kind.PATTERN) "${ui.groupLetter}${i + 1}" else "Scene ${i + 1}"
+    /** The name given to slot [i], or its number. */
+    private fun slotTitle(i: Int): String = (if (kind == Kind.PATTERN) p.patterns[g].getOrNull(i)?.name else p.sceneNames.getOrNull(i))?.ifEmpty { null } ?: name(i)
 
     private fun changed() {
         p.save(ui.ctx)
@@ -165,8 +195,12 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         when (name) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.stopPressed()
-            "D5" -> createNext()
-            "D6" -> deleteCurrent()
+            "D5" -> if (shift) { if (currentIdx() >= 0) ui.show(FilePage(ui, if (kind == Kind.PATTERN) 3 else 4, this)) else message = "No ${if (kind == Kind.PATTERN) "pattern" else "scene"} to name" } else createNext()
+            "D6" -> if (shift) {
+                if (currentIdx() < 0) message = "No ${if (kind == Kind.PATTERN) "pattern" else "scene"} selected"
+                else if (picking) { picking = false; setOwnColour(0); message = "${name(currentIdx())}: ${if (kind == Kind.PATTERN) "group colour" else "no colour"}"; changed() }
+                else { picking = true; message = "Hit a pad for the colour (SHIFT + D6 again: ${if (kind == Kind.PATTERN) "group colour" else "none"})" }
+            } else deleteCurrent()
             "D7" -> if (bank > 0) bank--
             "D8" -> if (bank < banks - 1) bank++
             "D2" -> if (kind == Kind.SCENE && p.currentScene >= 0) { p.captureScene(p.currentScene); message = "Scene ${p.currentScene + 1} updated"; changed() }
@@ -234,17 +268,30 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         updatePads(now)
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
+        if (picking) {
+            val cur = currentIdx()
+            l.drawText("COLOUR · ${slotTitle(cur)}", 16f, 52f, title)
+            l.drawText("Hit a pad to pick its colour", 16f, 92f, label)
+            l.drawText("SHIFT + D6: ${if (kind == Kind.PATTERN) "back to the group colour" else "no colour"}", 16f, 114f, label)
+            for (pad in 0 until 16) {
+                val x = 8f + (pad % 4) * 116f; val y = 38f + (3 - pad / 4) * 56f
+                val rect = RectF(x, y, x + 112f, y + 52f)
+                r.drawRoundRect(rect, 5f, 5f, Theme.fill(Mk3Colors.rgb(pad + 1)))
+                if (pad + 1 == ownColour()) r.drawRoundRect(rect, 5f, 5f, ring)
+            }
+            return
+        }
         val pinName = if (kind == Kind.PATTERN) "PATTERN" else "SCENE"
         l.drawText("PIN", 60f, 24f, if (pinName in ui.pinned) cellName else dLabel)
         if (kind == Kind.SCENE) l.drawText("UPDATE", 180f, 24f, dLabel)
-        r.drawText("CREATE", 60f, 24f, dLabel)
-        r.drawText("DELETE", 180f, 24f, dLabel)
+        r.drawText(if (shift) "NAME" else "CREATE", 60f, 24f, dLabel)
+        r.drawText(if (shift) "COLOUR" else "DELETE", 180f, 24f, dLabel)
         r.drawText("◀ BANK", 300f, 24f, dLabel)
         r.drawText("BANK ▶", 420f, 24f, dLabel)
         if (kind == Kind.PATTERN) {
             l.drawText("PATTERN · GROUP ${ui.groupLetter}", 16f, 52f, title)
             val cur = p.current[g]
-            l.drawText(if (cur >= 0) "${ui.groupLetter}${cur + 1}" else "No pattern", 16f, 82f, big)
+            l.drawText(if (cur >= 0) slotTitle(cur) + (if (slotTitle(cur) != name(cur)) "  (${name(cur)})" else "") else "No pattern", 16f, 82f, big)
             l.drawText("Length ${lengthText(p.length(g))}", 16f, 100f, label)
             if (p.queued[g] >= 0) l.drawText("Next: ${ui.groupLetter}${p.queued[g] + 1} (at the end of this one)", 16f, 124f, ok)
             l.drawText("K4 length (SHIFT: steps) · ERASE + pad delete", 16f, 196f, label)
@@ -252,7 +299,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         } else {
             l.drawText("SCENE", 16f, 52f, title)
             val cur = p.currentScene
-            l.drawText(if (cur >= 0) "Scene ${cur + 1}" else "No scene", 16f, 82f, big)
+            l.drawText(if (cur >= 0) slotTitle(cur) + (if (slotTitle(cur) != name(cur)) "  (${name(cur)})" else "") else "No scene", 16f, 82f, big)
             p.scenes.getOrNull(cur)?.let { sc ->
                 val txt = (0 until 8).joinToString("  ") { gi -> "${'A' + gi}:${if (sc[gi] >= 0) "${sc[gi] + 1}" else "–"}" }
                 l.drawText(txt, 16f, 100f, label)
@@ -277,9 +324,12 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
             val x = 8f + c * (w + 4f)
             val y = 38f + row * (h + 4f)
             val rect = RectF(x, y, x + w, y + h)
-            r.drawRoundRect(rect, 5f, 5f, when { isCurrent(i) -> fill; has(i) -> dim; else -> empty })
+            val ci = Mk3Colors.rgb(colourOf(i))
+            val fillI = if (ci == col) fill else Theme.fill(ci)
+            val dimI = if (ci == col) dim else Theme.fill(android.graphics.Color.rgb(android.graphics.Color.red(ci) / 3 + 12, android.graphics.Color.green(ci) / 3 + 12, android.graphics.Color.blue(ci) / 3 + 16))
+            r.drawRoundRect(rect, 5f, 5f, when { isCurrent(i) -> fillI; has(i) -> dimI; else -> empty })
             if (isQueued(i) && (now / 200) % 2 == 0L) r.drawRoundRect(rect, 5f, 5f, ring)
-            r.drawText(name(i), x + w / 2, y + 24f, if (has(i)) cellName else cellDim)
+            r.drawText(if (has(i)) slotTitle(i).take(11) else name(i), x + w / 2, y + 24f, if (has(i)) cellName else cellDim)
             if (kind == Kind.PATTERN && has(i)) r.drawText(lengthText(p.patterns[g][i]!!.length), x + w / 2, y + 42f, cellDim)
         }
     }

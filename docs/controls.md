@@ -284,6 +284,10 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 - PATTERN mode: D5 create (next free slot), D6 delete, K4 length. SCENE mode: D2 update the
   scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +
   D1 pins them. Double: SHIFT + DUPLICATE; clear: SHIFT + pad 9.
+- Names and colours (PATTERN and SCENE mode): SHIFT + D5 names the current pattern / scene (the
+  same name editor as FILE); SHIFT + D6 shows the 16 colours on the pads, hit one to colour it,
+  SHIFT + D6 again sets it back to the group's colour. Names show on the slot pads and in the
+  arranger, and are saved with the project and with saved groups.
 - STEP mode: ◀ ▶ move through the bars of longer patterns; FOLLOW makes the page follow the
   playhead. Recording into a group without a pattern creates one. Hold a step and turn the
   encoder: VOLUME active = its velocity, SWING = its position, TEMPO = its pitch (an existing
