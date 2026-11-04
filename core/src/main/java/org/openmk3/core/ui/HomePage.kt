@@ -43,6 +43,7 @@ class HomePage(ui: Ui) : Page(ui) {
     }
     @Volatile private var erase = false
     @Volatile private var select = false
+    @Volatile private var restartHeld = false
     @Volatile private var mute = false
     @Volatile private var solo = false
     private val rec get() = ui.rec
@@ -300,6 +301,11 @@ class HomePage(ui: Ui) : Page(ui) {
             else -> { // STEP mode (pads = steps of the step grid)
                 val pos = padPos(slot)
                 if (pos >= pattern.length(ui.group)) return
+                if (restartHeld && ui.engine.playing) {  // RESTART + step: the playhead jumps there
+                    p.jumpTo(ui.group, kotlin.math.floor(pos).toInt())
+                    message("Playhead → step ${kotlin.math.floor(pos).toInt() + 1}")
+                    return
+                }
                 val sound = sd(selected)
                 stepEdited = false
                 val cell = noteAtPos(sound, pos)
@@ -347,6 +353,7 @@ class HomePage(ui: Ui) : Page(ui) {
             }
             "MUTE" -> mute = down
             "SOLO" -> solo = down
+            "RESTART" -> restartHeld = down
         }
         if (!down) return
         val e = ui.engine

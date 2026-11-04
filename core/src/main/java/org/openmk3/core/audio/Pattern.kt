@@ -254,6 +254,17 @@ class Pattern {
     /** Step each group is playing (-1 when stopped). */
     fun stepOf(g: Int) = f.get(OFF_GSTEP + g).toInt()
 
+    /**
+     * Moves the playhead: group [g]'s pattern carries on from [step] at the next 16th, and every
+     * other group moves by the same amount so they stay in time with each other.
+     */
+    fun jumpTo(g: Int, step: Int) {
+        val next = f.get(OFF_NOW).toLong() + 1
+        val o = f.get(OFF_GORIGIN + g).toLong()
+        val shift = (next - step) - o
+        for (k in 0 until GROUPS) f.put(OFF_GORIGIN + k, (f.get(OFF_GORIGIN + k).toLong() + shift).toFloat())
+    }
+
     private fun cur(g: Int) = current[g].takeIf { it >= 0 }?.let { patterns[g][it] }
     private fun bankBase(g: Int, b: Int) = OFF_BANKS + (g * 2 + b) * BANK
     private fun active(g: Int) = if (f.get(OFF_ACTIVE + g) > 0.5f) 1 else 0
