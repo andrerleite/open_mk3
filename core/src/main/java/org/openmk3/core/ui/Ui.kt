@@ -520,6 +520,73 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         AppLog.i("Group ${'A' + from} copied to ${'A' + to}")
     }
 
+    /** Exchanges everything that makes up two sounds (sample, settings, name, synth patch, zones, effects). */
+    private fun swapSoundSlots(a: Int, b: Int) {
+        val e = engine
+        val ka = e.kit[a]; e.setSample(a, e.kit[b]); e.setSample(b, ka)
+        for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) { val t = e.params[a, i]; e.params[a, i] = e.params[b, i]; e.params[b, i] = t }
+        val nm = org.openmk3.core.audio.Names.sound; val t = nm[a]; nm[a] = nm[b]; nm[b] = t
+        e.poly.swap(a, b)
+        e.zones.swap(a, b)
+        swapFxChains(a, b)
+    }
+
+    private fun swapFxChains(x: Int, y: Int) {
+        val e = engine
+        val fx = org.openmk3.core.audio.FxParams
+        for (k in 0 until fx.SLOTS) {
+            val vx = FloatArray(fx.PER_SLOT) { e.fx[x, k, it] }; val vy = FloatArray(fx.PER_SLOT) { e.fx[y, k, it] }
+            val tx = e.fx.type(x, k); val ty = e.fx.type(y, k)
+            if (tx != ty) { e.setFx(x, k, ty); e.setFx(y, k, tx) }
+            for (i in 0 until fx.PER_SLOT) { e.fx[x, k, i] = vy[i]; e.fx[y, k, i] = vx[i] }
+        }
+        e.fx.save(ctx)
+    }
+
+    /** SHIFT + target pad while DUPLICATE is held: two sounds of a group change places (notes follow). */
+    fun swapSounds(a: Int, b: Int) {
+        if (a == b) return
+        swapSoundSlots(a, b)
+        engine.pattern.swapSounds(a, b)
+        remapMacros { s -> if (s == a) b else if (s == b) a else s }
+        org.openmk3.core.audio.Names.save(ctx)
+        saveAll()
+        AppLog.i("Sounds ${soundLabelOf(a)} and ${soundLabelOf(b)} swapped")
+    }
+
+    /** Macros point at sounds by number: keeps them on the same sounds after a swap. */
+    private fun remapMacros(f: (Int) -> Int) {
+        for (m in macros) for (i in 0 until 8) if (m[i * 2] >= 0) m[i * 2] = f(m[i * 2])
+        saveMacros()
+    }
+
+    private fun soundLabelOf(s: Int) = "${'A' + s / 16}${s % 16 + 1}"
+
+    /** DUPLICATE + group + SHIFT + group: two groups change places (sounds, patterns, mixer, effects, colour, name). */
+    fun groupSwap(x: Int, y: Int) {
+        if (x == y) return
+        for (k in 0 until 16) swapSoundSlots(x * 16 + k, y * 16 + k)
+        engine.pattern.swapGroups(x, y)
+        val mt = macros[x].copyOf(); macros[y].copyInto(macros[x]); mt.copyInto(macros[y])
+        remapMacros { s -> if (s / 16 == x) y * 16 + s % 16 else if (s / 16 == y) x * 16 + s % 16 else s }
+        swapFxChains(org.openmk3.core.audio.FxParams.GROUP0 + x, org.openmk3.core.audio.FxParams.GROUP0 + y)
+        val c = Colours.group[x]; Colours.group[x] = Colours.group[y]; Colours.group[y] = c; Colours.save(ctx)
+        val gn = org.openmk3.core.audio.Names.group; val t = gn[x]; gn[x] = gn[y]; gn[y] = t
+        org.openmk3.core.audio.Names.save(ctx)
+        saveAll()
+        AppLog.i("Groups ${'A' + x} and ${'A' + y} swapped")
+    }
+
+    /** Resets one sound: built-in sample, default settings, no synth patch, zones or effects (its notes stay). */
+    fun soundReset(s: Int) {
+        val e = engine
+        e.resetSlot(s); e.params.reset(s); e.poly.reset(s); e.zones.clear(s)
+        for (k in 0 until org.openmk3.core.audio.FxParams.SLOTS) if (e.fx.type(s, k) != org.openmk3.core.audio.FxParams.NONE) e.setFx(s, k, org.openmk3.core.audio.FxParams.NONE)
+        org.openmk3.core.audio.Names.sound[s] = ""; org.openmk3.core.audio.Names.save(ctx)
+        saveAll()
+        AppLog.i("Sound ${soundLabelOf(s)} reset")
+    }
+
     /** Clears a group: its sounds go back to the built-in kit and its patterns are removed. */
     fun groupClear(g: Int) {
         val e = engine
@@ -920,10 +987,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         if (name != null && name.startsWith("GROUP ") && name.length == 7) {
             heldGroup = if (down) name[6] - 'A' else -1
             // DUPLICATE + group + group: copy a group · ERASE + group: clear it (UNDO brings it back)
-            if (down && !page.customLeds && (dupHeld || eraseHeld) && !shiftHeld) {
+            // (DUPLICATE + group + SHIFT + group: the two groups change places)
+            if (down && !page.customLeds && (dupHeld || eraseHeld) && (!shiftHeld || (dupHeld && dupGroup >= 0))) {
                 val g = name[6] - 'A'
                 if (eraseHeld) groupClear(g)
-                else if (dupGroup < 0) { dupGroup = g; AppLog.i("Duplicate group ${'A' + g} to… (press the target group)") }
+                else if (dupGroup < 0) { dupGroup = g; AppLog.i("Duplicate group ${'A' + g} to… (press the target group; SHIFT + group swaps)") }
+                else if (shiftHeld) { groupSwap(dupGroup, g); toast("Groups ${'A' + dupGroup} ⇄ ${'A' + g}"); dupGroup = -1 }
                 else { groupCopy(dupGroup, g); dupGroup = -1 }
                 dirty = true
                 return@post

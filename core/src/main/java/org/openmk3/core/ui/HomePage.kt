@@ -280,8 +280,12 @@ class HomePage(ui: Ui) : Page(ui) {
         when {
             duplicate -> {
                 if (dupSource < 0) { dupSource = slot; message("Duplicate ${ui.padLabel(slot)} to… (hit the target pad)") }
+                else if (ui.shiftHeld) {  // SHIFT on the target: the two sounds change places
+                    ui.swapSounds(sd(dupSource), sd(slot)); message("${ui.padLabel(dupSource)} ⇄ ${ui.padLabel(slot)}"); changed(); dupSource = -1
+                }
                 else { duplicateSound(dupSource, slot); dupSource = -1 }
             }
+            select && erase -> { ui.soundReset(sd(slot)); message("${ui.padLabel(slot)} reset (its notes stay)"); changed() }
             select -> selected = slot
             mute -> { p.mute[sd(slot)] = !p.mute[sd(slot)]; changed() }
             solo -> { p.solo[sd(slot)] = !p.solo[sd(slot)]; changed() }

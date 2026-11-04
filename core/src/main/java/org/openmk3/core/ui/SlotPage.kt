@@ -13,7 +13,7 @@ import org.openmk3.core.mk3.Mk3Colors
  * the 16 scenes (SCENE):
  *  - pad with content: select (while playing it starts when the current pattern ends)
  *  - empty pad: new empty pattern / new scene from the patterns playing now
- *  - ERASE + pad: delete · DUPLICATE + source pad + target pad: duplicate
+ *  - ERASE + pad: delete · DUPLICATE + source pad + target pad: duplicate (SHIFT + target: swap)
  *  - GROUP buttons (PATTERN): another group
  * D7 / D8: previous / next bank of 16 (4 banks).
  * PATTERN: K1 length (16 steps per turn notch; SHIFT: single steps), D5 duplicate to the next
@@ -151,6 +151,10 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
             dup -> {
                 if (dupSource < 0) {
                     if (has(i)) { dupSource = i; message = "Duplicate ${name(i)} to… (hit the target pad)" }
+                } else if (shift) {  // SHIFT on the target: the two slots change places
+                    if (kind == Kind.PATTERN) p.swapPatterns(g, dupSource, i) else p.swapScenes(dupSource, i)
+                    message = "${name(dupSource)} ⇄ ${name(i)}"
+                    dupSource = -1
                 } else {
                     if (kind == Kind.PATTERN) p.duplicatePattern(g, dupSource, i)
                     else p.scenes[dupSource]?.let { p.scenes[i] = it.copyOf(); p.sceneNames[i] = p.sceneNames[dupSource]; p.sceneColours[i] = p.sceneColours[dupSource] }

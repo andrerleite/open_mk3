@@ -656,6 +656,67 @@ class Pattern {
         refreshGroup(g)
     }
 
+    /** Exchanges two sounds of one group in every pattern of the group (notes, automation, mute / solo). */
+    fun swapSounds(a: Int, b: Int) {
+        val g = a / PADS
+        if (b / PADS != g || a == b) return
+        val pa = a % PADS; val pb = b % PADS
+        for (d in patterns[g]) {
+            if (d == null) continue
+            for (arr in listOf(d.vel, d.note, d.xvel, d.xnote, d.len, d.off)) { val t = arr[pa].copyOf(); arr[pb].copyInto(arr[pa]); t.copyInto(arr[pb]) }
+            val la = d.lanes.filter { it.pad == pa }; val lb = d.lanes.filter { it.pad == pb }
+            d.lanes.removeAll(la + lb)
+            for (ln in la) d.lanes.add(PatternData.Lane(pb, ln.param, ln.values))
+            for (ln in lb) d.lanes.add(PatternData.Lane(pa, ln.param, ln.values))
+        }
+        val m = mute[a]; mute[a] = mute[b]; mute[b] = m
+        val s = solo[a]; solo[a] = solo[b]; solo[b] = s
+        refreshGroup(g)
+    }
+
+    /** Exchanges two groups' patterns, mixer settings, mute / solo and their places in the scenes. */
+    fun swapGroups(x: Int, y: Int) {
+        if (x == y) return
+        for (i in 0 until SLOTS) { val t = patterns[x][i]; patterns[x][i] = patterns[y][i]; patterns[y][i] = t }
+        val c = current[x]; current[x] = current[y]; current[y] = c
+        queued[x] = -1; queued[y] = -1; f.put(OFF_PENDING + x, -1f); f.put(OFF_PENDING + y, -1f)
+        val v = groupVolume(x); setGroupVolume(x, groupVolume(y)); setGroupVolume(y, v)
+        val pn = groupPan(x); setGroupPan(x, groupPan(y)); setGroupPan(y, pn)
+        val sw = groupSwing(x); setGroupSwing(x, groupSwing(y)); setGroupSwing(y, sw)
+        for (k in 0..1) { val t = groupSend(x, k); setGroupSend(x, k, groupSend(y, k)); setGroupSend(y, k, t) }
+        val gm = groupMute[x]; groupMute[x] = groupMute[y]; groupMute[y] = gm
+        val gs = groupSolo[x]; groupSolo[x] = groupSolo[y]; groupSolo[y] = gs
+        for (k in 0 until PADS) {
+            val a = x * PADS + k; val b = y * PADS + k
+            val m = mute[a]; mute[a] = mute[b]; mute[b] = m
+            val s = solo[a]; solo[a] = solo[b]; solo[b] = s
+        }
+        for (sc in scenes) if (sc != null) { val t = sc[x]; sc[x] = sc[y]; sc[y] = t }
+        refreshGroup(x); refreshGroup(y)
+    }
+
+    /** Pattern slots [a] and [b] of group [g] change places (scenes follow). */
+    fun swapPatterns(g: Int, a: Int, b: Int) {
+        if (a == b) return
+        val t = patterns[g][a]; patterns[g][a] = patterns[g][b]; patterns[g][b] = t
+        if (current[g] == a) current[g] = b else if (current[g] == b) current[g] = a
+        if (queued[g] == a || queued[g] == b) { queued[g] = -1; f.put(OFF_PENDING + g, -1f) }
+        for (sc in scenes) if (sc != null) { if (sc[g] == a) sc[g] = b else if (sc[g] == b) sc[g] = a }
+    }
+
+    /** Moves scene [from] to slot [to], exchanging it with what is there (the song follows). */
+    fun swapScenes(from: Int, to: Int) {
+        if (from == to) return
+        val t = scenes[from]; scenes[from] = scenes[to]; scenes[to] = t
+        val n = sceneNames[from]; sceneNames[from] = sceneNames[to]; sceneNames[to] = n
+        val c = sceneColours[from]; sceneColours[from] = sceneColours[to]; sceneColours[to] = c
+        for (i in song.indices) {
+            val sc = song[i] % 1000; val bars = song[i] / 1000
+            if (sc == from) song[i] = to + 1000 * bars else if (sc == to) song[i] = from + 1000 * bars
+        }
+        if (currentScene == from) currentScene = to else if (currentScene == to) currentScene = from
+    }
+
     /** Copies a sound's notes to another sound of the same group (DUPLICATE in pad mode). */
     fun copySound(from: Int, to: Int) {
         val g = from / PADS

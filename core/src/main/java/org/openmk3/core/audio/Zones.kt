@@ -139,6 +139,13 @@ class Zones(private val native: NativeEngine) {
         push(sound)
     }
 
+    /** Exchanges two sounds' zones. */
+    fun swap(a: Int, b: Int) {
+        if (a == b) return
+        val t = z[a].toList(); z[a].clear(); z[a].addAll(z[b]); z[b].clear(); z[b].addAll(t)
+        push(a); push(b)
+    }
+
     fun copy(from: Int, to: Int) {
         z[to].clear()
         for (zn in z[from]) z[to].add(Zone(zn.sample, zn.root, zn.lo, zn.hi, zn.vlo, zn.vhi).also { it.copySettings(zn) })

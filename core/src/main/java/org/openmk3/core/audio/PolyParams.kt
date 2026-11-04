@@ -57,6 +57,11 @@ class PolyParams(private val native: NativeEngine) {
         patchName[sound] = p.name
     }
 
+    fun swap(a: Int, b: Int) {
+        for (i in 0 until count) { val t = v[a][i]; this[a, i] = v[b][i]; this[b, i] = t }
+        val n = patchName[a]; patchName[a] = patchName[b]; patchName[b] = n
+    }
+
     fun copy(from: Int, to: Int) {
         for (i in 0 until count) this[to, i] = v[from][i]
         patchName[to] = patchName[from]
