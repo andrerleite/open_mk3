@@ -707,11 +707,27 @@ class Pattern {
         currentScene = idx
     }
 
-    /** Starts scene [idx]: each group switches to its pattern (or stops) at its loop end. */
+    /**
+     * PERFORM grid (SHIFT + FOLLOW, D2): when a launched scene takes over, in 16th steps.
+     * 0 = when each group's pattern ends (the scene's length), -1 = at once (next step).
+     */
+    var performGrid = 0
+    /** RETRIGGER (SCENE mode, K1): a scene switched mid-pattern starts from its beginning. */
+    var retrigger = false
+
+    /** Starts scene [idx]: each group switches to its pattern (or stops) on the perform grid. */
     fun launchScene(idx: Int, playing: Boolean) {
         val sc = scenes[idx] ?: return
         currentScene = idx
         for (g in 0 until GROUPS) selectPattern(g, sc[g], playing, create = false)
+        if (playing && performGrid != 0) {
+            // all groups switch together at the next grid point
+            val now = f.get(OFF_NOW).toInt()
+            val at = if (performGrid < 0) now + 1 else (now / performGrid + 1) * performGrid
+            // without RETRIGGER the new patterns carry on from the same position (engine flag)
+            f.put(OFF_PFX + 3, if (retrigger) 0f else 1f)
+            f.put(OFF_SWITCHAT, at.toFloat())
+        }
     }
 
     fun deleteScene(idx: Int) {
@@ -851,6 +867,8 @@ class Pattern {
         put("metronome", metronome)
         put("metronomeLevel", metronomeLevel.toDouble())
         put("countInBars", countInBars)
+        put("performGrid", performGrid)
+        put("retrigger", retrigger)
         put("mute", JSONArray(mute.toList()))
         put("solo", JSONArray(solo.toList()))
         put("groupMute", JSONArray(groupMute.toList()))
@@ -883,6 +901,8 @@ class Pattern {
         metronome = j.optBoolean("metronome", false)
         metronomeLevel = j.optDouble("metronomeLevel", 0.7).toFloat()
         countInBars = j.optInt("countInBars", 1)
+        performGrid = j.optInt("performGrid", 0)
+        retrigger = j.optBoolean("retrigger", false)
         j.optJSONArray("mute")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) mute[s] = a.getBoolean(s) }
         j.optJSONArray("solo")?.let { a -> for (s in 0 until minOf(SOUNDS, a.length())) solo[s] = a.getBoolean(s) }
         j.optJSONArray("groupMute")?.let { a -> for (g in 0 until minOf(GROUPS, a.length())) groupMute[g] = a.getBoolean(g) }

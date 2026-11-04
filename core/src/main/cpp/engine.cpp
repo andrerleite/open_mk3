@@ -1263,6 +1263,9 @@ void Engine::runSequencer(int frames) {
         // song sections: every queued pattern starts together at this step
         const bool switchAll = p[OFF_SWITCHAT] >= 0.f && int64_t(p[OFF_SWITCHAT]) <= n;
         if (switchAll) p[OFF_SWITCHAT] = -1.f;
+        // OFF_PFX + 3: this switch is a scene launched on the perform grid without RETRIGGER
+        // (it keeps each group's position); cleared after it (song sections always restart)
+        const bool clearKeep = switchAll;
         for (int g = 0; g < kGroups; g++) {
             // queued pattern: switch when this group's pattern starts over
             int ab = activeBank(p, g);
@@ -1271,7 +1274,11 @@ void Engine::runSequencer(int frames) {
             const int64_t origin = int64_t(p[OFF_GORIGIN + g]);
             if (switchAll || (n - origin) % len == 0) {
                 int pend = int(p[OFF_PENDING + g]);
-                p[OFF_GORIGIN + g] = float(n);
+                // a switch in the middle of a pattern (perform grid) keeps the groove: the new
+                // pattern carries on from the same position, unless RETRIGGER restarts it
+                const bool keepPhase = switchAll && (n - origin) % len != 0 && p[OFF_PFX + 3] > 0.5f;
+                if (!keepPhase) p[OFF_GORIGIN + g] = float(n);
+                if (clearKeep && g == kGroups - 1) p[OFF_PFX + 3] = 0.f;
                 if (pend >= 0) {
                     p[OFF_ACTIVE + g] = float(pend);
                     p[OFF_PENDING + g] = -1.f;

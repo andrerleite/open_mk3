@@ -7,6 +7,7 @@ import org.openmk3.core.mk3.Mk3Colors
 
 /**
  * Grids (SHIFT + FOLLOW; stays on until FOLLOW is pressed again).
+ *  D2 PERFORM: when a launched scene takes over (its end, 1 bar … 1/16, or at once)
  *  D3 ARRANGE: pattern length steps (K4 in PATTERN mode)
  *  D4 STEP: what one STEP pad is (1/4 … 1/64, triplets)
  *  D5 NUDGE: how far EVENTS K1 moves notes
@@ -15,13 +16,14 @@ import org.openmk3.core.mk3.Mk3Colors
  */
 class GridPage(ui: Ui, private val back: Page) : Page(ui) {
 
-    private enum class Which { ARRANGE, STEP, NUDGE }
+    private enum class Which { PERFORM, ARRANGE, STEP, NUDGE }
 
     override val customPads = true
 
     private companion object {
         var which = Which.STEP
         // in 16th steps
+        val PERFORM = listOf("SCENE" to 0f, "1 BAR" to 16f, "1/2" to 8f, "1/4" to 4f, "1/8" to 2f, "1/16" to 1f, "OFF" to -1f)
         val ARRANGE = listOf("1 BAR" to 16f, "1/2" to 8f, "1/4" to 4f, "1/8" to 2f, "1/16" to 1f)
         val FINE = listOf("1/4" to 4f, "1/8" to 2f, "1/16" to 1f, "1/32" to 0.5f, "1/64" to 0.25f,
             "1/4T" to 8f / 3f, "1/8T" to 4f / 3f, "1/16T" to 2f / 3f, "1/32T" to 1f / 3f)
@@ -38,8 +40,9 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
 
     fun back() = ui.show(back)
 
-    private fun list() = if (which == Which.ARRANGE) ARRANGE else FINE
+    private fun list() = when (which) { Which.ARRANGE -> ARRANGE; Which.PERFORM -> PERFORM; else -> FINE }
     private fun current(): Float = when (which) {
+        Which.PERFORM -> ui.engine.pattern.performGrid.toFloat()
         Which.ARRANGE -> ui.arrangeGrid.toFloat()
         Which.STEP -> ui.stepGrid
         Which.NUDGE -> ui.nudgeGrid
@@ -47,6 +50,7 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
 
     override fun lights(l: Lights) {
         l.set("FOLLOW", true)
+        l.set("D2", which == Which.PERFORM)
         l.set("D3", which == Which.ARRANGE)
         l.set("D4", which == Which.STEP)
         l.set("D5", which == Which.NUDGE)
@@ -55,6 +59,7 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
     override fun onButton(name: String?, bit: Int, down: Boolean) {
         if (!down) return
         when (name) {
+            "D2" -> which = Which.PERFORM
             "D3" -> which = Which.ARRANGE
             "D4" -> which = Which.STEP
             "D5" -> which = Which.NUDGE
@@ -74,6 +79,7 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         val v = list().getOrNull(slot)?.second ?: return
         when (which) {
+            Which.PERFORM -> { ui.engine.pattern.performGrid = v.toInt(); ui.engine.pattern.save(ui.ctx) }
             Which.ARRANGE -> ui.arrangeGrid = v.toInt()
             Which.STEP -> ui.stepGrid = v
             Which.NUDGE -> ui.nudgeGrid = v
@@ -93,12 +99,14 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
         }
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
+        l.drawText("PERFORM", 180f, 24f, if (which == Which.PERFORM) dOn else dLabel)
         l.drawText("ARRANGE", 300f, 24f, if (which == Which.ARRANGE) dOn else dLabel)
         l.drawText("STEP", 420f, 24f, if (which == Which.STEP) dOn else dLabel)
         r.drawText("NUDGE", 60f, 24f, if (which == Which.NUDGE) dOn else dLabel)
         l.drawText("GRID", 16f, 60f, title)
         val name = items.firstOrNull { kotlin.math.abs(it.second - cur) < 0.001f }?.first ?: "?"
         l.drawText(when (which) {
+            Which.PERFORM -> "A launched scene takes over: " + if (name == "SCENE") "at its end" else if (name == "OFF") "at once" else "on the next $name"
             Which.ARRANGE -> "Pattern length steps: $name"
             Which.STEP -> "One STEP pad = $name"
             Which.NUDGE -> "EVENTS position moves by $name"

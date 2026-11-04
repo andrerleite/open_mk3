@@ -27,7 +27,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | TAP | Tap tempo | ✅ |
 | SHIFT + TAP (Metro) | Metronome on / off | ✅ |
 | FOLLOW | Step pages follow the playhead | ✅ |
-| SHIFT + FOLLOW (Grid) | Grids: D3 arrange (pattern length steps), D4 step (what a STEP pad is: 1/4 … 1/64, triplets), D5 nudge (EVENTS position); pads choose; K5 INPUT QUANTIZE (live recorded notes land on the STEP grid); FOLLOW: back | ✅ |
+| SHIFT + FOLLOW (Grid) | Grids: D2 perform (when a launched scene takes over: at the scene's end, on the next bar, 1/2, 1/4, 1/8, 1/16, or at once), D3 arrange (pattern length steps), D4 step (what a STEP pad is: 1/4 … 1/64, triplets), D5 nudge (EVENTS position); pads choose; K5 INPUT QUANTIZE (live recorded notes land on the STEP grid); FOLLOW: back | ✅ |
 
 ## Pad modes (buttons above the pads)
 
@@ -44,7 +44,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| SCENE | Hold: scenes on the pads (select / launch; empty pad = new scene from the patterns playing). Hold + D1 pins the mode. | ✅ |
+| SCENE | Hold: scenes on the pads (select / launch on the perform grid; empty pad = new scene from the patterns playing). K1 RETRIGGER: off (default) a scene switched mid-pattern carries on from the same position, on it starts from the top. Hold + D1 pins the mode. | ✅ |
 | SHIFT + SCENE (Section) | Song view (same as ARRANGER) | ✅ |
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Hold (D1 pins). Pads select / deselect all notes of a sound (dim: has notes, lit: all selected), D5 all, D6 none, D7 / D8 (or ▲ ▼) previous / next sound, ERASE + pad erases. D2 EDIT / SELECT. SELECT: K1 START / K2 END select the focused sound's notes in that range (step grid), K4 EVENT picks single notes, ◀ ▶ previous / next note. EDIT: K1 POSITION (nudge grid; SHIFT fine), K2 PITCH, K3 VELOCITY, K4 LENGTH (step grid; SHIFT fine) on the selected notes only ((MULTI) when several); ◀ ▶ page. Selected notes are outlined on the right screen. SHIFT + pads act on the selected notes (none selected: the whole group): 5 / 6 quantise / 50 %, 7 / 8 nudge, 9 clear, 11 copy, 12 paste (same places, also into another pattern), 13–16 transpose; 1 / 2 undo / redo | ✅ |

@@ -203,6 +203,15 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     }
 
     override fun onKnob(knob: Int, delta: Int) {
+        if (kind == Kind.SCENE && knob == 0) {  // K1 RETRIGGER
+            lenAcc += delta
+            if (kotlin.math.abs(lenAcc) < 25) return
+            p.retrigger = lenAcc > 0
+            lenAcc = 0
+            message = "Retrigger ${if (p.retrigger) "on: scenes start from the top" else "off: scenes carry on in time"}"
+            p.save(ui.ctx)
+            return
+        }
         if (kind != Kind.PATTERN || knob != 3) return  // K4 LENGTH
         lenAcc += delta
         if (kotlin.math.abs(lenAcc) < 25) return
@@ -248,6 +257,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
                 val txt = (0 until 8).joinToString("  ") { gi -> "${'A' + gi}:${if (sc[gi] >= 0) "${sc[gi] + 1}" else "–"}" }
                 l.drawText(txt, 16f, 100f, label)
             }
+            val grid = when (val pg = p.performGrid) { 0 -> "at the scene's end"; -1 -> "at once"; 16 -> "on the next bar"; else -> "on the next 1/${16 / pg}" }
+            l.drawText("K1 RETRIGGER ${if (p.retrigger) "ON" else "OFF"} · switches $grid", 16f, 124f, label)
             l.drawText("Empty pad: new scene from the patterns playing", 16f, 196f, label)
             l.drawText("ERASE + pad delete · DUPLICATE + pad + pad", 16f, 216f, label)
         }
