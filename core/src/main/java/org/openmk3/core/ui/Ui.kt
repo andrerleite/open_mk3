@@ -999,6 +999,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             heldGroup = if (down) name[6] - 'A' else -1
             // DUPLICATE + group + group: copy a group · ERASE + group: clear it (UNDO brings it back)
             // (DUPLICATE + group + SHIFT + group: the two groups change places)
+            // (a sound waiting to be duplicated: the GROUP button just changes group, for a copy there)
+            if (down && dupHeld && (page as? HomePage)?.soundCopyPending == true) { selectGroup(name[6] - 'A'); dirty = true; return@post }
             if (down && !page.customLeds && (dupHeld || eraseHeld) && (!shiftHeld || (dupHeld && dupGroup >= 0))) {
                 val g = name[6] - 'A'
                 if (eraseHeld) groupClear(g)

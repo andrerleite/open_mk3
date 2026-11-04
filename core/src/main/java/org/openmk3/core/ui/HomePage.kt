@@ -280,11 +280,13 @@ class HomePage(ui: Ui) : Page(ui) {
         val p = pattern
         when {
             duplicate -> {
-                if (dupSource < 0) { dupSource = slot; message("Duplicate ${ui.padLabel(slot)} to… (hit the target pad)") }
+                if (dupSource < 0) { dupSource = sd(slot); message("Duplicate ${ui.padLabel(slot)} to… (hit the target pad; a GROUP button picks another group)") }
                 else if (ui.shiftHeld) {  // SHIFT on the target: the two sounds change places
-                    ui.swapSounds(sd(dupSource), sd(slot)); message("${ui.padLabel(dupSource)} ⇄ ${ui.padLabel(slot)}"); changed(); dupSource = -1
+                    if (dupSource / 16 != ui.group) { duplicateSound(dupSource, sd(slot)); message("Swapping works within a group: copied instead") }
+                    else { ui.swapSounds(dupSource, sd(slot)); message("${org.openmk3.core.audio.soundLabel(dupSource)} ⇄ ${ui.padLabel(slot)}"); changed() }
+                    dupSource = -1
                 }
-                else { duplicateSound(dupSource, slot); dupSource = -1 }
+                else { duplicateSound(dupSource, sd(slot)); dupSource = -1 }
             }
             select && erase -> { ui.soundReset(sd(slot)); message("${ui.padLabel(slot)} reset (its notes stay)"); changed() }
             select -> selected = slot
@@ -594,7 +596,10 @@ class HomePage(ui: Ui) : Page(ui) {
 
     // ---- DUPLICATE in pad mode, SHIFT + pad edits ----
     private var duplicate = false
+    /** DUPLICATE: the sound picked as the source (sound number, so it can go to another group), -1 none. */
     private var dupSource = -1
+    /** Read by the GROUP buttons: while a sound is waiting to be duplicated they only change group. */
+    val soundCopyPending get() = duplicate && dupSource >= 0
     private var msg = ""
     private var msgAt = 0L
 
@@ -605,10 +610,9 @@ class HomePage(ui: Ui) : Page(ui) {
     }
 
     /** DUPLICATE + pad + pad: copies a sound (sample, settings, colour and its notes). */
-    private fun duplicateSound(from: Int, to: Int) {
+    private fun duplicateSound(a: Int, b: Int) {
+        if (a == b) return
         val e = ui.engine
-        val a = sd(from)
-        val b = sd(to)
         e.setSample(b, e.kit[a])
         for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
         org.openmk3.core.audio.Names.sound[b] = org.openmk3.core.audio.Names.sound[a]; org.openmk3.core.audio.Names.save(ui.ctx)
@@ -616,11 +620,11 @@ class HomePage(ui: Ui) : Page(ui) {
         e.zones.copy(a, b)
         e.zones.save(ui.ctx)
         e.poly.save(ui.ctx)
-        pattern.copySound(a, b)
+        if (a / 16 == b / 16) pattern.copySound(a, b)  // notes come along within a group
         e.params.save(ui.ctx)
         org.openmk3.core.audio.KitStore.save(ui.ctx, e.kit)
         changed()
-        message("${ui.padLabel(from)} → ${ui.padLabel(to)}")
+        message("${org.openmk3.core.audio.soundLabel(a)} → ${org.openmk3.core.audio.soundLabel(b)}")
     }
 
     /** SHIFT + pads (labels printed on the pads). Returns true when handled. */
