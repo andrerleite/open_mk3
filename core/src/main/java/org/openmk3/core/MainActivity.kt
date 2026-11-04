@@ -253,7 +253,7 @@ class MainActivity : Activity() {
         fun link(label: String, onClick: () -> Unit) = text(14f, accent, bold = true).apply {
             text = label; setPadding(0, (8 * dp).toInt(), (24 * dp).toInt(), (8 * dp).toInt()); setOnClickListener { onClick() }
         }
-        links.addView(link("Share log") { exportLog(true) })
+        links.addView(link("Save log") { exportLog(false) })
         links.addView(link("Advanced") { advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE })
         links.addView(link("Show log") {
             logBox.visibility = if (logBox.visibility == View.VISIBLE) View.GONE else View.VISIBLE

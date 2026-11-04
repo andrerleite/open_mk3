@@ -357,6 +357,22 @@ struct PhoneMonitor {
 };
 static PhoneMonitor gMonitor;
 
+/**
+ * Why a sound was cut before its end (read by the app's monitor and logged): a sound that ends
+ * early while the song plays is otherwise a mystery. Only cuts with more than 0.25 s left count.
+ */
+struct CutLog {
+    static constexpr int kN = 64;
+    std::atomic<uint32_t> w{0};
+    int slot[kN] = {}, reason[kN] = {}, by[kN] = {}, seq[kN] = {};  // reason 1 polyphony, 2 choke, 3 voice taken
+    void push(int s, int r, int b, bool fromSeq) {
+        const uint32_t i = w.load(std::memory_order_relaxed);
+        slot[i % kN] = s; reason[i % kN] = r; by[i % kN] = b; seq[i % kN] = fromSeq ? 1 : 0;
+        w.store(i + 1, std::memory_order_release);
+    }
+};
+static CutLog gCuts;
+
 static void recOnBar(int delay);
 
 /** A zone's mapping and settings before anything is set: full sample, as the sound. */
@@ -988,22 +1004,32 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
             if (!oldestOfSlot || v.age < oldestOfSlot->age) oldestOfSlot = &v;
         }
         if (count < poly || !oldestOfSlot) break;
+        if (!oldestOfSlot->rev && oldestOfSlot->endF - oldestOfSlot->pos > kSampleRate / 4 && !oldestOfSlot->released)
+            gCuts.push(slot, 1, slot, fromSeq);
         oldestOfSlot->fadeOut = kFadeOut;
     }
     const int choke = P[P_CHOKE] > 0.5f ? std::clamp(int(P[P_CHOKE] + 0.5f), 1, 16) : s->choke;
     if (choke != 0) {
         // a sound silences the others of its choke group (e.g. closed hat -> open hat): fade, not cut
         for (auto& v : voices)
-            if (v.sample && v.slot != slot && v.choke == choke && v.fadeOut < 0) v.fadeOut = kFadeOut;
+            if (v.sample && v.slot != slot && v.choke == choke && v.fadeOut < 0) {
+                if (!v.rev && v.endF - v.pos > kSampleRate / 4) gCuts.push(v.slot, 2, slot, fromSeq);
+                v.fadeOut = kFadeOut;
+            }
     }
-    // A free voice, else the oldest one (with 32 voices this is rare).
+    // A free voice; if all are busy, the one that matters least: one already fading out, else a
+    // released one, else the quietest (never simply the oldest: that is often a long sample
+    // still playing in full)
     Voice* best = nullptr;
-    Voice* oldest = &voices[0];
-    for (auto& v : voices) {
-        if (!v.sample) { best = &v; break; }
-        if (v.age < oldest->age) oldest = &v;
+    for (auto& v : voices) if (!v.sample) { best = &v; break; }
+    if (!best) {
+        auto score = [](const Voice& v) {
+            if (v.fadeOut >= 0) return 0.f;
+            return (v.released ? 1.f : 2.f) + std::min(1.f, v.envLevel);
+        };
+        for (auto& v : voices) if (!best || score(v) < score(*best)) best = &v;
+        if (best->fadeOut < 0) gCuts.push(best->slot, 3, slot, fromSeq);
     }
-    if (!best) best = oldest;
     freeSynth(*best);
     int synthIdx = -1;
     int fmIdx = -1;
@@ -2921,6 +2947,22 @@ JNIEXPORT void JNICALL JNI_FN(nativeOutPhone)(JNIEnv*, jobject, jboolean on) {
 JNIEXPORT void JNICALL JNI_FN(nativeMonitor)(JNIEnv*, jobject, jboolean on, jfloat gain) {
     gMonitor.gain.store(gain);
     gMonitor.on.store(on == JNI_TRUE);
+}
+/** Cuts since [from] (a running count): [count, then slot, reason, by, fromSeq per cut]. */
+JNIEXPORT jintArray JNICALL JNI_FN(nativeTakeCuts)(JNIEnv* env, jobject, jint from) {
+    const uint32_t w = gCuts.w.load(std::memory_order_acquire);
+    uint32_t f = uint32_t(from);
+    if (w - f > uint32_t(CutLog::kN)) f = w - CutLog::kN;
+    const int n = int(w - f);
+    std::vector<jint> out(size_t(1 + n * 4));
+    out[0] = jint(w);
+    for (int k = 0; k < n; k++) {
+        const uint32_t i = (f + k) % CutLog::kN;
+        out[1 + k * 4] = gCuts.slot[i]; out[2 + k * 4] = gCuts.reason[i]; out[3 + k * 4] = gCuts.by[i]; out[4 + k * 4] = gCuts.seq[i];
+    }
+    jintArray a = env->NewIntArray(jsize(out.size()));
+    if (a) env->SetIntArrayRegion(a, 0, jsize(out.size()), out.data());
+    return a;
 }
 JNIEXPORT void JNICALL JNI_FN(nativeUsbStop)(JNIEnv*, jobject) { gUsb.stop(); }
 JNIEXPORT jboolean JNICALL JNI_FN(nativeUsbRunning)(JNIEnv*, jobject) { return gUsb.running.load() ? JNI_TRUE : JNI_FALSE; }

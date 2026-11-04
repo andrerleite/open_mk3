@@ -43,6 +43,8 @@ object NativeEngine {
                                 hidEp: Int, hidMax: Int): Boolean
     external fun nativeHidRead(buf: ByteArray, timeoutMs: Int): Int
     external fun nativeUsbStop()
+    /** Sounds cut before their end since [from]: [count, (slot, reason, by, fromSeq)…]. */
+    external fun nativeTakeCuts(from: Int): IntArray
     /** Output on the phone (the direct USB driver then sends the MK3 silence). */
     external fun nativeOutPhone(on: Boolean)
     /** Phone playback captured for sampling is also heard on the output, at [gain]. */
@@ -280,6 +282,7 @@ class AudioEngine(private val ctx: Context) {
         monitor = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "audio-monitor") }.apply {
             scheduleWithFixedDelay({
                 try {
+                    pollCuts()
                     pollHint()
                     if (n.nativeTune()) {
                         AppLog.i("Audio: stream error, reopened (buffer ${bufferFrames}fr)")
@@ -320,6 +323,7 @@ class AudioEngine(private val ctx: Context) {
                 try {
                     // Summarised at most once a second (this check runs every 250 ms, so a
                     // per-gap line would carry a misleadingly precise timestamp).
+                    pollCuts()
                     val late = n.nativeUsbLate()
                     val nowMs = System.currentTimeMillis()
                     if (late != lastLate && nowMs - lastGapLog >= 1000) {
@@ -419,6 +423,38 @@ class AudioEngine(private val ctx: Context) {
     val monitoring get() = phoneCaptureOn && monitorPhone && !outputPhone
 
     private fun updateMonitor() = n.nativeMonitor(monitoring, 1f)
+
+    // ---- why sounds end early (logged, at most every 2 s) ----
+    private var cutsFrom = 0
+    private var cutsLogged = 0L
+    private val cutCounts = LinkedHashMap<String, Int>()
+
+    private fun padName(s: Int) = if (s in 0 until Pattern.SOUNDS) "${'A' + s / 16}${s % 16 + 1}" else "preview"
+
+    private fun pollCuts() {
+        val a = n.nativeTakeCuts(cutsFrom)
+        if (a.isEmpty()) return
+        cutsFrom = a[0]
+        var k = 1
+        while (k + 3 < a.size) {
+            val (slot, reason, by, seq) = listOf(a[k], a[k + 1], a[k + 2], a[k + 3])
+            val src = if (seq == 1) "the sequencer" else "a pad"
+            val why = when (reason) {
+                1 -> "polyphony ${params[slot, SoundParams.POLY].toInt()}: a new note of ${padName(by)} from $src"
+                2 -> "choke group ${params[by, SoundParams.CHOKE].toInt().takeIf { it > 0 } ?: kit[by].chokeGroup}: ${padName(by)} played by $src"
+                else -> "all voices busy: its voice went to ${padName(by)}"
+            }
+            val key = "${padName(slot)} cut early by $why"
+            cutCounts[key] = (cutCounts[key] ?: 0) + 1
+            k += 4
+        }
+        val now = System.currentTimeMillis()
+        if (cutCounts.isNotEmpty() && now - cutsLogged > 2000) {
+            cutsLogged = now
+            for ((msg, c) in cutCounts) AppLog.i("Cut: $msg" + if (c > 1) " (×$c)" else "")
+            cutCounts.clear()
+        }
+    }
 
     fun stop() {
         monitor?.shutdownNow()
