@@ -1403,8 +1403,19 @@ void Engine::runRepeat(int frames) {
     const double end = startNow + frames / stepLen;
     const int gateFrames = std::max(32, int(rate * stepLen * std::clamp(double(repeatGate.load()), 0.05, 1.0)));
     const bool rec = recording.load(std::memory_order_relaxed) && playing && rpNext >= 0.0;
-    while (rpNext < end) {
-        int off = std::clamp(int(std::lround((rpNext - startNow) * stepLen)), 0, frames - 1);
+    // repeats and arp notes swing like the pattern (master swing plus the pad's group swing):
+    // odd 16ths come late (not recorded: the pattern applies its own swing when it plays them)
+    int swGroup = -1;
+    for (auto& hd : held) if (hd.slot >= 0) { swGroup = hd.slot / kPads; break; }
+    double swAmt = p ? double(p[OFF_SWING]) : 0.0;
+    if (p && swGroup >= 0 && swGroup < kGroups) swAmt += double(p[OFF_GSWING + swGroup]);
+    if (!(swAmt >= 0.0 && swAmt <= 0.9)) swAmt = 0.0;
+    auto sw = [&](double x) {
+        const double fl = std::floor(x + 1e-9);
+        return (std::fabs(x - fl) < 1e-6 && (int64_t(fl) & 1)) ? swAmt : 0.0;
+    };
+    while (rpNext + sw(rpNext) < end) {
+        int off = std::clamp(int(std::lround((rpNext + sw(rpNext) - startNow) * stepLen)), 0, frames - 1);
         const int tick = rpTick++;
         if (rhythm[tick % rhythmLen] != 'x') { rpNext += rate; continue; }  // a rest
         // velocity shape over groups of 4 ticks

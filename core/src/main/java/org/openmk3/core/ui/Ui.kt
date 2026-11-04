@@ -673,6 +673,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             engine.pattern.songTick(engine.playing)
             engine.pollHeld(selectedIndex)
             recordTick(now)
+            touchAutoWrite()
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
             else if (selectActive && page !is WizardPage) applySelectPads()
@@ -1113,7 +1114,26 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         pushRepeat()
     }
     private var prepAcc = 0
-    override fun onKnobTouch(knob: Int, touched: Boolean) = post { page.onKnobTouch(knob, touched); dirty = true }
+    override fun onKnobTouch(knob: Int, touched: Boolean) = post {
+        knobTouched[knob.coerceIn(0, 7)] = touched
+        page.onKnobTouch(knob, touched)
+        dirty = true
+    }
+
+    // ---- touch auto-write: with AUTO on and playing, a touched knob keeps writing its value ----
+    private val knobTouched = BooleanArray(8)
+    private val touchStep = IntArray(8) { -1 }
+    private fun touchAutoWrite() {
+        if (!autoActive || !engine.playing) { touchStep.fill(-1); return }
+        for (k in 0 until 8) {
+            if (!knobTouched[k]) { touchStep[k] = -1; continue }
+            val (sound, param) = page.knobParam(k) ?: continue
+            val st = engine.pattern.stepOf(sound / 16)
+            if (st < 0 || st == touchStep[k]) continue
+            touchStep[k] = st
+            autoWrite(sound, param)
+        }
+    }
     override fun onEncoder(delta: Int) = post { page.onEncoder(delta); dirty = true }
     override fun onTouchStrip(position: Int, counter: Int) = post {
         if (page is WizardPage) page.onTouchStrip(position) else stripMove(position)
@@ -1411,6 +1431,8 @@ abstract class Page(val ui: Ui) {
     open fun onGroup(g: Int) { ui.selectGroup(g) }
     /** If true, pad hits play sounds directly from the input thread. */
     open val playsPads = false
+    /** The sound parameter knob [knob] edits on this page (sound, parameter), for touch auto-write. */
+    open fun knobParam(knob: Int): Pair<Int, Int>? = null
     /** While recording, are this page's pad hits recorded? (pages using pads for something else say no) */
     open fun recordsPads(): Boolean = playsPads
     open fun onEnter() {}

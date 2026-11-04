@@ -336,6 +336,9 @@ class SoundPage(ui: Ui) : Page(ui) {
         if (isSource && wasSource != source) pageIdx = 0
     }
 
+    override fun knobParam(knob: Int): Pair<Int, Int>? =
+        (page.knobs.getOrNull(knob) as? Knob.Snd)?.let { slot to it.p }
+
     override fun onKnob(knob: Int, delta: Int) {
         when (val k = page.knobs.getOrNull(knob)) {
             is Knob.Snd -> soundKnob(k.p, delta)
