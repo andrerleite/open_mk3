@@ -349,7 +349,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     fun padVelocity(slot: Int, pressure: Int) =
         if (padMode == PadMode.VEL16) (slot + 1) / 16f else velocityFor(pressure)
 
-    private fun setPadMode(m: PadMode) {
+    fun setPadMode(m: PadMode) {
         padMode = m
         AppLog.i("Pad mode: $m")
         dirty = true

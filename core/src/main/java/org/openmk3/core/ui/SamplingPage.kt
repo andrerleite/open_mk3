@@ -29,8 +29,13 @@ import kotlin.math.roundToInt
  *          2 FUNCTIONS   K1 / K2 selection start / end · K3 or D5 / D6 function · K4 stretch
  *                        D7 preview the selection · D8 apply · SHIFT + D8 undo
  *                        (applied to a pad's sample: written to a new WAV and loaded on the pad)
- *  SLICE   K1 mode (GRID / DETECT) · K2 slices or sensitivity · pads play the slices
- *          D8 apply: each slice is saved and loaded onto pads 1, 2, 3…
+ *  SLICE   ◀ ▶ pages: 1 SLICER (K1 mode SPLIT / GRID / DETECT / MANUAL, K2 slices,
+ *          note value, sensitivity or auto-snap, K3 / K4 tempo) · 2 EDIT (K1 slice, K3 start,
+ *          K4 end, D5 split, D6 remove, D7 delete all) · 3 APPLY (K1 mono, K2 pattern)
+ *          Pads play the slices (SHIFT + D7 / D8: the previous / next 16); in MANUAL, pad 1
+ *          starts the sample and the flashing next pad adds a slice where it plays (live slicing)
+ *          D8 APPLY…: the focused sound (slices on its keys, pads switch to KEYBOARD) or the
+ *          whole group (slices on pads 1–16) · D8 OK
  *
  *  EDIT / SLICE: ENCODER turn = zoom · ENCODER left / right = scroll · D4 = zero-crossing snap
  *  ENCODER push = start / stop recording · SHIFT = fine knob steps · SAMPLING = back
@@ -54,7 +59,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
         const val MODE_THRESHOLD = 1
         const val MODE_SYNC = 2
         val SYNC_BARS = intArrayOf(1, 2, 4, 8, 16, 0)  // 0 = FREE (from the bar until stopped)
-        val GRID = intArrayOf(2, 4, 8, 16)
+        val SPLITS = intArrayOf(4, 8, 16, 32)
+        val GRIDS = intArrayOf(4, 8, 16, 32)  // note values
+        val MODES = listOf("SPLIT", "GRID", "DETECT", "MANUAL")
+        const val M_SPLIT = 0
+        const val M_GRID = 1
+        const val M_DETECT = 2
+        const val M_MANUAL = 3
         // Kept across visits.
         var source = SRC_INPUT
         var startMode = MODE_MANUAL
@@ -62,8 +73,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
         var threshold = 0.05f
         var maxSeconds = 30
         var lastTab = Tab.RECORD
-        var sliceDetect = false
+        var sliceMode = M_SPLIT
+        var splitIdx = 2
         var gridIdx = 2
+        var autoSnap = true
+        var bpmAuto = true
+        var bpmAdjust = 0      // AUTO: 0 as detected, 1 half, 2 double
+        var bpmManual = 120.0
+        var slicePage = 0
+        var mono = false
+        var patternReplace = true
         var sensitivity = 0.5f
         var editPage = 0
         var fnIdx = 0
@@ -100,6 +119,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
     // What the preview slot is playing, to draw its playhead on the take.
     private var previewBase = -1
     private var slices = IntArray(0)   // slice start frames within the edited region
+    private var sliceEnd = IntArray(0) // slice end frames (a slice can end before the next starts)
+    private var selSlice = 0
+    private var sliceBank = 0
+    private var live = false           // MANUAL: the sample plays and pads add slice points
+    private var applying = false       // APPLY…: choosing the target
+    private var applyGroup = false
+    private var onsetsAll: IntArray? = null  // for AUTO-SNAP
     // FUNCTIONS page: the selection (take frames), undo, and the WAV the edits of a pad go to
     private var selA = 0
     private var selB = 0
@@ -164,6 +190,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
         reverse = false
         selA = 0
         selB = takeFrames
+        onsetsAll = null
+        live = false
+        if (sliceMode == M_MANUAL) { slices = IntArray(0); sliceEnd = IntArray(0) }
         undo.clear()
         editFile = null
         wave.set(data, 2)
@@ -405,15 +434,67 @@ class SamplingPage(ui: Ui) : Page(ui) {
 
     private fun computeSlicesNow() {
         val len = trimEnd - trimStart
-        if (take == null || len <= 0) { slices = IntArray(0); return }
-        val raw = if (!sliceDetect) {
-            val k = GRID[gridIdx]
-            IntArray(k) { (it.toLong() * len / k).toInt() }
-        } else detectOnsets()
-        val d = if (ui.zeroSnap) edited() else null
-        slices = if (d == null) raw else IntArray(raw.size) { i ->
-            if (i == 0) raw[0] else WaveView.zeroCross(d, 2, raw[i], 1200).coerceIn(raw[i - 1] + 1, len - 1)
+        if (take == null || len <= 0) { setSlices(IntArray(0)); return }
+        if (sliceMode == M_MANUAL) {  // the user's slices stay; only clamp them to the region
+            val keep = slices.indices.filter { slices[it] < len - 1 }
+            val st = IntArray(keep.size) { slices[keep[it]] }
+            val en = IntArray(keep.size) { min(sliceEnd[keep[it]], len) }
+            slices = st; sliceEnd = en
+            selSlice = selSlice.coerceIn(0, max(0, slices.size - 1))
+            return
         }
+        val raw = when (sliceMode) {
+            M_SPLIT -> { val k = SPLITS[splitIdx]; IntArray(k) { (it.toLong() * len / k).toInt() } }
+            M_GRID -> {
+                val step = AudioEngine.SR * 60.0 / sliceBpm() * 4.0 / GRIDS[gridIdx]
+                val k = kotlin.math.ceil(len / step - 0.01).toInt().coerceIn(1, 128)
+                IntArray(k) { (it * step).toInt() }.filter { it < len }.toIntArray()
+            }
+            else -> detectOnsets(63)
+        }
+        val d = if (ui.zeroSnap) edited() else null
+        setSlices(if (d == null) raw else IntArray(raw.size) { i ->
+            if (i == 0) raw[0] else WaveView.zeroCross(d, 2, raw[i], 1200).coerceIn(raw[i - 1] + 1, len - 1)
+        })
+    }
+
+    /** Joined slices: each one ends where the next starts. */
+    private fun setSlices(st: IntArray) {
+        val len = trimEnd - trimStart
+        slices = st
+        sliceEnd = IntArray(st.size) { if (it + 1 < st.size) st[it + 1] else len }
+        selSlice = selSlice.coerceIn(0, max(0, st.size - 1))
+        sliceBank = sliceBank.coerceIn(0, max(0, (st.size - 1) / 16))
+    }
+
+    /** Tempo of the sample: detected from its length (a whole number of beats), or set by hand. */
+    private fun detectedBpm(): Double {
+        val secs = (trimEnd - trimStart).toDouble() / AudioEngine.SR
+        if (secs <= 0.05) return 120.0
+        var beats = 1.0
+        while (beats * 60.0 / secs < 85.0) beats *= 2.0
+        return beats * 60.0 / secs
+    }
+    private fun sliceBpm(): Double = if (!bpmAuto) bpmManual else detectedBpm() * when (bpmAdjust) { 1 -> 0.5; 2 -> 2.0; else -> 1.0 }
+
+    /** Any change by hand makes the slices MANUAL (they're kept from then on). */
+    private fun toManual() { if (sliceMode != M_MANUAL) { ensureSlices(force = true); sliceMode = M_MANUAL } }
+
+    /** MANUAL, live: a slice point where the sample is playing (snapped to a nearby hit). */
+    private fun addLiveSlice() {
+        val pp = ui.engine.playPos(AudioEngine.PREVIEW_SLOT)
+        if (pp < 0f || previewBase < 0) { live = false; return }
+        var pos = previewBase + pp.toInt()
+        val len = trimEnd - trimStart
+        if (autoSnap) {
+            val on = onsetsAll ?: detectOnsets(512, 0.85f).also { onsetsAll = it }
+            on.minByOrNull { abs(it - pos) }?.let { if (abs(it - pos) < AudioEngine.SR / 10) pos = it }
+        }
+        if (slices.any { abs(it - pos) < 480 } || pos >= len - 480) return
+        val st = (slices.toList() + pos).sorted().toIntArray()
+        setSlices(st)
+        selSlice = st.indexOf(pos)
+        sliceBank = selSlice / 16
     }
 
     /**
@@ -424,7 +505,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
      * 50 dB below the loudest part. Hits are at least 50 ms apart; the 16 strongest are kept, in
      * time order, each placed at the quiet point just before its attack.
      */
-    private fun detectOnsets(): IntArray {
+    private fun detectOnsets(maxSlices: Int, sens: Float = sensitivity): IntArray {
         val d = edited() ?: return IntArray(0)
         val len = d.size / 2
         val hop = 240
@@ -444,7 +525,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
             lev[h] = 10f * kotlin.math.log10(acc / hop + 1e-12f)
             top = max(top, lev[h])
         }
-        val thr = 3f + (1f - sensitivity) * 12f
+        val thr = 3f + (1f - sens) * 12f
         val floor = top - 50f
         val rise = FloatArray(hops)
         for (h in 1 until hops) {
@@ -464,8 +545,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
             hits.add(h to rise[h])
             last = h
         }
-        // the 16 strongest (the start of the sample counts as one), back in time order
-        val kept = hits.sortedByDescending { it.second }.take(15).map { it.first }.sorted()
+        // the strongest (the start of the sample counts as one), back in time order
+        val kept = hits.sortedByDescending { it.second }.take(maxSlices - 1).map { it.first }.sorted()
         val out = ArrayList<Int>()
         out.add(0)
         for (h in kept) {
@@ -484,7 +565,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         val len = d.size / 2
         if (i >= slices.size) return null
         val a = slices[i]
-        val b = if (i + 1 < slices.size) slices[i + 1] else len
+        val b = min(sliceEnd[i], len)
         if (b - a < 2) return null
         val out = d.copyOfRange(a * 2, b * 2)
         val fo = min(240, b - a)  // 5 ms fade at the slice end
@@ -493,12 +574,25 @@ class SamplingPage(ui: Ui) : Page(ui) {
         return out
     }
 
+    /**
+     * APPLY… OK. To a SOUND: the slices go on its keys as zones (each on the key its pad plays in
+     * KEYBOARD mode, so pad 1 plays slice 1), the first one also as the sound's sample, and the
+     * pads switch to KEYBOARD. To the GROUP: slices 1–16 on pads 1–16 (MONO: one voice each and
+     * all in choke group 1). PATTERN: the pattern gets a note for each slice, at its place in the
+     * loop, so it plays the original back (and follows the song tempo).
+     */
     private fun applySlices() {
         ensureSlices(force = true)
         val count = min(slices.size, 16)
         if (count == 0) { message = "No slices"; return }
         val parts = (0 until count).mapNotNull { i -> sliceData(i)?.let { i to it } }
+        val toGroup = applyGroup
+        val target = ui.selectedIndex
+        val keys = IntArray(count) { ui.keys.noteFor(it) }
+        val starts = slices.copyOf(); val ends = sliceEnd.copyOf()
+        val bpm = sliceBpm()
         val base = takeName
+        applying = false
         message = "Saving $count slices…"
         worker.execute {
             try {
@@ -509,14 +603,59 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     i to Sample(f.nameWithoutExtension, data, 0, 2, f.absolutePath, info(data))
                 }
                 ui.post {
-                    for ((i, s) in samples) {
-                        ui.engine.setSample(ui.snd(i), s)
-                        ui.engine.params.resetRange(ui.snd(i))
+                    val e = ui.engine
+                    val sp = e.params
+                    val pat = e.pattern
+                    val stepFrames = AudioEngine.SR * 60.0 / bpm / 4.0
+                    if (toGroup) {
+                        for ((i, smp) in samples) {
+                            val snd = ui.snd(i)
+                            e.setSample(snd, smp)
+                            sp.resetRange(snd)
+                            e.zones.clear(snd)
+                            if (sp[snd, org.openmk3.core.audio.SoundParams.SRC].roundToInt() != 0) sp.setSource(snd, 0)
+                            if (mono) { sp[snd, org.openmk3.core.audio.SoundParams.POLY] = 1f; sp[snd, org.openmk3.core.audio.SoundParams.CHOKE] = 1f }
+                        }
+                        if (patternReplace) {
+                            for ((i, _) in samples) pat.clear(ui.snd(i))
+                            for ((i, _) in samples) {
+                                val st = starts[i] / stepFrames
+                                val step = st.toInt()
+                                if (step < org.openmk3.core.audio.Pattern.STEPS)
+                                    pat.recordNote(ui.snd(i), step, org.openmk3.core.audio.Pattern.ROOT, 0.8f, (st - step).toFloat(), ((ends[i] - starts[i]) / stepFrames).toFloat())
+                            }
+                        }
+                        ui.setPadMode(Ui.PadMode.PAD)
+                        message = "${samples.size} slices → ${ui.groupLetter}1–${ui.groupLetter}${samples.size}" + if (mono) " (mono)" else ""
+                    } else {
+                        if (sp[target, org.openmk3.core.audio.SoundParams.SRC].roundToInt() != 0) sp.setSource(target, 0)
+                        e.zones.clear(target)
+                        samples.firstOrNull()?.let { e.setSample(target, it.second); sp.resetRange(target) }
+                        for ((i, smp) in samples) {
+                            val k = e.zones.add(target, smp, keys[i])
+                            if (k >= 0) e.zones.update(target, k) { z -> z.lo = keys[i]; z.hi = keys[i] }
+                        }
+                        if (patternReplace) {
+                            pat.clear(target)
+                            for ((i, _) in samples) {
+                                val st = starts[i] / stepFrames
+                                val step = st.toInt()
+                                if (step < org.openmk3.core.audio.Pattern.STEPS)
+                                    pat.recordNote(target, step, keys[i], 0.8f, (st - step).toFloat(), ((ends[i] - starts[i]) / stepFrames).toFloat())
+                            }
+                        }
+                        ui.setPadMode(Ui.PadMode.KEYBOARD)
+                        message = "${samples.size} slices → ${ui.padLabel()} keys ${org.openmk3.core.audio.Keys.noteName(keys.first())}–${org.openmk3.core.audio.Keys.noteName(keys.last())}"
                     }
-                    ui.engine.params.save(ui.ctx)
-                    KitStore.save(ui.ctx, ui.engine.kit)
-                    message = "${samples.size} slices → ${ui.groupLetter}1–${ui.groupLetter}${samples.size}"
-                    AppLog.i("Sampling: ${samples.size} slices saved in ${dir.absolutePath}")
+                    if (patternReplace) {
+                        val total = ((trimEnd - trimStart) / stepFrames).let { kotlin.math.ceil(it - 0.05).toInt() }
+                        pat.setLength(target / org.openmk3.core.audio.Pattern.PADS, total.coerceIn(1, org.openmk3.core.audio.Pattern.STEPS))
+                        pat.save(ui.ctx)
+                    }
+                    sp.save(ui.ctx)
+                    e.zones.save(ui.ctx)
+                    KitStore.save(ui.ctx, e.kit)
+                    AppLog.i("Sampling: ${samples.size} slices saved in ${dir.absolutePath}; $message")
                     ui.invalidate()
                 }
             } catch (ex: Exception) {
@@ -583,6 +722,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     override fun tick(now: Long): Boolean {
         if (rangeDirtyAt != 0L && now - rangeDirtyAt > 1500) { ui.engine.params.save(ui.ctx); rangeDirtyAt = 0L }
         if (slicesDirty) { ensureSlices(); if (!slicesDirty) ui.invalidate() }
+        if (live && !ui.engine.isSounding(AudioEngine.PREVIEW_SLOT)) live = false
         val pi = n.nativeRecTakePeak(SRC_INPUT)
         val pp = n.nativeRecTakePeak(SRC_PHONE)
         meterIn = max(pi, meterIn * 0.85f)
@@ -656,11 +796,43 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 "D6" -> if (editPage == 1) fnIdx = (fnIdx + 1) % FNS
                 "D8" -> if (editPage == 0) save() else if (shift) undoFn() else applyFn()
             }
-            Tab.SLICE -> when (name) {
-                "D4" -> toggleSnap()
-                "D5" -> { sliceDetect = !sliceDetect; computeSlices() }
-                "D7" -> preview(edited(), 0)
-                "D8" -> applySlices()
+            Tab.SLICE -> when {
+                applying -> when (name) {
+                    "D5" -> applyGroup = false
+                    "D6" -> applyGroup = true
+                    "D7" -> applying = false
+                    "D8" -> applySlices()
+                }
+                shift && name == "D7" -> sliceBank = max(0, sliceBank - 1)
+                shift && name == "D8" -> sliceBank = min(max(0, (slices.size - 1) / 16), sliceBank + 1)
+                name == "PAGE LEFT" -> slicePage = max(0, slicePage - 1)
+                name == "PAGE RIGHT" -> slicePage = min(2, slicePage + 1)
+                name == "D4" -> toggleSnap()
+                name == "D8" -> { ensureSlices(force = true); if (slices.isEmpty()) message = "No slices" else applying = true }
+                slicePage == 1 -> when (name) {
+                    "D5" -> {  // SPLIT: at the playhead while the sample plays, else the selected slice in half
+                        if (live || (ui.engine.isSounding(AudioEngine.PREVIEW_SLOT) && previewBase == 0)) { toManual(); addLiveSlice() }
+                        else if (selSlice < slices.size && sliceEnd[selSlice] - slices[selSlice] > 960) {
+                            toManual()
+                            val mid = (slices[selSlice] + sliceEnd[selSlice]) / 2
+                            val st = (slices.toList() + mid).sorted().toIntArray()
+                            val en = IntArray(st.size) { k -> val j = slices.indexOf(st[k]); if (j >= 0) (if (j == selSlice) mid else sliceEnd[j]) else sliceEnd[selSlice] }
+                            slices = st; sliceEnd = en
+                        }
+                    }
+                    "D6" -> if (selSlice in 1 until slices.size) {  // REMOVE: join with the previous slice
+                        toManual()
+                        val i = selSlice
+                        sliceEnd[i - 1] = max(sliceEnd[i - 1], sliceEnd[i])
+                        slices = slices.filterIndexed { k, _ -> k != i }.toIntArray()
+                        sliceEnd = sliceEnd.filterIndexed { k, _ -> k != i }.toIntArray()
+                        selSlice = i - 1
+                    }
+                    "D7" -> { sliceMode = M_MANUAL; slices = IntArray(0); sliceEnd = IntArray(0); selSlice = 0; sliceBank = 0; live = false; message = "All slices deleted: pad 1 starts live slicing" }
+                }
+                else -> when (name) {
+                    "D7" -> preview(edited(), 0)
+                }
             }
         }
     }
@@ -689,8 +861,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
             }
             Tab.SLICE -> {
                 l.set("D4", ui.zeroSnap)
-                l.set("D5", sliceDetect)
-                l.set("D7", "D8")
+                l.set("PAGE LEFT", slicePage > 0)
+                l.set("PAGE RIGHT", slicePage < 2)
+                if (applying) { l.set("D5", !applyGroup); l.set("D6", applyGroup); l.set("D7"); l.set("D8", true) }
+                else {
+                    if (slicePage == 1) l.set("D5", "D6")
+                    l.set("D7", "D8")
+                }
             }
         }
     }
@@ -702,8 +879,17 @@ class SamplingPage(ui: Ui) : Page(ui) {
             // the pad being edited just plays (with its play range); another pad opens its sample
             Tab.EDIT -> if (ui.snd(slot) != editSound) { ui.selectedSound = slot; loadFromPad(slot) }
             Tab.SLICE -> {
-                // pad 1 = bottom-left = slot 0 plays slice 1
-                if (slot < slices.size) sliceData(slot)?.let { preview(it, slices[slot]) }
+                if (applying) { ui.selectedSound = slot; applyGroup = false; return }
+                // pad 1 = bottom-left = slot 0 plays slice 1 (of the bank)
+                val i = sliceBank * 16 + slot
+                if (sliceMode == M_MANUAL && slices.isEmpty() && slot == 0) {
+                    // live slicing: the sample plays; the next pads add slice points
+                    setSlices(intArrayOf(0)); selSlice = 0; live = true
+                    preview(edited(), 0)
+                    return
+                }
+                if (sliceMode == M_MANUAL && live && i == slices.size) { addLiveSlice(); return }
+                if (i < slices.size) { selSlice = i; sliceData(i)?.let { preview(it, slices[i]) } }
             }
         }
     }
@@ -743,12 +929,54 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 }
                 if (knob <= 1) computeSlices()
             }
-            Tab.SLICE -> when (knob) {
-                0 -> if (stepped(delta)) { sliceDetect = !sliceDetect; computeSlices() }
-                1 -> if (sliceDetect) {
-                    sensitivity = (sensitivity + delta / 500f).coerceIn(0f, 1f); computeSlices()
-                } else if (stepped(delta)) {
-                    gridIdx = (gridIdx + if (delta > 0) 1 else -1).coerceIn(0, GRID.size - 1); computeSlices()
+            Tab.SLICE -> if (applying) Unit else when (slicePage) {
+                0 -> when (knob) {
+                    0 -> if (stepped(delta)) {
+                        val m = (sliceMode + if (delta > 0) 1 else -1).coerceIn(0, MODES.size - 1)
+                        if (m != sliceMode) {
+                            sliceMode = m; live = false
+                            if (m == M_MANUAL) { slices = IntArray(0); sliceEnd = IntArray(0); message = "MANUAL: pad 1 plays the sample, the flashing pad adds a slice" }
+                            computeSlices()
+                        }
+                    }
+                    1 -> when (sliceMode) {
+                        M_SPLIT -> if (stepped(delta)) { splitIdx = (splitIdx + if (delta > 0) 1 else -1).coerceIn(0, SPLITS.size - 1); computeSlices() }
+                        M_GRID -> if (stepped(delta)) { gridIdx = (gridIdx + if (delta > 0) 1 else -1).coerceIn(0, GRIDS.size - 1); computeSlices() }
+                        M_DETECT -> { sensitivity = (sensitivity + delta / 500f).coerceIn(0f, 1f); computeSlices() }
+                        else -> if (stepped(delta)) autoSnap = !autoSnap
+                    }
+                    2 -> if (stepped(delta)) { bpmAuto = !bpmAuto; computeSlices() }
+                    3 -> {
+                        if (bpmAuto) { if (stepped(delta)) bpmAdjust = (bpmAdjust + if (delta > 0) 1 else -1).coerceIn(0, 2) }
+                        else bpmManual = (bpmManual + delta * (if (shift) 0.01 else 0.1)).coerceIn(40.0, 300.0)
+                        if (sliceMode == M_GRID) computeSlices()
+                    }
+                }
+                1 -> {
+                    val len = trimEnd - trimStart
+                    when (knob) {
+                        0 -> if (stepped(delta) && slices.isNotEmpty()) { selSlice = (selSlice + if (delta > 0) 1 else -1).coerceIn(0, slices.size - 1); sliceBank = selSlice / 16 }
+                        2 -> if (selSlice < slices.size) {  // START: a joined previous slice's end moves with it
+                            toManual()
+                            val i = selSlice
+                            val old = slices[i]
+                            val lo = if (i > 0) slices[i - 1] + 48 else 0
+                            val nv = (old + delta * step).coerceIn(lo, sliceEnd[i] - 48)
+                            if (i > 0 && sliceEnd[i - 1] == old) sliceEnd[i - 1] = nv
+                            slices[i] = nv
+                            focus = editedToTake(nv); wave.follow(focus)
+                        }
+                        3 -> if (selSlice < slices.size) {  // END: on its own
+                            toManual()
+                            val i = selSlice
+                            sliceEnd[i] = (sliceEnd[i] + delta * step).coerceIn(slices[i] + 48, len)
+                            focus = editedToTake(sliceEnd[i]); wave.follow(focus)
+                        }
+                    }
+                }
+                else -> when (knob) {
+                    0 -> if (stepped(delta)) mono = !mono
+                    1 -> if (stepped(delta)) patternReplace = !patternReplace
                 }
             }
         }
@@ -783,10 +1011,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
     /** SLICE tab: pads with a slice are lit (bright while it plays); the rest are dark. */
     override fun padLight(slot: Int, now: Long): Int? {
         if (tab != Tab.SLICE) return null
-        if (slot >= min(16, slices.size)) return 0
         val c = org.openmk3.core.mk3.Mk3Colors.BLUE
+        if (applying) return if (applyGroup || slot == ui.selectedSound) org.openmk3.core.mk3.Mk3Colors.value(c, 3) else 0
+        val i = sliceBank * 16 + slot
+        val flash = (now / 250) % 2 == 0L
+        // MANUAL: the pad that adds the next slice flashes (pad 1 before live slicing starts)
+        if (sliceMode == M_MANUAL && ((slices.isEmpty() && slot == 0) || (live && i == slices.size)))
+            return if (flash) org.openmk3.core.mk3.Mk3Colors.value(org.openmk3.core.mk3.Mk3Colors.WHITE, 3) else 0
+        if (i >= slices.size) return 0
         val playing = ui.padPressure[slot] > 0
-        return org.openmk3.core.mk3.Mk3Colors.value(c, if (playing) 3 else 1)
+        return org.openmk3.core.mk3.Mk3Colors.value(c, if (playing || i == selSlice) 3 else 1)
     }
 
     // =====================================================================================
@@ -906,20 +1140,79 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     private fun drawSlice(l: Canvas, r: Canvas) {
-        dButton(r, 4, "MODE", if (sliceDetect) "DETECT" else "GRID")
-        dButton(r, 6, "PREVIEW", "PLAY")
-        dButton(r, 7, "APPLY", "TO PADS")
         dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
-        l.drawText("SLICE", 16f, 72f, title)
-        l.drawText(ellipsize(takeName, 26), 90f, 72f, value)
         val g = ui.groupLetter
-        l.drawText("${slices.size} slices → $g" + "1–$g${min(16, slices.size)}", 16f, 106f, value)
-        l.drawText("Pads play the slices · D8 replaces $g" + "1–$g${min(16, slices.size)}", 16f, 136f, label)
-        l.drawText("Encoder: zoom · tilt ◀ ▶: scroll", 16f, 160f, label)
-        knob(l, 0, "MODE", if (sliceDetect) "DETECT" else "GRID")
-        if (sliceDetect) knob(l, 1, "SENSITIVITY", "${(sensitivity * 100).roundToInt()}%")
-        else knob(l, 1, "SLICES", "${GRID[gridIdx]}")
-        drawWave(r, trimStart, trimEnd, sliceMarks = true)
+        val n = slices.size
+        val bankTxt = if (n > 16) " · bank ${sliceBank + 1}/${(n - 1) / 16 + 1} (SHIFT+D7/D8)" else ""
+        if (applying) {
+            dButton(r, 4, "TO", "SOUND", !applyGroup)
+            dButton(r, 5, "TO", "GROUP", applyGroup)
+            dButton(r, 6, "", "CANCEL")
+            dButton(r, 7, "APPLY", "OK", true)
+            l.drawText("APPLY ${min(16, n)} SLICES TO…", 16f, 72f, title)
+            if (applyGroup) {
+                l.drawText("Group $g: pads $g" + "1–$g${min(16, n)}", 16f, 106f, big)
+                l.drawText("Each slice replaces a pad's sample" + if (mono) " · MONO" else "", 16f, 136f, label)
+                l.drawText("Group buttons choose the group", 16f, 156f, label)
+            } else {
+                l.drawText("Sound ${ui.padLabel()}", 16f, 106f, big)
+                l.drawText("Slices on its keys, pad 1 = slice 1 (KEYBOARD mode)", 16f, 136f, label)
+                l.drawText("Pads choose the sound", 16f, 156f, label)
+            }
+            if (n > 16) l.drawText("Only the first 16 slices are applied", 16f, 180f, warn)
+            if (patternReplace) l.drawText("The pattern is replaced with the loop's notes", 16f, 200f, label)
+            drawWave(r, -1, -1, sliceMarks = true)
+            return
+        }
+        dButton(r, 7, "APPLY", "…")
+        when (slicePage) {
+            0 -> {
+                dButton(r, 6, "PREVIEW", "PLAY")
+                l.drawText("SLICE · SLICER", 16f, 72f, title)
+                l.drawText("1/3 ▶", 470f, 72f, pageText)
+                l.drawText("$n slices" + bankTxt, 16f, 104f, value)
+                l.drawText(ellipsize(takeName, 40), 16f, 128f, label)
+                if (sliceMode == M_MANUAL) l.drawText(if (live) "Live: press the flashing pad to add a slice" else if (n == 0) "Press pad 1 to play the sample and slice it" else "Pads play the slices · ▶ edit them", 16f, 156f, label)
+                else l.drawText("Pads play the slices · ▶ edit · D8 apply", 16f, 156f, label)
+                l.drawText("Tempo %.1f BPM".format(sliceBpm()), 16f, 180f, label)
+                knob(l, 0, "MODE", MODES[sliceMode])
+                when (sliceMode) {
+                    M_SPLIT -> knob(l, 1, "SLICES", "${SPLITS[splitIdx]}")
+                    M_GRID -> knob(l, 1, "SLICES", "1/${GRIDS[gridIdx]}")
+                    M_DETECT -> knob(l, 1, "SENSITIVITY", "${(sensitivity * 100).roundToInt()}%")
+                    else -> knob(l, 1, "AUTO-SNAP", if (autoSnap) "ON" else "OFF")
+                }
+                knob(l, 2, "BPM", if (bpmAuto) "AUTO" else "MANUAL")
+                knob(l, 3, "ADJUST", if (bpmAuto) listOf("DETECTED", "HALF", "DOUBLE")[bpmAdjust] else "%.1f".format(bpmManual))
+            }
+            1 -> {
+                dButton(r, 4, "SPLIT", if (live) "HERE" else "IN HALF")
+                dButton(r, 5, "REMOVE", "JOIN")
+                dButton(r, 6, "DELETE", "ALL")
+                l.drawText("SLICE · EDIT", 16f, 72f, title)
+                l.drawText("◀ 2/3 ▶", 470f, 72f, pageText)
+                if (selSlice < n) {
+                    l.drawText("Slice ${selSlice + 1} of $n" + bankTxt, 16f, 104f, value)
+                    l.drawText("${secs(slices[selSlice])} – ${secs(sliceEnd[selSlice])} (${secs(sliceEnd[selSlice] - slices[selSlice])})", 16f, 128f, label)
+                } else l.drawText("No slices", 16f, 104f, value)
+                l.drawText("START moves a joined slice end with it", 16f, 156f, label)
+                knob(l, 0, "SLICE", if (selSlice < n) "${selSlice + 1}" else "—")
+                knob(l, 2, "START", if (selSlice < n) secs(slices[selSlice]) else "—")
+                knob(l, 3, "END", if (selSlice < n) secs(sliceEnd[selSlice]) else "—")
+            }
+            else -> {
+                dButton(r, 6, "PREVIEW", "PLAY")
+                l.drawText("SLICE · APPLY", 16f, 72f, title)
+                l.drawText("◀ 3/3", 470f, 72f, pageText)
+                l.drawText("MONO (to a group): one voice per pad,", 16f, 104f, label)
+                l.drawText("all pads choke each other", 16f, 124f, label)
+                l.drawText("PATTERN: notes that play the loop back", 16f, 150f, label)
+                knob(l, 0, "MONO", if (mono) "ON" else "OFF")
+                knob(l, 1, "PATTERN", if (patternReplace) "REPLACE" else "NONE")
+            }
+        }
+        if (slicePage == 1 && selSlice < n) drawWave(r, editedToTake(slices[selSlice]), editedToTake(sliceEnd[selSlice]), sliceMarks = true)
+        else drawWave(r, trimStart, trimEnd, sliceMarks = true)
     }
 
     private fun drawWave(r: Canvas, a: Int, b: Int, sliceMarks: Boolean = false) {
