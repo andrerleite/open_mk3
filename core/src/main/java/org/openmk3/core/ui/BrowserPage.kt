@@ -24,6 +24,8 @@ import java.util.concurrent.Future
  *  D5 / D6 = load the previous / next WAV straight onto the target pad (hear it in context while
  *  the pattern plays) · D4 = PREHEAR on / off (auditioning while scrolling) · D1 = QUICK BROWSE:
  *  the folder of the target pad's sample, with that file selected
+ *  D2 = mark / unmark the selected folder or file as a favourite · D3 = the favourites list
+ *  (◀ or D3 again: back to the folder)
  *  PLAY / STOP keep working · BROWSER or SETTINGS = back
  */
 class BrowserPage(ui: Ui) : Page(ui) {
@@ -88,7 +90,50 @@ class BrowserPage(ui: Ui) : Page(ui) {
         worker.shutdownNow()
     }
 
+    // ---- favourites (folders and files), kept in favourites.json ----
+    private var favView = false
+    private fun favFile() = File(ui.ctx.filesDir, "favourites.json")
+    private var favCache: MutableList<String>? = null
+    private fun favourites(): MutableList<String> = favCache ?: (try {
+        val a = org.json.JSONArray(favFile().readText()); MutableList(a.length()) { a.getString(it) }
+    } catch (e: Exception) { mutableListOf() }).also { favCache = it }
+    private fun saveFavourites(l: List<String>) { favCache = l.toMutableList(); try { favFile().writeText(org.json.JSONArray(l).toString()) } catch (e: Exception) { AppLog.i("favourites: ${e.message}") } }
+
+    private fun entryFile(e: Entry?): File? = when (e) {
+        is Entry.Folder -> e.file; is Entry.Wav -> e.file; is Entry.SoundFile -> e.file; is Entry.GroupFile -> e.file; is Entry.FxFile -> e.file
+        else -> null
+    }
+
+    private fun toggleFavourite() {
+        val f = entryFile(entries.getOrNull(sel)) ?: run { message = "Select a folder or file"; return }
+        val l = favourites().toMutableList()
+        if (l.remove(f.absolutePath)) message = "${f.name}: no longer a favourite" else { l.add(f.absolutePath); message = "★ ${f.name}" }
+        saveFavourites(l)
+        if (favView) showFavourites()
+    }
+
+    private fun showFavourites() {
+        val fs = favourites().map { File(it) }.filter { it.exists() }
+        favView = true
+        problem = if (fs.isEmpty()) "No favourites yet: D2 marks the selected folder or file" else null
+        entries = buildList {
+            add(Entry.Up())
+            for (f in fs) add(when {
+                f.isDirectory -> Entry.Folder(f)
+                f.extension == org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(f)
+                f.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT -> Entry.SoundFile(f)
+                f.extension == org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(f)
+                else -> Entry.Wav(f)
+            })
+        }
+        sel = if (entries.size > 1) 1 else 0; top = 0; info = ""; previewed = null
+        ui.invalidate()
+    }
+
+    private fun isFavourite(e: Entry?): Boolean = entryFile(e)?.absolutePath?.let { it in favourites() } ?: false
+
     private fun list(d: File, select: Int = 0) {
+        favView = false
         dir = d
         problem = null
         if (!ROOT.exists()) ROOT.mkdirs()
@@ -165,7 +210,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                 message = "${ui.padLabel()}: ${ui.engine.kit[slot].name.ifEmpty { "empty" }}"
                 AppLog.i("Kit: $message")
             }
-            is Entry.Up -> up()
+            is Entry.Up -> if (favView) list(dir) else up()
             is Entry.Folder -> list(e.file)
             is Entry.Wav -> load(e)
             is Entry.SoundFile -> loadSaved(e.file, group = false)
@@ -282,7 +327,9 @@ class BrowserPage(ui: Ui) : Page(ui) {
         val e = ui.engine
         when (name) {
             "ENCODER PUSH", "ENCODER RIGHT", "PAGE RIGHT" -> activate()
-            "ENCODER LEFT", "PAGE LEFT" -> up()
+            "ENCODER LEFT", "PAGE LEFT" -> if (favView) list(dir) else up()
+            "D2" -> toggleFavourite()
+            "D3" -> if (favView) list(dir) else showFavourites()
             "ENCODER UP" -> move(-1)
             "ENCODER DOWN" -> move(1)
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
@@ -304,6 +351,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
         l.set("SHIFT", shiftHeld)
         l.set("STOP", "PAGE LEFT", "PAGE RIGHT", "SETTINGS")
         l.set("D1", ui.engine.kit[ui.selectedIndex].path != null)
+        l.set("D2", entryFile(entries.getOrNull(sel)) != null)
+        l.set("D3", favView)
         l.set("D4", prehear)
         l.set("D5", "D6")
         l.set("D7", entries.getOrNull(sel) is Entry.Wav)
@@ -347,7 +396,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         l.drawColor(Theme.BG)
         l.drawText("BROWSER", 12f, 24f, title)
         val rel = dir.absolutePath.removePrefix(ROOT.parentFile?.absolutePath ?: "").trimStart('/')
-        l.drawText(ellipsize(rel, 52), 110f, 23f, path)
+        l.drawText(if (favView) "★ FAVOURITES" else ellipsize(rel, 52), 110f, 23f, path)
         val y0 = 36f
         val rh = 23f
         for (i in 0 until ROWS) {
@@ -360,7 +409,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                 is Entry.BuiltIn -> rowDim
                 else -> row
             }
-            l.drawText(ellipsize(e.label, 48), 12f, y + 17f, p)
+            l.drawText(ellipsize((if (favView && e !is Entry.Up) "★ " else "") + e.label, 48), 12f, y + 17f, p)
         }
         if (entries.size > ROWS) {
             val h = 230f * ROWS / entries.size
@@ -379,7 +428,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
         r.drawText("SELECTED", 16f, 120f, label)
         val e = entries.getOrNull(sel)
-        r.drawText(ellipsize(e?.label ?: "", 34), 16f, 144f, value)
+        r.drawText(ellipsize((if (isFavourite(e)) "★ " else "") + (e?.label ?: ""), 34), 16f, 144f, value)
         if (info.isNotEmpty()) r.drawText(ellipsize(info, 50), 16f, 166f, label)
         if (message.isNotEmpty()) r.drawText(ellipsize(message, 40), 16f, 194f, ok)
 
