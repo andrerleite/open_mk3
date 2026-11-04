@@ -499,7 +499,13 @@ class HomePage(ui: Ui) : Page(ui) {
         return true
     }
 
+    private var rollAcc = 0
     override fun onKnob(knob: Int, delta: Int) {
+        if (mode == Mode.STEP && ui.padMode == Ui.PadMode.KEYBOARD && knob == 6) {
+            rollAcc += delta
+            if (kotlin.math.abs(rollAcc) >= 12) { rollBase = ((if (rollBase < 0) 48 else rollBase) + if (rollAcc > 0) 1 else -1).coerceIn(0, 112); rollAcc = 0 }
+            return
+        }
         if (stepKnob(knob, delta)) return
         if (keysKnob(knob, delta)) return
         if (padSettingsKnob(knob, delta)) return
@@ -686,7 +692,42 @@ class HomePage(ui: Ui) : Page(ui) {
         if (mode != Mode.STEP && ui.padParams && ui.padMode == Ui.PadMode.PAD) { drawPadSettings(l, r); return }
         if (mode != Mode.STEP && ui.padParams && ui.padMode != Ui.PadMode.PAD) { drawKeys(l, r); return }
         drawLeft(l)
-        drawGrid(r)
+        if (mode == Mode.STEP && ui.padMode == Ui.PadMode.KEYBOARD) drawRoll(r) else drawGrid(r)
+    }
+
+    /** Lowest pitch shown in the STEP keyboard view (K7 scrolls; -1 = fit the notes). */
+    private var rollBase = -1
+
+    /** STEP mode with KEYBOARD: the focused sound's notes across 16 pitch rows (K7 scrolls). */
+    private fun drawRoll(c: Canvas) {
+        c.drawColor(Theme.BG)
+        val p = pattern
+        val s = sd(selected)
+        val len = p.length(ui.group)
+        val page = viewPage
+        val notes = p.stepsOf(s).map { p.noteOf(s, it) }
+        if (rollBase < 0) rollBase = ((notes.minOrNull() ?: ui.keys.baseNote) - 2).coerceIn(0, 112)
+        val top = 16f; val rowH = 16f; val x0 = 80f; val cw = 25f
+        for (t in 0 until 16) c.drawRect(x0 + t * cw + 1f, 6f, x0 + t * cw + cw - 1f, 10f, if (t % 4 == 0) cellOffBeat else cellOff)
+        if (pageStep >= 0) c.drawRect(x0 + pageStep * cw + 1f, 3f, x0 + pageStep * cw + cw - 1f, 13f, playheadFill)
+        c.drawText("${ui.padLabel()} keys", 2f, 12f, rowLabelDim)
+        for (row in 0 until 16) {
+            val pitch = rollBase + 15 - row  // high notes on top
+            val y = top + row * rowH
+            val black = (pitch % 12) in intArrayOf(1, 3, 6, 8, 10)
+            c.drawText(org.openmk3.core.audio.Keys.noteName(pitch), 15f, y + 12f, if (pitch % 12 == 0) rowLabel else rowLabelDim)
+            for (tt in 0 until 16) {
+                val t = page * 16 + tt
+                val x = x0 + tt * cw
+                val has = t < len && p.hasStep(s, t) && p.noteOf(s, t) == pitch
+                c.drawRect(x + 1f, y + 2f, x + cw - 1f, y + rowH - 1f, when {
+                    has -> paintOf(s)
+                    t >= len -> cellOff
+                    black -> cellOff
+                    else -> cellOffBeat
+                })
+            }
+        }
     }
 
     private fun drawLeft(l: Canvas) {
