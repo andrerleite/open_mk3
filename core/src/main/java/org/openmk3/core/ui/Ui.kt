@@ -167,6 +167,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     @Volatile var selectPinned = false
     val selectActive get() = selectHeld || selectPinned
 
+    /** A sound's name: the one given to it, else its sample's. */
+    fun soundName(s: Int): String = org.openmk3.core.audio.Names.sound.getOrNull(s)?.takeIf { it.isNotEmpty() } ?: engine.kit[s].name
+    /** "GROUP A", with its name when it has one ("GROUP A · Drums"). */
+    fun groupTitle(g: Int = group): String = "GROUP ${'A' + g}" + (org.openmk3.core.audio.Names.group.getOrNull(g)?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: "")
+    /** A group's name: the one given to it, else "Group X". */
+    fun groupName(g: Int): String = org.openmk3.core.audio.Names.group.getOrNull(g)?.takeIf { it.isNotEmpty() } ?: "Group ${'A' + g}"
+
     /** The selected sounds of the focused group, the focused one first. */
     fun selectedSounds(): List<Int> {
         val f = selectedIndex
@@ -465,6 +472,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             val a = from * 16 + k; val b = to * 16 + k
             e.setSample(b, e.kit[a])
             for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
+            org.openmk3.core.audio.Names.sound[b] = org.openmk3.core.audio.Names.sound[a]; org.openmk3.core.audio.Names.save(ctx)
             e.poly.copy(a, b)
             e.zones.copy(a, b)
         }
@@ -1286,7 +1294,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         r.drawText("ALL", 60f, 22f, ovTab)
         r.drawText("NONE", 180f, 22f, ovTab)
         r.drawText("MULTI", 420f, 22f, if (selectMulti) ovOn else ovTab)
-        r.drawText("GROUP $groupLetter", 260f, 22f, ovTitle)
+        r.drawText(groupTitle().take(20), 230f, 22f, ovTitle)
         val w = 114f; val h = 58f
         for (slot in 0 until 16) {
             val col = slot % 4; val row = 3 - slot / 4
@@ -1302,7 +1310,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             val src = engine.params[sound, org.openmk3.core.audio.SoundParams.SRC].toInt()
             val name = when (src) {
                 1 -> "SYNTH"; 2 -> "FM"; 3 -> engine.poly.patchName[sound]
-                else -> engine.kit[sound].name.ifEmpty { "—" }
+                else -> soundName(sound).ifEmpty { "—" }
             }
             r.drawText(padLabel(slot), x + w / 2, y + 18f, ovName)
             r.drawText(name.take(13), x + w / 2, y + 42f, ovVal)

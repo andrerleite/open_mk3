@@ -234,6 +234,7 @@ class AudioEngine(private val ctx: Context) {
         n.nativeSetFxBuffer(fx.buffer)
         n.nativeInitSynths()
         poly.load(ctx)
+        Names.load(ctx)
         Thread({ PolyPresets.list(ctx); PolyPresets.categories(ctx) }, "poly-presets").start()  // parsed off the UI thread
         params.fmPatchName = { b, p -> n.nativeFmPatchName(b, p) }
         loadFmBanks()

@@ -300,7 +300,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         val slot = ui.selectedIndex
         r.drawText("TARGET PAD", 16f, 28f, label)
         r.drawRoundRect(RectF(16f, 38f, 44f, 66f), 5f, 5f, Theme.fill(Theme.ACCENT))
-        r.drawText("${ui.padLabel()}  ${ui.engine.kit[slot].name.ifEmpty { "(empty)" }}", 56f, 60f, big)
+        r.drawText("${ui.padLabel()}  ${ui.soundName(slot).ifEmpty { "(empty)" }}", 56f, 60f, big)
         r.drawText(ellipsize(ui.engine.kit[slot].info, 50), 16f, 86f, label)
 
         r.drawText("SELECTED", 16f, 120f, label)

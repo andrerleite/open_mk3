@@ -78,9 +78,23 @@ class HomePage(ui: Ui) : Page(ui) {
     private fun padPos(slot: Int) = (stepViewPage * 16 + stepForSlot(slot)) * g
     /** The step holding a note at [pos] (start matching within a hair), or null. */
     private fun noteAtPos(sound: Int, pos: Float): Int? {
-        val c = kotlin.math.floor(pos).toInt()
-        if (c >= pattern.length(ui.group)) return null
-        return if (pattern.hasStep(sound, c) && kotlin.math.abs(pattern.noteOffset(sound, c) - (pos - c)) < 0.02f) c else null
+        // a STEP pad covers the time around its step (half a step either side), so notes recorded
+        // live, a little off the grid, light and edit the step they belong to
+        val len = pattern.length(ui.group)
+        if (pos >= len) return null
+        val lo = pos - g / 2f
+        val hi = pos + g / 2f
+        var best: Int? = null
+        var bestD = Float.MAX_VALUE
+        for (c in kotlin.math.floor(lo).toInt()..kotlin.math.floor(hi).toInt()) {
+            val cc = Math.floorMod(c, len)
+            if (!pattern.hasStep(sound, cc)) continue
+            var t = c + pattern.noteOffset(sound, cc)
+            if (t < lo || t >= hi) continue
+            val d = kotlin.math.abs(t - pos)
+            if (d < bestD) { bestD = d; best = cc }
+        }
+        return best
     }
     /** Pad index (step order) under the playhead on the step page shown, or -1. */
     private val stepPlayPad: Int get() {
@@ -377,10 +391,10 @@ class HomePage(ui: Ui) : Page(ui) {
         r.drawColor(Theme.BG)
         val dl = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
         r.drawText("−OCT", 60f, 24f, dl); r.drawText("−1", 180f, 24f, dl); r.drawText("+1", 300f, 24f, dl); r.drawText("+OCT", 420f, 24f, dl)
-        l.drawText("PAD MODE · GROUP ${ui.groupLetter}", 16f, 56f, title)
+        l.drawText("PAD MODE · ${ui.groupTitle()}", 16f, 56f, title)
         l.drawText("Base key ${K.noteName(ui.keys.groupBase[ui.group])} (D5–D8)", 16f, 90f, value)
         l.drawRoundRect(RectF(16f, 104f, 40f, 128f), 4f, 4f, colourPaint)
-        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 124f, value)
+        l.drawText("${ui.padLabel()}  ${ui.soundName(sd(selected)).ifEmpty { "(empty)" }}", 50f, 124f, value)
         l.drawText("Choke: a sound silences the others of its group", 16f, 160f, label)
         l.drawText("Link: linked pads play together", 16f, 180f, label)
         val choke = sp.display(sd(selected), org.openmk3.core.audio.SoundParams.CHOKE)
@@ -393,7 +407,7 @@ class HomePage(ui: Ui) : Page(ui) {
             val x = 8f + col * (w + 4f); val y = 40f + row * (h + 4f)
             val s = sd(slot)
             r.drawRoundRect(RectF(x, y, x + w, y + h), 5f, 5f, if (slot == selected) paintOf(s) else keyCell)
-            r.drawText(fitEnd(e.kit[s].name.ifEmpty { "—" }, keyDim, w - 8f), x + w / 2, y + 18f, keyDim)
+            r.drawText(fitEnd(ui.soundName(s).ifEmpty { "—" }, keyDim, w - 8f), x + w / 2, y + 18f, keyDim)
             val c = sp[s, org.openmk3.core.audio.SoundParams.CHOKE].toInt(); val k = sp[s, org.openmk3.core.audio.SoundParams.LINK].toInt()
             r.drawText((if (c > 0) "C$c " else "") + (if (k > 0) "L$k" else ""), x + w / 2, y + 36f, keyName)
         }
@@ -510,6 +524,7 @@ class HomePage(ui: Ui) : Page(ui) {
         val b = sd(to)
         e.setSample(b, e.kit[a])
         for (i in 0 until org.openmk3.core.audio.SoundParams.COUNT) e.params[b, i] = e.params[a, i]
+        org.openmk3.core.audio.Names.sound[b] = org.openmk3.core.audio.Names.sound[a]; org.openmk3.core.audio.Names.save(ui.ctx)
         e.poly.copy(a, b)
         e.zones.copy(a, b)
         e.zones.save(ui.ctx)
@@ -582,7 +597,7 @@ class HomePage(ui: Ui) : Page(ui) {
         l.drawText(if (e.playing) "▶ PLAY" else "■ STOP", 330f, 30f, value)
         if (rec) l.drawText("● REC", 410f, 30f, Theme.text(17f, Theme.WARN, bold = true))
         l.drawRoundRect(RectF(16f, 46f, 40f, 70f), 4f, 4f, colourPaint)
-        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 66f, value)
+        l.drawText("${ui.padLabel()}  ${ui.soundName(sd(selected)).ifEmpty { "(empty)" }}", 50f, 66f, value)
         if (ui.padMode != Ui.PadMode.VEL16) {
             l.drawText("Base ${K.noteName(k.baseNote)} · ${K.SCALES[k.scale].first}", 16f, 104f, value)
             l.drawText("SHIFT + pad 13/14: semitone −/+ · 15/16: octave −/+", 16f, 134f, label)
@@ -655,7 +670,7 @@ class HomePage(ui: Ui) : Page(ui) {
 
         // selected sound
         l.drawRoundRect(RectF(16f, 122f, 40f, 146f), 4f, 4f, colourPaint)
-        l.drawText("${ui.padLabel()}  ${e.kit[sd(selected)].name.ifEmpty { "(empty)" }}", 50f, 142f, value.apply { textSize = 20f })
+        l.drawText("${ui.padLabel()}  ${ui.soundName(sd(selected)).ifEmpty { "(empty)" }}", 50f, 142f, value.apply { textSize = 20f })
         value.textSize = 17f
         val flags = buildString {
             if (pattern.mute[sd(selected)]) append("  muted")
@@ -738,7 +753,7 @@ class HomePage(ui: Ui) : Page(ui) {
             c.save()
             c.clipRect(0f, y, x0 - 2f, y + rowH)
             val lp = if (audible) rowLabel else rowLabelDim
-            c.drawText(fitEnd(ui.engine.kit[s].name.ifEmpty { "—" }, lp, x0 - 18f), 15f, y + 12f, lp)
+            c.drawText(fitEnd(ui.soundName(s).ifEmpty { "—" }, lp, x0 - 18f), 15f, y + 12f, lp)
             c.restore()
             for (tt in 0 until 16) {
                 val t = page * 16 + tt

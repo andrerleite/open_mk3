@@ -99,7 +99,7 @@ class ChannelPage(ui: Ui) : Page(ui) {
         l.drawText("SOUND", 300f, 24f, if (level == 2) dOn else dLabel)
         l.drawText("OUTPUT", 8f, 52f, if (page == 0) stripOn else strip)
         l.drawText("GROOVE", 80f, 52f, if (page == 1) stripOn else strip)
-        val name = when (level) { 0 -> "MASTER"; 1 -> "GROUP ${ui.groupLetter}"; else -> "SOUND ${soundLabel(ui.selectedIndex)}" }
+        val name = when (level) { 0 -> "MASTER"; 1 -> ui.groupTitle(); else -> "SOUND ${soundLabel(ui.selectedIndex)}" }
         l.drawText("CHANNEL · $name", 16f, 86f, title)
         fun knob(i: Int, n: String, v: String) { val x = 60f + i * 120f; l.drawText(n, x, 244f, kName); l.drawText(v, x, 264f, kValue) }
         if (page == 0) {

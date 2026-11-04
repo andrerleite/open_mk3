@@ -38,7 +38,7 @@ object GroupFile {
 
     fun save(e: AudioEngine, g: Int, colour: Int, name: String): File {
         val p = e.pattern
-        val j = JSONObject().put("version", 1).put("colour", colour)
+        val j = JSONObject().put("version", 1).put("colour", colour).put("name", Names.group[g])
         j.put("mixer", JSONObject().put("vol", p.groupVolume(g).toDouble()).put("pan", p.groupPan(g).toDouble()).put("swing", p.groupSwing(g).toDouble()))
         j.put("groupFx", fxJson(e, FxParams.GROUP0 + g))
         j.put("sounds", JSONArray().apply { for (k in 0 until 16) put(soundJson(e, g * 16 + k)) })
@@ -70,6 +70,7 @@ object GroupFile {
             p.current[g] = j.optInt("current", -1).takeIf { it in 0 until Pattern.SLOTS && p.patterns[g][it] != null } ?: -1
             p.refreshGroup(g)
         }
+        Names.group[g] = j.optString("name", f.nameWithoutExtension)
         AppLog.i("Group loaded into ${'A' + g}: ${f.name}")
         return j.optInt("colour", -1)
     }
@@ -81,6 +82,7 @@ object GroupFile {
 
     fun soundJson(e: AudioEngine, s: Int): JSONObject {
         val o = JSONObject()
+        o.put("name", Names.sound[s])
         o.put("sample", e.kit[s].path ?: JSONObject.NULL)
         o.put("params", JSONArray().apply { for (i in 0 until SoundParams.COUNT) put(e.params[s, i].toDouble()) })
         o.put("poly", JSONArray().apply { for (i in 0 until e.poly.count) put(e.poly[s, i].toDouble()) }).put("polyName", e.poly.patchName[s])
@@ -115,6 +117,7 @@ object GroupFile {
                 AppLog.i("Group: missing $path"); e.builtIn[s]
             }
             onSample(s, sample)
+            Names.sound[s] = o.optString("name", "")
             e.params.reset(s)
             o.optJSONArray("params")?.let { a -> for (i in 0 until minOf(SoundParams.COUNT, a.length())) e.params[s, i] = a.getDouble(i).toFloat() }
             e.poly.reset(s)

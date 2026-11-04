@@ -217,7 +217,7 @@ class MixerPage(ui: Ui) : Page(ui) {
             if (focused) c.drawRect(x - 58f, 60f, x + 58f, 272f, sel)
             c.drawRect(x - 50f, 64f, x + 50f, 70f, Theme.fill(Mk3Colors.rgb(colour)))
             c.drawText(label, x, 90f, if (audible) name else nameDim)
-            if (!groupsLevel) c.drawText(ui.engine.kit[ch].name.take(12).ifEmpty { "—" }, x, 108f, nameDim)
+            if (!groupsLevel) c.drawText(ui.soundName(ch).take(12).ifEmpty { "—" }, x, 108f, nameDim)
             // volume bar (0 dB at 5/6 of the height) and pan marker, VU meter beside it
             val top = 118f; val bot = 222f
             val mi = meterIndex(ch)

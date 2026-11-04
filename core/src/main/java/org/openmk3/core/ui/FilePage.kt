@@ -27,6 +27,8 @@ class FilePage(ui: Ui) : Page(ui) {
         class SaveGroup(letter: Char) : Item("SAVE GROUP $letter…  (kit + patterns)")
         class LoadGroup(val file: File, letter: Char) : Item("GROUP → $letter:  ${file.nameWithoutExtension}")
         class SaveSound(pad: String) : Item("SAVE SOUND $pad…  (sample + settings)")
+        class RenameSound(pad: String, name: String) : Item("RENAME SOUND $pad  \"$name\"")
+        class RenameGroup(name: String) : Item("RENAME GROUP  \"$name\"")
         class LoadSound(val file: File, pad: String) : Item("SOUND → $pad:  ${file.nameWithoutExtension}")
         class Load(val file: File) : Item(file.nameWithoutExtension)
     }
@@ -62,6 +64,8 @@ class FilePage(ui: Ui) : Page(ui) {
             add(Item.New)
             add(Item.SaveGroup(ui.groupLetter))
             add(Item.SaveSound(ui.padLabel()))
+            add(Item.RenameSound(ui.padLabel(), ui.soundName(ui.selectedIndex)))
+            add(Item.RenameGroup(ui.groupName(ui.group)))
             Project.list().forEach { add(Item.Load(it)) }
             org.openmk3.core.audio.GroupFile.list().forEach { add(Item.LoadGroup(it, ui.groupLetter)) }
             org.openmk3.core.audio.GroupFile.soundList().forEach { add(Item.LoadSound(it, ui.padLabel())) }
@@ -173,6 +177,8 @@ class FilePage(ui: Ui) : Page(ui) {
     private var renaming = false
     private var savingGroup = false
     private var savingSound = false
+    /** 1: naming the focused sound, 2: the focused group. */
+    private var nameTarget = 0
     private val name = StringBuilder()
     private var cursor = 0
     private var shift = false
@@ -197,11 +203,23 @@ class FilePage(ui: Ui) : Page(ui) {
         }
     }
 
+    private fun backspace() { if (cursor > 0) { name.deleteCharAt(cursor - 1); cursor-- } }
+
     private fun moveCursor(d: Int) { cursor = (cursor + d).coerceIn(0, minOf(name.length, 39)) }
 
     private fun finishEdit() {
         val n = Project.clean(name.toString())
         if (n.isEmpty()) { message = "Can't use an empty name"; return }
+        if (nameTarget != 0) {
+            val t = nameTarget
+            nameTarget = 0
+            editing = false
+            if (t == 1) org.openmk3.core.audio.Names.sound[ui.selectedIndex] = n else org.openmk3.core.audio.Names.group[ui.group] = n
+            org.openmk3.core.audio.Names.save(ui.ctx)
+            message = if (t == 1) "${ui.padLabel()} is now \"$n\"" else "Group ${ui.groupLetter} is now \"$n\""
+            refresh()
+            return
+        }
         if (savingSound) {
             savingSound = false
             editing = false
@@ -276,15 +294,17 @@ class FilePage(ui: Ui) : Page(ui) {
         }
         if (editing) {
             when (name) {
-                "PAGE LEFT", "ENCODER LEFT" -> moveCursor(-1)
-                "PAGE RIGHT", "ENCODER RIGHT" -> moveCursor(1)
-                "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
-                "D6" -> if (cursor > 0 || cursor < this.name.length) {
-                    // delete the letter before the cursor (at the end) or under it
-                    if (cursor >= this.name.length && cursor > 0) { this.name.deleteCharAt(cursor - 1); cursor-- }
-                    else if (cursor < this.name.length) this.name.deleteCharAt(cursor)
+                // 4D encoder (like a hardware sampler's naming screen): turn = letter, tilt ◀ ▶ =
+                // cursor, tilt ▲ ▼ = upper / lower case, SHIFT + ◀ = backspace, SHIFT + ▶ = space
+                "PAGE LEFT", "ENCODER LEFT" -> if (shift) backspace() else moveCursor(-1)
+                "PAGE RIGHT", "ENCODER RIGHT" -> if (shift) { this.name.insert(cursor.coerceAtMost(this.name.length), ' '); moveCursor(1) } else moveCursor(1)
+                "ENCODER UP", "ENCODER DOWN" -> if (cursor < this.name.length) {
+                    val c = this.name[cursor]
+                    if (c.isLetter()) this.name.setCharAt(cursor, if (name == "ENCODER UP") c.uppercaseChar() else c.lowercaseChar())
                 }
-                "D7" -> { editing = false; savingGroup = false; savingSound = false; message = "Cancelled" }
+                "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
+                "D6" -> if (cursor < this.name.length) this.name.deleteCharAt(cursor) else backspace()
+                "D7" -> { editing = false; savingGroup = false; savingSound = false; nameTarget = 0; message = "Cancelled" }
                 "D8", "ENCODER PUSH" -> finishEdit()
                 "FILE" -> ui.showHome()
             }
@@ -316,6 +336,8 @@ class FilePage(ui: Ui) : Page(ui) {
                 refresh()
             }
             is Item.SaveGroup -> { savingGroup = true; startEdit("Kit ${ui.groupLetter} " + Project.suggestName(ui.engine.bpm).substringBefore(' '), false) }
+            is Item.RenameSound -> { nameTarget = 1; startEdit(ui.soundName(ui.selectedIndex), false) }
+            is Item.RenameGroup -> { nameTarget = 2; startEdit(org.openmk3.core.audio.Names.group[ui.group].ifEmpty { "Group ${ui.groupLetter}" }, false) }
             is Item.SaveSound -> { savingSound = true; startEdit(ui.engine.kit[ui.selectedIndex].name.ifEmpty { "Sound" }, false) }
             is Item.LoadSound -> loadSound(it.file)
             is Item.LoadGroup -> if (armed != sel) { armed = sel; message = "Push again: replaces group ${ui.groupLetter}" } else loadGroup(it.file)
@@ -401,7 +423,7 @@ class FilePage(ui: Ui) : Page(ui) {
     private val cursorFill = Theme.fill(Theme.ACCENT)
 
     private fun drawEditor(l: Canvas, r: Canvas, now: Long) {
-        l.drawText(if (savingSound) "SAVE SOUND ${ui.padLabel()}" else if (savingGroup) "SAVE GROUP ${ui.groupLetter}" else if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
+        l.drawText(if (nameTarget == 1) "NAME SOUND ${ui.padLabel()}" else if (nameTarget == 2) "NAME GROUP ${ui.groupLetter}" else if (savingSound) "SAVE SOUND ${ui.padLabel()}" else if (savingGroup) "SAVE GROUP ${ui.groupLetter}" else if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
         val n = name.toString()
         val x0 = 16f
         val y = 120f
@@ -410,8 +432,19 @@ class FilePage(ui: Ui) : Page(ui) {
         val cx = x0 + nameText.measureText(n, 0, cursor.coerceAtMost(n.length))
         val cw = if (cursor < n.length) nameText.measureText(n, cursor, cursor + 1).coerceAtLeast(8f) else 14f
         if ((now / 400) % 2 == 0L || true) l.drawRect(cx, y + 6f, cx + cw, y + 10f, cursorFill)
-        l.drawText("Encoder: letter · ◀ ▶: cursor · SHIFT + encoder: case", 16f, 170f, label)
-        l.drawText("K1 cursor · K2 letter", 16f, 192f, label)
+        l.drawText("Turn: letter · ◀ ▶: cursor · ▲ ▼: upper / lower case", 16f, 170f, label)
+        l.drawText("SHIFT + ◀: backspace · SHIFT + ▶: space · push: OK", 16f, 192f, label)
+        // the characters around the one under the cursor, as a strip
+        val cur = if (cursor < n.length) n[cursor] else ' '
+        val ci = CHARS.indexOf(cur).coerceAtLeast(0)
+        val big = Theme.text(24f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+        val small = Theme.text(18f, Theme.DIM, align = Paint.Align.CENTER)
+        for (k in -6..6) {
+            val ch = CHARS[Math.floorMod(ci + k, CHARS.length)]
+            val x = 240f + k * 34f
+            if (k == 0) r.drawRect(x - 16f, 132f, x + 16f, 172f, selFill)
+            r.drawText(if (ch == ' ') "␣" else ch.toString(), x, 162f, if (k == 0) big else small)
+        }
         listOf("SUGGEST", "DELETE", "CANCEL", if (renaming) "RENAME" else "SAVE").forEachIndexed { i, t -> r.drawText(t, 60f + i * 120f, 24f, dLabel) }
         r.drawText("A name is suggested: keep it, change it,", 16f, 70f, label)
         r.drawText("or press D5 for another one", 16f, 92f, label)

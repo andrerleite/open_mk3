@@ -491,7 +491,7 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private fun levelName() = when (level) {
         0 -> "MASTER"
-        1 -> "GROUP ${ui.groupLetter}"
+        1 -> ui.groupTitle()
         3 -> "RETURN A"
         4 -> "RETURN B"
         else -> "SOUND ${ui.padLabel()}"
@@ -715,7 +715,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         }
         // chain list
         l.drawText(levelName(), 16f, 80f, title)
-        if (level == 2) l.drawText(ellipsize(ui.engine.kit[slot].name.ifEmpty { if (isSynth) "" else "(empty)" }, 24), 200f, 80f, slotDim)
+        if (level == 2) l.drawText(ellipsize(ui.soundName(slot).ifEmpty { if (isSynth) "" else "(empty)" }, 24), 200f, 80f, slotDim)
         // the slots side by side: icon and name, "+" when empty (encoder or D4 chooses)
         val tw = 112f; val th = 112f; val ty = 92f
         for (i in 0 until slotCount) {
