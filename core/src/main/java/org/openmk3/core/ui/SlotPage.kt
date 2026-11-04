@@ -18,7 +18,9 @@ import org.openmk3.core.mk3.Mk3Colors
  * D7 / D8: previous / next bank of 16 (4 banks).
  * PATTERN: K1 length (16 steps per turn notch; SHIFT: single steps), D5 duplicate to the next
  * free slot, D6 delete, D7 double, D8 clear notes.
- * SCENE: D5 duplicate, D6 delete, D8 update the scene with the patterns playing now.
+ * SCENE: D2 UNIQUE (the current scene gets its own copies of its patterns), SHIFT + D2 clear
+ * (no patterns), D3 APPEND (pads add their scene to the end of the song), D4 update the scene
+ * with the patterns playing now, D5 create, D6 delete.
  * Both: SHIFT + D5 names the current pattern / scene; SHIFT + D6 picks its colour (the pads show
  * the 16 colours, hit one; SHIFT + D6 again clears it back to the group's colour).
  * Hold the mode button for a quick look (release returns); a short press keeps the mode on.
@@ -39,6 +41,8 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
     private var lenAcc = 0
     /** Picking the current pattern's / scene's colour on the pads. */
     private var picking = false
+    /** SCENE, D3 APPEND: pads add scenes to the end of the song. */
+    private var appending = false
 
     private val title = Theme.text(20f, Theme.ACCENT, bold = true)
     private val big = Theme.text(22f, Theme.FG, bold = true)
@@ -126,7 +130,7 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         l.set("D5", "D6")
         l.set("SETTINGS", "MIXER", "FILE")
         l.set("D7", bank > 0); l.set("D8", bank < banks - 1)
-        if (kind == Kind.SCENE) l.set("D2")
+        if (kind == Kind.SCENE) { l.set("D2"); l.set("D3", appending); l.set("D4") }
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
@@ -153,6 +157,11 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
                     message = "${name(dupSource)} → ${name(i)}"
                     dupSource = -1
                 }
+            }
+            kind == Kind.SCENE && appending -> {
+                if (!has(i)) p.captureScene(i)
+                p.song.add(i)
+                message = "${slotTitle(i)} appended as section ${p.song.size}"
             }
             kind == Kind.PATTERN -> {
                 val created = !has(i)
@@ -203,9 +212,38 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
             } else deleteCurrent()
             "D7" -> if (bank > 0) bank--
             "D8" -> if (bank < banks - 1) bank++
-            "D2" -> if (kind == Kind.SCENE && p.currentScene >= 0) { p.captureScene(p.currentScene); message = "Scene ${p.currentScene + 1} updated"; changed() }
+            "D2" -> if (kind == Kind.SCENE) { if (shift) clearScene() else makeUnique() }
+            "D3" -> if (kind == Kind.SCENE) { appending = !appending; message = if (appending) "APPEND: hit scene pads to add them to the end of the song" else "" }
+            "D4" -> if (kind == Kind.SCENE && p.currentScene >= 0) { p.captureScene(p.currentScene); message = "${slotTitle(p.currentScene)} updated"; changed() }
             "BROWSER", "SAMPLING", "PLUG-IN", "SETTINGS", "MIXER", "FILE" -> back()
         }
+    }
+
+    /** SCENE D2 UNIQUE: the current scene's patterns are copied to free slots so editing them leaves other scenes alone. */
+    private fun makeUnique() {
+        val cur = p.currentScene
+        val sc = p.scenes.getOrNull(cur) ?: run { message = "No scene selected"; return }
+        var copies = 0
+        for (gi in 0 until Pattern.GROUPS) {
+            val src = sc[gi]
+            if (src < 0 || p.patterns[gi][src] == null) continue
+            val free = (0 until Pattern.SLOTS).firstOrNull { p.patterns[gi][it] == null } ?: run { message = "Group ${'A' + gi} has no free slot"; return }
+            p.duplicatePattern(gi, src, free)
+            sc[gi] = free
+            if (p.current[gi] == src) p.selectPattern(gi, free, playing)
+            copies++
+        }
+        message = if (copies == 0) "${slotTitle(cur)} has no patterns" else "${slotTitle(cur)} is unique ($copies new pattern${if (copies > 1) "s" else ""})"
+        changed()
+    }
+
+    /** SCENE SHIFT + D2: the current scene keeps its slot but plays no patterns. */
+    private fun clearScene() {
+        val cur = p.currentScene
+        val sc = p.scenes.getOrNull(cur) ?: run { message = "No scene selected"; return }
+        sc.fill(-1)
+        message = "${slotTitle(cur)} cleared"
+        changed()
     }
 
     /** D5 CREATE: a new empty pattern / scene in the next free slot after the current one. */
@@ -283,7 +321,11 @@ class SlotPage(ui: Ui, private val back: Page, val kind: Kind) : Page(ui) {
         }
         val pinName = if (kind == Kind.PATTERN) "PATTERN" else "SCENE"
         l.drawText("PIN", 60f, 24f, if (pinName in ui.pinned) cellName else dLabel)
-        if (kind == Kind.SCENE) l.drawText("UPDATE", 180f, 24f, dLabel)
+        if (kind == Kind.SCENE) {
+            l.drawText(if (shift) "CLEAR" else "UNIQUE", 180f, 24f, dLabel)
+            l.drawText("APPEND", 300f, 24f, if (appending) cellName else dLabel)
+            l.drawText("UPDATE", 420f, 24f, dLabel)
+        }
         r.drawText(if (shift) "NAME" else "CREATE", 60f, 24f, dLabel)
         r.drawText(if (shift) "COLOUR" else "DELETE", 180f, 24f, dLabel)
         r.drawText("◀ BANK", 300f, 24f, dLabel)

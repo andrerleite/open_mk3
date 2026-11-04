@@ -1585,7 +1585,7 @@ void Engine::render(float* out, int32_t frames) {
  * 4 LO-FI (sample rate and bit reduction). Type 0 (FILTER) works per group elsewhere.
  */
 void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
-    const int type = std::clamp(int(p[OFF_PFX] + 0.5f), 0, 9);
+    const int type = std::clamp(int(p[OFF_PFX] + 0.5f), 0, 10);
     const bool on = p[OFF_PFX + 1] > 0.5f && type != 0;
     const float amt = std::clamp(p[OFF_PFX + 2], 0.f, 1.f);
     if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
@@ -1596,6 +1596,7 @@ void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
         pfxLen = 0;
         pfxRead = double(pfxW);
         pfxSpeed = 1.f;
+        if (type == 5 || type == 10) { std::memset(pfxFl, 0, sizeof(pfxFl)); pfxTone[0] = pfxTone[1] = 0.f; }
     }
     pfxWas = on;
     const float target = on ? 1.f : 0.f;
@@ -1715,6 +1716,22 @@ void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
                 const int a = ip & (kPfxRing - 1), b = (ip + 1) & (kPfxRing - 1);
                 wet[0] = pfxRing[a][0] * (1.f - t) + pfxRing[b][0] * t;
                 wet[1] = pfxRing[a][1] * (1.f - t) + pfxRing[b][1] * t;
+                break;
+            }
+            case 10: {  // reso echo: a short echo tuned to a pitch (C1 .. C6 along the strip), ringing
+                pfxLfo += (amt - pfxLfo) * 0.001f;
+                const float hz = 32.7f * std::exp2(pfxLfo * 5.f);
+                const float d = std::min(2000.f, float(kSampleRate) / hz);
+                for (int c = 0; c < 2; c++) {
+                    const float rp = float(pfxFlW) - d;
+                    const int ip = int(std::floor(rp));
+                    const float t = rp - float(ip);
+                    const float y = pfxFl[ip & 2047][c] * (1.f - t) + pfxFl[(ip + 1) & 2047][c] * t;
+                    pfxTone[c] += 0.5f * (y - pfxTone[c]);  // damping: the ring dies away from the top
+                    pfxFl[pfxFlW][c] = dry[c] * 0.3f + pfxTone[c] * 0.88f;
+                    wet[c] = 0.7f * dry[c] + pfxTone[c];
+                }
+                pfxFlW = (pfxFlW + 1) & 2047;
                 break;
             }
             default: break;

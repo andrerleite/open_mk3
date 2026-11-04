@@ -154,7 +154,7 @@ class Pattern {
         private const val OFF_BANKS = OFF_GSEND + GROUPS * 2
         /** Perform FX types (SHIFT + PERFORM). */
         val PERFORM_FX = listOf("FILTER", "STUTTER", "TAPE STOP", "TRANCE GATE", "LO-FI",
-            "FLANGER", "BURST ECHO", "RING", "TREMOLO", "SCRATCHER")
+            "FLANGER", "BURST ECHO", "RING", "TREMOLO", "SCRATCHER", "RESO ECHO")
         private const val B_VEL = 0
         private const val B_NOTE = B_VEL + PADS * STEPS
         private const val B_XVEL = B_NOTE + PADS * STEPS

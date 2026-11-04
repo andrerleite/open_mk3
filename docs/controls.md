@@ -44,7 +44,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| SCENE | Hold: scenes on the pads (select / launch on the perform grid; empty pad = new scene from the patterns playing). K1 RETRIGGER: off (default) a scene switched mid-pattern carries on from the same position, on it starts from the top. Hold + D1 pins the mode. | ✅ |
+| SCENE | Hold: scenes on the pads (select / launch on the perform grid; empty pad = new scene from the patterns playing). D2 UNIQUE, SHIFT + D2 clear, D3 APPEND to the song, D4 update. K1 RETRIGGER: off (default) a scene switched mid-pattern carries on from the same position, on it starts from the top. Hold + D1 pins the mode. | ✅ |
 | SHIFT + SCENE (Section) | Song view (same as ARRANGER) | ✅ |
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Hold (D1 pins). Pads select / deselect all notes of a sound (dim: has notes, lit: all selected), D5 all, D6 none, D7 / D8 (or ▲ ▼) previous / next sound, ERASE + pad erases. D2 EDIT / SELECT. SELECT: K1 START / K2 END select the focused sound's notes in that range (step grid), K4 EVENT picks single notes, ◀ ▶ previous / next note. EDIT: K1 POSITION (nudge grid; SHIFT fine), K2 PITCH, K3 VELOCITY, K4 LENGTH (step grid; SHIFT fine) on the selected notes only ((MULTI) when several); ◀ ▶ page. Selected notes are outlined on the right screen. SHIFT + pads act on the selected notes (none selected: the whole group): 5 / 6 quantise / 50 %, 7 / 8 nudge, 9 clear, 11 copy, 12 paste (same places, also into another pattern), 13–16 transpose; 1 / 2 undo / redo | ✅ |
@@ -129,7 +129,7 @@ They work in every pad mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that
 |---|---|---|
 | PITCH | Strip bends the focused sound ±2 semitones (springs back) | ✅ |
 | MOD | Strip closes a low-pass filter on the focused sound (stays where left) | ✅ |
-| PERFORM (FX Select) | Strip plays the perform FX while touched (position = amount, off when released): FILTER on the focused group (left low-pass, right high-pass), or on the master STUTTER (repeats the last 1/4 · 1/8 · 1/16 · 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI, FLANGER (the strip sweeps it), BURST ECHO (dotted 1/8, more repeats to the right), RING (30 Hz – 2 kHz), TREMOLO (1/4 … 1/32 on the beat), SCRATCHER (the strip scratches the last beat) | ✅ |
+| PERFORM (FX Select) | Strip plays the perform FX while touched (position = amount, off when released): FILTER on the focused group (left low-pass, right high-pass), or on the master STUTTER (repeats the last 1/4 · 1/8 · 1/16 · 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI, FLANGER (the strip sweeps it), BURST ECHO (dotted 1/8, more repeats to the right), RING (30 Hz – 2 kHz), TREMOLO (1/4 … 1/32 on the beat), SCRATCHER (the strip scratches the last beat), RESO ECHO (a short ringing echo tuned to a pitch, C1 to C6 along the strip) | ✅ |
 | SHIFT + PERFORM | Choose the perform FX (pads 1–5) | ✅ |
 | NOTES | Strip plays the keyboard layout's notes on the focused sound as you slide | ✅ |
 
@@ -282,8 +282,10 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
   then); stopped, it switches at once. All groups keep playing together.
 - 64 scenes (4 banks): each remembers one pattern (or none) per group. Launching a scene switches every
   group at the end of its pattern.
-- PATTERN mode: D5 create (next free slot), D6 delete, K4 length. SCENE mode: D2 update the
-  scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +
+- PATTERN mode: D5 create (next free slot), D6 delete, K4 length. SCENE mode: D2 UNIQUE (the
+  current scene gets its own copies of its patterns, so editing them leaves other scenes alone),
+  SHIFT + D2 clear (the scene plays no patterns), D3 APPEND (while lit, scene pads add their scene
+  to the end of the song), D4 update the scene with the patterns playing now, D5 create, D6 delete. Mode buttons are momentary; hold +
   D1 pins them. Double: SHIFT + DUPLICATE; clear: SHIFT + pad 9.
 - Names and colours (PATTERN and SCENE mode): SHIFT + D5 names the current pattern / scene (the
   same name editor as FILE); SHIFT + D6 shows the 16 colours on the pads, hit one to colour it,
