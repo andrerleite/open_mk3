@@ -733,7 +733,7 @@ class Pattern {
     fun deleteScene(idx: Int) {
         scenes[idx] = null
         if (currentScene == idx) currentScene = -1
-        song.removeAll { it == idx }
+        song.removeAll { it % 1000 == idx }
         songPos = songPos.coerceIn(0, maxOf(0, song.size - 1))
     }
 
@@ -761,7 +761,16 @@ class Pattern {
         return if (len == 0) 16 else len
     }
 
-    private fun sectionScene(pos: Int) = song.getOrNull(pos)?.takeIf { scenes[it] != null }
+    /**
+     * A song entry is scene + 1000 × bars: bars = the section's own length (0: its scene's
+     * length), so moving / duplicating / deleting sections keeps it.
+     */
+    fun sceneOf(pos: Int): Int = (song.getOrNull(pos) ?: -1).let { if (it < 0) -1 else it % 1000 }
+    fun sectionBars(pos: Int): Int = (song.getOrNull(pos) ?: 0) / 1000
+    fun setSectionBars(pos: Int, bars: Int) { if (pos in song.indices) song[pos] = sceneOf(pos) + 1000 * bars.coerceIn(0, 64) }
+    /** Length of section [pos] in steps: its own, else its scene's. */
+    fun sectionLength(pos: Int): Int = sectionBars(pos).let { if (it > 0) it * 16 else sceneLength(sceneOf(pos)) }
+    private fun sectionScene(pos: Int) = sceneOf(pos).takeIf { it >= 0 && scenes[it] != null }
 
     private fun nextSection(): Int = when {
         songJump in song.indices -> songJump
@@ -794,7 +803,7 @@ class Pattern {
         if (!songMode || song.isEmpty()) return
         songPos = 0; songJump = -1
         queueSection(0, 0, playing = true)
-        secStart = 0; secLen = sceneLength(song[0])
+        secStart = 0; secLen = sectionLength(0)
     }
 
     private var wasPlaying = false
@@ -811,13 +820,13 @@ class Pattern {
                 if ((0 until GROUPS).any { current[it] != want[it] }) queueSection(songPos, 0, playing = false)
                 currentScene = sc
             }
-            secStart = 0; secLen = sc?.let { sceneLength(it) } ?: 16
+            secStart = 0; secLen = if (sc != null) sectionLength(songPos) else 16
             queuedSec = -1; queuedAt = -1
             wasPlaying = false
             return
         }
         val now = f.get(OFF_NOW).toInt()
-        if (!wasPlaying) { secStart = 0; secLen = sectionScene(songPos)?.let { sceneLength(it) } ?: 16; queuedSec = -1; queuedAt = -1 }
+        if (!wasPlaying) { secStart = 0; secLen = if (sectionScene(songPos) != null) sectionLength(songPos) else 16; queuedSec = -1; queuedAt = -1 }
         wasPlaying = true
         if (now < secStart) { secStart = 0; queuedSec = -1; queuedAt = -1 }  // restarted
         val end = secStart + secLen
@@ -827,7 +836,7 @@ class Pattern {
             if (songJump == songPos) songJump = -1
             sectionScene(songPos)?.let { currentScene = it }
             secStart = queuedAt
-            secLen = sectionScene(songPos)?.let { sceneLength(it) } ?: 16
+            secLen = if (sectionScene(songPos) != null) sectionLength(songPos) else 16
             queuedSec = -1; queuedAt = -1
             sectionScene(songPos)?.let { sc -> for (g in 0 until GROUPS) { current[g] = scenes[sc]!![g]; queued[g] = -1 } }
             return
@@ -934,7 +943,7 @@ class Pattern {
             }
             currentScene = j.optInt("currentScene", -1)
             song.clear()
-            j.optJSONArray("song")?.let { a -> for (i in 0 until a.length()) a.getInt(i).takeIf { it in 0 until SLOTS }?.let { song.add(it) } }
+            j.optJSONArray("song")?.let { a -> for (i in 0 until a.length()) a.getInt(i).takeIf { it % 1000 in 0 until SLOTS }?.let { song.add(it) } }
             songMode = j.optBoolean("songMode", false)
             loop = j.optBoolean("loop", false)
             performType = j.optInt("performType", 0)

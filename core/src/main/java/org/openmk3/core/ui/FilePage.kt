@@ -85,7 +85,7 @@ class FilePage(ui: Ui) : Page(ui) {
     /** Steps of one pass: the song (song mode) or the longest pattern playing. */
     private fun exportSteps(): Int {
         val p = ui.engine.pattern
-        if (exportSong && p.songMode && p.song.isNotEmpty()) return p.song.sumOf { p.sceneLength(it) }
+        if (exportSong && p.songMode && p.song.isNotEmpty()) return p.song.indices.sumOf { p.sectionLength(it) }
         var len = 16
         for (g in 0 until 8) if (!p.groupEmpty(g)) len = maxOf(len, p.length(g))
         return len
