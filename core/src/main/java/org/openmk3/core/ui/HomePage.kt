@@ -37,6 +37,9 @@ class HomePage(ui: Ui) : Page(ui) {
     @Volatile private var shift = false
     companion object {
         @Volatile var stepMode = false
+        /** Pattern grid on the right screen (Navigate): steps per column (1, 2, 4) and the page shown. */
+        @Volatile var gridZoom = 1
+        @Volatile var gridPage = 0
     }
     @Volatile private var erase = false
     @Volatile private var select = false
@@ -57,15 +60,17 @@ class HomePage(ui: Ui) : Page(ui) {
     private var lastStep = -2
     /** Page of 16 steps shown on the pads (STEP) and the grid; follows the playhead with FOLLOW. */
     private var stepPage = 0
-    private val pages get() = (pattern.length(ui.group) + 15) / 16
+    private val span get() = 16 * gridZoom
+    private val pages get() = (pattern.length(ui.group) + span - 1) / span
     private val viewPage: Int get() {
         val st = pattern.stepOf(ui.group)
-        return (if (ui.follow && st >= 0) st / 16 else stepPage).coerceIn(0, pages - 1)
+        val fallback = if (mode == Mode.STEP && gridZoom == 1) stepPage else gridPage
+        return (if (ui.follow && st >= 0) st / span else fallback).coerceIn(0, pages - 1)
     }
-    /** Playhead step within the page shown (-1 when not on it or stopped). */
+    /** Playhead column within the page shown (-1 when not on it or stopped). */
     private val pageStep: Int get() {
         val st = pattern.stepOf(ui.group)
-        return if (st >= 0 && st / 16 == viewPage) st % 16 else -1
+        return if (st >= 0 && st / span == viewPage) (st % span) / gridZoom else -1
     }
     // STEP pads follow the step grid (SHIFT + FOLLOW): 1/16 by default, finer or coarser
     private val g get() = ui.stepGrid
@@ -848,10 +853,12 @@ class HomePage(ui: Ui) : Page(ui) {
             c.drawText(fitEnd(ui.soundName(s).ifEmpty { "—" }, lp, x0 - 18f), 15f, y + 12f, lp)
             c.restore()
             for (tt in 0 until 16) {
-                val t = page * 16 + tt
+                val t = (page * 16 + tt) * gridZoom
                 val x = x0 + tt * cw
                 if (t >= len) { c.drawRect(x + 1f, y + 2f, x + cw - 1f, y + rowH - 1f, cellOff); continue }
-                val v = if (p.hasStep(s, t)) maxOf(p.vel(s, t), 0.4f) else 0f
+                // a column covers gridZoom steps: lit if any of them holds a note
+                var v = 0f
+                for (z in 0 until gridZoom) if (t + z < len && p.hasStep(s, t + z)) v = maxOf(v, p.vel(s, t + z), 0.4f)
                 val paint = when {
                     v > 0f && audible -> if (v > 0.5f) paintOf(s) else dimOf(s)
                     v > 0f -> cellOffBeat

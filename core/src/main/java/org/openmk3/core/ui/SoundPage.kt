@@ -79,6 +79,10 @@ import kotlin.math.sqrt
 /** Opens the PLUG-IN page on return [a] (0 = A, 1 = B) next time it is shown. */
 object SoundPageNav {
     @Volatile var openReturn = -1
+    /** Open the focused sound's source on this parameter page (Navigate PAGE NAV), -1 = none. */
+    @Volatile var wantPage = -1
+    /** Parameter page names of a sound source (SRC_*). */
+    fun sourcePages(src: Int): List<String> = SoundPage.sourcePageNames(src)
 }
 
 class SoundPage(ui: Ui) : Page(ui) {
@@ -102,10 +106,11 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private class PageDef(val name: String, val knobs: List<Knob?>, val view: View)
 
-    private companion object {
-        fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
+    companion object {
+        fun sourcePageNames(src: Int): List<String> = when (src) { SoundParams.SRC_POLY -> POLY_PAGES; SoundParams.SRC_FM -> FM; SoundParams.SRC_SYNTH -> SYNTH; else -> SAMPLER }.map { it.name }
+        private fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
         // the sampler's pages, in the order of the hardware sampler's parameter pages
-        val SAMPLER = listOf(
+        private val SAMPLER = listOf(
             PageDef("VOICE", snd(SRC, VOL, PAN, POLY, SoundParams.LEGATO, SoundParams.GLIDE, SoundParams.PBRANGE, ENGINE), View.WAVE),
             PageDef("SAMPLE", snd(START, END, REV, GATE, LOOP, LSTART, LEND, XFADE), View.WAVE),
             PageDef("PITCH / ENV", snd(TUNE, ENV, ATT, HOLD, DEC, SUS, REL, -1), View.AMP),
@@ -116,7 +121,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("LFO DEST", snd(LPAN, LVOL, -1, -1, -1, -1, -1, -1), View.LFO),
             PageDef("VEL / MOD", snd(SoundParams.VSTART, SoundParams.VDEC, VCUT, VVOL, SoundParams.MWSTART, SoundParams.MWCUT, SoundParams.MWLFO, SoundParams.MWPAN), View.VEL),
         )
-        val SYNTH = listOf(
+        private val SYNTH = listOf(
             PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, GATE, SNOTE, -1), View.SCOPE),
             PageDef("SYNTH", snd(SMODEL, SHARM, STIMB, SMORPH, SLPG, SDEC, SCOL, SAUX), View.SCOPE),
             PageDef("SYNTH ENV", snd(SFM, STMOD, SMMOD, -1, -1, -1, -1, -1), View.SCOPE),
@@ -126,7 +131,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
-        val FM = listOf(
+        private val FM = listOf(
             PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, -1, -1, -1), View.SCOPE),
             PageDef("FM", snd(SoundParams.FMBANK, SoundParams.FMPROG, SoundParams.FMBRIGHT, SoundParams.FMATT, SoundParams.FMREL, SoundParams.FMFB, -1, -1), View.SCOPE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
@@ -135,9 +140,9 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("LFO", snd(LWAVE, LRATE, LPITCH, LCUT, LPAN, LVOL, -1, -1), View.LFO),
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
-        fun ob(vararg i: Int) = i.map { if (it < 0) null else Knob.Poly(it) }
+        private fun ob(vararg i: Int) = i.map { if (it < 0) null else Knob.Poly(it) }
         /** POLY (OB-Xf): OB-Xf's parameter indices, grouped like its panel. */
-        val POLY_PAGES = listOf(
+        private val POLY_PAGES = listOf(
             PageDef("VOICE", listOf(Knob.Snd(SRC), Knob.PolyCategory, Knob.PolyPreset, null, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(TUNE), null), View.SCOPE),
             PageDef("OSC", ob(12, 14, 13, 20, 16, 17, 18, 19), View.SCOPE),
             PageDef("OSC MOD", ob(29, 28, 30, 21, 22, 25, 15, 23), View.SCOPE),
@@ -167,9 +172,10 @@ class SoundPage(ui: Ui) : Page(ui) {
         var scopePost = false
     }
 
-    private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
-    private var slotIdx = if (SoundPageNav.openReturn >= 0) 0 else lastSlot       // sound: 0 = source, 1..3 = effects; group / master: 0..3
-    private var pageIdx = if (SoundPageNav.openReturn >= 0) 0.also { SoundPageNav.openReturn = -1 } else lastPage
+    private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else if (SoundPageNav.wantPage >= 0) 2 else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
+    private var slotIdx = if (SoundPageNav.openReturn >= 0 || SoundPageNav.wantPage >= 0) 0 else lastSlot       // sound: 0 = source, 1..3 = effects; group / master: 0..3
+    private var pageIdx = if (SoundPageNav.openReturn >= 0) 0.also { SoundPageNav.openReturn = -1 }
+        else if (SoundPageNav.wantPage >= 0) SoundPageNav.wantPage.also { SoundPageNav.wantPage = -1 } else lastPage
     private var shift = false
     private var dirtySince = 0L
     private var fxDirtySince = 0L

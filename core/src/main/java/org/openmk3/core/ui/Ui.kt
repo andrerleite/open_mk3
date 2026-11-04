@@ -1074,8 +1074,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "VARIATION" -> {
-                    modeHeld = name
                     val cur = page
+                    // SHIFT + VARIATION: NAVIGATE (stays until VARIATION again)
+                    if (shiftHeld || cur is NavigatePage) {
+                        if (cur is NavigatePage) cur.back() else show(NavigatePage(this, cur))
+                        return@post
+                    }
+                    modeHeld = name
                     if (cur is VariationPage) cur.back() else show(VariationPage(this, cur))
                     return@post
                 }
