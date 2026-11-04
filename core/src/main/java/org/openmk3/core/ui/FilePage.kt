@@ -24,6 +24,8 @@ class FilePage(ui: Ui) : Page(ui) {
         class Rename(name: String) : Item("RENAME  \"$name\"")
         object New : Item("NEW EMPTY PROJECT")
         object Export : Item("EXPORT AUDIO…  (loop or song as WAV)")
+        class SaveGroup(letter: Char) : Item("SAVE GROUP $letter…  (kit + patterns)")
+        class LoadGroup(val file: File, letter: Char) : Item("GROUP → $letter:  ${file.nameWithoutExtension}")
         class Load(val file: File) : Item(file.nameWithoutExtension)
     }
 
@@ -56,7 +58,9 @@ class FilePage(ui: Ui) : Page(ui) {
             if (cur != null) add(Item.Rename(cur))
             add(Item.Export)
             add(Item.New)
+            add(Item.SaveGroup(ui.groupLetter))
             Project.list().forEach { add(Item.Load(it)) }
+            org.openmk3.core.audio.GroupFile.list().forEach { add(Item.LoadGroup(it, ui.groupLetter)) }
         }
         sel = sel.coerceIn(0, items.size - 1)
         ui.invalidate()
@@ -163,6 +167,7 @@ class FilePage(ui: Ui) : Page(ui) {
     // ---- the name editor ----
     private var editing = false
     private var renaming = false
+    private var savingGroup = false
     private val name = StringBuilder()
     private var cursor = 0
     private var shift = false
@@ -192,6 +197,16 @@ class FilePage(ui: Ui) : Page(ui) {
     private fun finishEdit() {
         val n = Project.clean(name.toString())
         if (n.isEmpty()) { message = "Can't use an empty name"; return }
+        if (savingGroup) {
+            savingGroup = false
+            editing = false
+            message = try {
+                org.openmk3.core.audio.GroupFile.save(ui.engine, ui.group, Colours.group[ui.group], n)
+                "Group ${ui.groupLetter} saved as \"$n\""
+            } catch (e: Exception) { "Can't save: ${e.message}" }
+            refresh()
+            return
+        }
         if (renaming) {
             val cur = Project.currentName(ui.ctx) ?: return
             message = if (Project.rename(ui.ctx, cur, n)) "Renamed to \"$n\"" else "Can't rename: \"$n\" exists"
@@ -257,7 +272,7 @@ class FilePage(ui: Ui) : Page(ui) {
                     if (cursor >= this.name.length && cursor > 0) { this.name.deleteCharAt(cursor - 1); cursor-- }
                     else if (cursor < this.name.length) this.name.deleteCharAt(cursor)
                 }
-                "D7" -> { editing = false; message = "Cancelled" }
+                "D7" -> { editing = false; savingGroup = false; message = "Cancelled" }
                 "D8", "ENCODER PUSH" -> finishEdit()
                 "FILE" -> ui.showHome()
             }
@@ -288,6 +303,8 @@ class FilePage(ui: Ui) : Page(ui) {
                 armed = -1
                 refresh()
             }
+            is Item.SaveGroup -> { savingGroup = true; startEdit("Kit ${ui.groupLetter} " + Project.suggestName(ui.engine.bpm).substringBefore(' '), false) }
+            is Item.LoadGroup -> if (armed != sel) { armed = sel; message = "Push again: replaces group ${ui.groupLetter}" } else loadGroup(it.file)
             is Item.Load -> if (armed != sel) { armed = sel; message = "Push again to load (unsaved changes are lost)" } else load(it.file)
             null -> {}
         }
@@ -303,6 +320,29 @@ class FilePage(ui: Ui) : Page(ui) {
         }
         armed = -1
         refresh()
+    }
+
+    private fun loadGroup(f: File) {
+        busy = true
+        val g = ui.group
+        message = "Loading ${f.nameWithoutExtension} into ${ui.groupLetter}…"
+        armed = -1
+        worker.execute {
+            val colour = org.openmk3.core.audio.GroupFile.load(ui.engine, g, f) { s, sample -> ui.engine.setSample(s, sample) }
+            ui.post {
+                busy = false
+                if (colour == null) message = "Can't load ${f.name}"
+                else {
+                    if (colour > 0) { Colours.group[g] = colour; Colours.save(ui.ctx) }
+                    KitStore.save(ui.ctx, ui.engine.kit)
+                    ui.engine.params.save(ui.ctx); ui.engine.pattern.save(ui.ctx); ui.engine.fx.save(ui.ctx)
+                    ui.engine.poly.save(ui.ctx); ui.engine.zones.save(ui.ctx)
+                    ui.checkpoint()
+                    message = "Loaded \"${f.nameWithoutExtension}\" into group ${'A' + g}"
+                }
+                refresh()
+            }
+        }
     }
 
     private fun load(f: File) {
@@ -327,7 +367,7 @@ class FilePage(ui: Ui) : Page(ui) {
     private val cursorFill = Theme.fill(Theme.ACCENT)
 
     private fun drawEditor(l: Canvas, r: Canvas, now: Long) {
-        l.drawText(if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
+        l.drawText(if (savingGroup) "SAVE GROUP ${ui.groupLetter}" else if (renaming) "RENAME PROJECT" else "SAVE AS", 16f, 30f, title)
         val n = name.toString()
         val x0 = 16f
         val y = 120f
@@ -356,7 +396,7 @@ class FilePage(ui: Ui) : Page(ui) {
             val it = items.getOrNull(idx) ?: break
             val y = 44f + i * 27f
             if (idx == sel) l.drawRect(0f, y, 480f, y + 26f, selFill)
-            l.drawText(it.label.take(40), 16f, y + 19f, if (it is Item.Load) row else rowAct)
+            l.drawText(it.label.take(40), 16f, y + 19f, if (it is Item.Load || it is Item.LoadGroup) row else rowAct)
         }
         r.drawText("OK", 420f, 24f, dLabel)
         r.drawText("Encoder: move · push / D8: do it", 16f, 70f, label)
