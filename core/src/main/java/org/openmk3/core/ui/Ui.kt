@@ -81,6 +81,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private var recDownAt = 0L
     @Volatile var recPrepare = false
         private set
+    /** SETTINGS D7: the next unnamed button bit becomes pedal 1 or 2 (0 = not learning). */
+    @Volatile var pedalLearn = 0
     /** Record prepare length in steps (0 = AUTO: grows while recording). */
     var prepareLen = 0
 
@@ -932,6 +934,21 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         // Touch sensors are learned by the wizard; the wizard itself sees them to do that.
         if (bit in map.touchBits && page !is WizardPage) return@post
         val name = map.nameForBit(bit)
+        if (name == null && down && page !is WizardPage) {
+            // a bit the wizard never named: maybe the footswitch (SETTINGS D7 learns it)
+            if (pedalLearn > 0) {
+                map.buttonBits["PEDAL $pedalLearn"] = bit; map.rebuildIndex(); map.save(ctx)
+                toast("Pedal $pedalLearn learned (bit $bit): ${if (pedalLearn == 1) "PLAY / STOP" else "REC"}")
+                pedalLearn = 0
+                return@post
+            }
+            AppLog.i("Unnamed button bit $bit pressed")
+        }
+        if (name == "PEDAL 1" || name == "PEDAL 2") {
+            if (down) { if (name == "PEDAL 1") { if (engine.playing) engine.transportStop() else engine.transportPlay() } else setRec(!rec) }
+            dirty = true
+            return@post
+        }
         if (name == "SHIFT") shiftHeld = down
         if (name == "ERASE") eraseHeld = down
         if (name == "SELECT") {

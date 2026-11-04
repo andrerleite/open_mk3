@@ -8,6 +8,7 @@ import android.graphics.Paint
  *  D1 metronome on / off · K1 metronome level · K2 count-in length (1, 2, 4 bars)
  *  D5 output: MK3 or PHONE (the phone's speaker or headphones, Bluetooth included)
  *  D6 phone audio on the MK3 (while phone audio is being captured for sampling)
+ *  D7 LEARN PEDAL: press it, then the footswitch (pedal 1 = PLAY); press again for pedal 2 (= REC)
  *  D8 LED palette (controller check) · SETTINGS: back
  */
 class SettingsPage(ui: Ui) : Page(ui) {
@@ -29,6 +30,7 @@ class SettingsPage(ui: Ui) : Page(ui) {
         l.set("D1", p.metronome)
         l.set("D5", e.outputPhone)
         l.set("D6", e.monitorPhone)
+        l.set("D7", ui.pedalLearn > 0)
         l.set("D8")
     }
 
@@ -38,6 +40,7 @@ class SettingsPage(ui: Ui) : Page(ui) {
             "D1" -> { p.metronome = !p.metronome; p.save(ui.ctx) }
             "D5" -> e.setOutputPhone(!e.outputPhone)
             "D6" -> e.monitorPhone = !e.monitorPhone
+            "D7" -> ui.pedalLearn = when (ui.pedalLearn) { 0 -> 1; 1 -> 2; else -> 0 }
             "D8" -> ui.show(PalettePage(ui))
             "SETTINGS" -> ui.showHome()
         }
@@ -67,6 +70,10 @@ class SettingsPage(ui: Ui) : Page(ui) {
         r.drawText("PHONE AUDIO", 180f, 16f, kName)
         r.drawText(if (e.monitorPhone) "ON MK3" else "ON PHONE", 180f, 34f, if (e.monitorPhone) dOn else dLabel)
         r.drawText("LED CHECK", 420f, 24f, dLabel)
+        r.drawText(if (ui.pedalLearn > 0) "PEDAL ${ui.pedalLearn}?" else "PEDAL", 300f, 24f, if (ui.pedalLearn > 0) dOn else dLabel)
+        val ped = (1..2).joinToString(" · ") { "pedal $it ${if (ui.map.buttonBits.containsKey("PEDAL $it")) "learned" else "—"}" }
+        r.drawText(if (ui.pedalLearn > 0) "Press pedal ${ui.pedalLearn} now (D7: ${if (ui.pedalLearn == 1) "pedal 2" else "stop"})" else "Footswitch: $ped (D7 to learn)", 16f, 190f, label)
+        r.drawText("Pedal 1 = PLAY / STOP · pedal 2 = REC", 16f, 212f, label)
         r.drawText("Output: ${if (e.outputPhone) "the phone (speaker, or headphones incl. Bluetooth)" else "the MK3"}", 16f, 80f, label)
         if (e.outputPhone) r.drawText("Bluetooth adds its own delay (often 0.1–0.3 s)", 16f, 102f, label)
         r.drawText("Phone audio being sampled: ${if (e.monitorPhone) "heard on the MK3" else "stays on the phone"}", 16f, 132f, label)
