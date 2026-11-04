@@ -436,6 +436,12 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     override fun onEncoder(delta: Int) {
+        // the encoder chooses the slot (source / effect); SHIFT + encoder zooms the view
+        if (!shift) {
+            val next = (slotIdx + (if (delta > 0) 1 else -1)).coerceIn(0, slotCount - 1)
+            if (next != slotIdx) { slotIdx = next; resetPage() }
+            return
+        }
         if (showScope()) {
             scopeWindow = (if (delta > 0) scopeWindow * 2 else scopeWindow / 2).coerceIn(128, 8192)
             return
@@ -463,6 +469,69 @@ class SoundPage(ui: Ui) : Page(ui) {
         val fs = if (level == 2) i - 1 else i
         val t = fx.type(chain, fs)
         return if (t == FxParams.NONE) "—" else FxParams.TYPES[t] + if (fx.bypassed(chain, fs)) " (bypassed)" else ""
+    }
+
+    private val tileFill = Theme.fill(Color.rgb(28, 28, 36))
+    private val tileRing = Theme.stroke(Theme.ACCENT, 2.5f)
+    private val iconPaint = Theme.stroke(Theme.FG, 3f)
+    private val iconDim = Theme.stroke(Theme.DIM, 3f)
+    private val slotTextC = Theme.text(13f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+    private val slotDimC = Theme.text(12f, Theme.DIM, align = Paint.Align.CENTER)
+
+    /** What a slot holds: SAMPLER / SYNTH / FM / POLY, an effect type name, or "" when empty. */
+    private fun slotKind(i: Int): String {
+        if (level == 2 && i == 0) return when (source) {
+            SoundParams.SRC_POLY -> "POLY"; SoundParams.SRC_FM -> "FM"; SoundParams.SRC_SYNTH -> "SYNTH"; else -> "SAMPLER"
+        }
+        val t = fx.type(chain, if (level == 2) i - 1 else i)
+        return if (t == FxParams.NONE) "" else FxParams.TYPES[t]
+    }
+
+    /** A small line drawing per slot kind (48 x 40 around cx, cy). */
+    private fun drawSlotIcon(c: Canvas, kind: String, cx: Float, cy: Float, p: Paint) {
+        val path = Path()
+        when (kind) {
+            "" -> { c.drawLine(cx - 16f, cy, cx + 16f, cy, p); c.drawLine(cx, cy - 16f, cx, cy + 16f, p) }   // +
+            "SAMPLER" -> {  // waveform
+                val h = floatArrayOf(4f, 12f, 20f, 8f, 16f, 6f, 18f, 10f, 4f)
+                for (k in h.indices) { val x = cx - 24f + k * 6f; c.drawLine(x, cy - h[k], x, cy + h[k], p) }
+            }
+            "SYNTH" -> {  // saw
+                path.moveTo(cx - 24f, cy + 14f); path.lineTo(cx - 8f, cy - 14f); path.lineTo(cx - 8f, cy + 14f)
+                path.lineTo(cx + 8f, cy - 14f); path.lineTo(cx + 8f, cy + 14f); path.lineTo(cx + 24f, cy - 14f); c.drawPath(path, p)
+            }
+            "FM" -> {  // two operators feeding each other
+                c.drawCircle(cx - 11f, cy, 10f, p); c.drawCircle(cx + 11f, cy, 10f, p)
+                c.drawLine(cx - 11f, cy - 10f, cx - 11f, cy - 18f, p); c.drawLine(cx - 11f, cy - 18f, cx + 11f, cy - 18f, p); c.drawLine(cx + 11f, cy - 18f, cx + 11f, cy - 10f, p)
+            }
+            "POLY" -> {  // keyboard
+                c.drawRect(cx - 24f, cy - 16f, cx + 24f, cy + 16f, p)
+                for (k in 1 until 4) c.drawLine(cx - 24f + k * 12f, cy - 16f, cx - 24f + k * 12f, cy + 16f, p)
+                for (k in listOf(0, 1, 3)) { val x = cx - 24f + k * 12f + 8f; c.drawLine(x, cy - 16f, x, cy, p); c.drawLine(x + 6f, cy - 16f, x + 6f, cy, p); c.drawLine(x, cy, x + 6f, cy, p) }
+            }
+            "COMPRESSOR" -> {  // knee curve
+                path.moveTo(cx - 22f, cy + 18f); path.lineTo(cx, cy - 4f); path.lineTo(cx + 22f, cy - 12f); c.drawPath(path, p)
+                c.drawLine(cx - 22f, cy + 18f, cx + 22f, cy + 18f, p)
+            }
+            "CHORUS" -> {  // two waves
+                for (o in listOf(-6f, 6f)) {
+                    val w = Path()
+                    for (k in 0..24) { val x = cx - 24f + k * 2f; val y = cy + o + 8f * kotlin.math.sin(k * 0.52f + o * 0.2f); if (k == 0) w.moveTo(x, y) else w.lineTo(x, y) }
+                    c.drawPath(w, p)
+                }
+            }
+            "DELAY" -> {  // echoes
+                val hs = floatArrayOf(18f, 12f, 7f, 3f)
+                for (k in hs.indices) { val x = cx - 18f + k * 12f; c.drawLine(x, cy + 16f, x, cy + 16f - hs[k] * 1.8f, p) }
+            }
+            "REVERB" -> {  // spreading arcs
+                for (rr in listOf(8f, 15f, 22f)) c.drawArc(android.graphics.RectF(cx - 24f - rr, cy - rr, cx - 24f + rr, cy + rr), -60f, 120f, false, p)
+            }
+            "FILTER" -> {  // low-pass response with a resonant bump
+                path.moveTo(cx - 24f, cy - 6f); path.lineTo(cx - 2f, cy - 6f); path.quadTo(cx + 4f, cy - 22f, cx + 8f, cy - 4f); path.lineTo(cx + 24f, cy + 18f); c.drawPath(path, p)
+            }
+            else -> c.drawCircle(cx, cy, 14f, p)
+        }
     }
 
     private fun knobCell(c: Canvas, i: Int) {
@@ -546,11 +615,20 @@ class SoundPage(ui: Ui) : Page(ui) {
         // chain list
         l.drawText(levelName(), 16f, 80f, title)
         if (level == 2) l.drawText(ellipsize(ui.engine.kit[slot].name.ifEmpty { if (isSynth) "" else "(empty)" }, 24), 200f, 80f, slotDim)
+        // the slots side by side: icon and name, "+" when empty (encoder or D4 chooses)
+        val tw = 112f; val th = 112f; val ty = 92f
         for (i in 0 until slotCount) {
-            val y = 92f + i * 26f
-            if (i == slotIdx) l.drawRect(8f, y, 472f, y + 24f, selFill)
-            l.drawText("${i + 1}", 18f, y + 18f, slotDim)
-            l.drawText(ellipsize(slotName(i), 40), 40f, y + 18f, if (slotName(i) == "—") slotDim else slotText)
+            val tx = 4f + i * (tw + 6f)
+            val rect = android.graphics.RectF(tx, ty, tx + tw, ty + th)
+            l.drawRoundRect(rect, 8f, 8f, if (i == slotIdx) selFill else tileFill)
+            if (i == slotIdx) l.drawRoundRect(rect, 8f, 8f, tileRing)
+            val kind = slotKind(i)
+            val cx = tx + tw / 2; val cy = ty + 44f
+            val bypassed = !(level == 2 && i == 0) && kind != "" && fx.bypassed(chain, if (level == 2) i - 1 else i)
+            drawSlotIcon(l, kind, cx, cy, if (bypassed) iconDim else iconPaint)
+            val nm = if (kind == "") "EMPTY" else slotName(i).substringBefore(" (bypassed)")
+            l.drawText(ellipsize(nm, 13), cx, ty + 92f, if (kind == "") slotDimC else slotTextC)
+            l.drawText(if (bypassed) "BYPASS" else "${i + 1}", cx, ty + 108f, slotDimC)
         }
         l.drawRect(0f, 214f, 480f, 215f, sep)
         r.drawRect(0f, 214f, 480f, 215f, sep)

@@ -763,6 +763,12 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     setPadMode(m)
                     pushRepeat()
                 }
+                // STEP from any page: the sequencer with the pads as steps
+                "STEP" -> if (page !is HomePage) {
+                    HomePage.stepMode = true
+                    showHome()
+                    return@post
+                }
                 "PAD MODE" -> {
                     padParams = if (shiftHeld) false else if (padMode == PadMode.PAD) !padParams else true
                     setPadMode(PadMode.PAD)
@@ -849,6 +855,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("PATTERN", false)
         lights.set("SCENE", false)
         // every button that does something here is at least dim
+        lights.set("STEP", page is HomePage && HomePage.stepMode)
         lights.set("EVENTS", page is EventsPage)
         lights.set("VARIATION", page is VariationPage)
         lights.set("SELECT", selectHeld)

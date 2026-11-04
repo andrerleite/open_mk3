@@ -52,6 +52,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SHIFT + VARIATION (Navigate) | Zoom and scroll the pattern view | ⬜ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
+| STEP | From any page: the sequencer with the pads as steps (PAD MODE leaves it) | ✅ |
 | SELECT + pad | Focus a sound without playing it (on every page, in any pad mode). While SELECT is held the pads light only where a sound is loaded (focused pad brightest) and the right screen shows the group's 16 sounds | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
@@ -162,9 +163,9 @@ D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in
 | Control | Function |
 |---|---|
 | D1 / D2 / D3 | MASTER / GROUP / SOUND level |
-| D4 | Next slot. Sound: slot 1 is the source (SAMPLER or SYNTH), slots 2–4 effects. Group and master: 4 effect slots. |
+| Encoder turn / D4 | Choose the slot (shown side by side, each with an icon; "+" = empty). Sound: slot 1 is the source (SAMPLER, SYNTH, FM or POLY), slots 2–4 effects. Group and master: 4 effect slots. SHIFT + encoder: zoom the waveform / scope |
 | D5 | Bypass the selected effect |
-| D6 or encoder push | Oscilloscope on the right screen (the selected sound, group or master); encoder changes its time window |
+| D6 or encoder push | Oscilloscope over the other views (the selected sound, group or master) |
 | ◀ ▶ | Parameter pages of the selected slot |
 | Knobs | Parameters. SHIFT: fine steps. SHIFT + touching a knob: default. On an effect slot, K1 on the first page chooses the effect. |
 | D8 | Zero-crossing snap (sampler SAMPLE page) |

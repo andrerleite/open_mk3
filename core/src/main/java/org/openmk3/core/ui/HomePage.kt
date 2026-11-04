@@ -30,9 +30,15 @@ class HomePage(ui: Ui) : Page(ui) {
 
     private enum class Mode { PAD, STEP }
 
-    @Volatile private var mode = Mode.PAD
+    /** PAD or STEP; kept across visits (STEP is global: it opens this page in step mode). */
+    private var mode: Mode
+        get() = if (stepMode) Mode.STEP else Mode.PAD
+        set(v) { stepMode = v == Mode.STEP }
     @Volatile private var shift = false
-    private companion object { var replace = false }
+    companion object {
+        private var replace = false
+        @Volatile var stepMode = false
+    }
     @Volatile private var erase = false
     @Volatile private var select = false
     @Volatile private var mute = false
