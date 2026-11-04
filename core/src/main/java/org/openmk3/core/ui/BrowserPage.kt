@@ -43,6 +43,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         class GroupFile(val file: File) : Entry("▦ " + file.nameWithoutExtension)
         class FxFile(val file: File) : Entry("⚙ " + file.nameWithoutExtension)
         class Midi(val file: File) : Entry("♫ " + file.nameWithoutExtension)
+        class Xpm(val file: File) : Entry("▣ " + file.nameWithoutExtension + "  (MPC program)")
     }
 
     companion object {
@@ -103,7 +104,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
     private fun saveFavourites(l: List<String>) { favCache = l.toMutableList(); try { favFile().writeText(org.json.JSONArray(l).toString()) } catch (e: Exception) { AppLog.i("favourites: ${e.message}") } }
 
     private fun entryFile(e: Entry?): File? = when (e) {
-        is Entry.Folder -> e.file; is Entry.Wav -> e.file; is Entry.Midi -> e.file; is Entry.SoundFile -> e.file; is Entry.GroupFile -> e.file; is Entry.FxFile -> e.file
+        is Entry.Folder -> e.file; is Entry.Wav -> e.file; is Entry.Midi -> e.file; is Entry.Xpm -> e.file; is Entry.SoundFile -> e.file; is Entry.GroupFile -> e.file; is Entry.FxFile -> e.file
         else -> null
     }
 
@@ -127,6 +128,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                 f.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT -> Entry.SoundFile(f)
                 f.extension == org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(f)
                 f.extension.equals("mid", true) -> Entry.Midi(f)
+                f.extension.equals("xpm", true) -> Entry.Xpm(f)
                 else -> Entry.Wav(f)
             })
         }
@@ -149,7 +151,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
             .sortedBy { it.name.lowercase() }
         val wavs = files.orEmpty().filter { it.isFile && it.extension.equals("wav", true) }
             .sortedBy { it.name.lowercase() }
-        val saved = files.orEmpty().filter { it.isFile && (it.extension.equals("mid", true) || it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT || it.extension == org.openmk3.core.audio.FxPreset.EXT) }
+        val saved = files.orEmpty().filter { it.isFile && (it.extension.equals("mid", true) || it.extension.equals("xpm", true) || it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT || it.extension == org.openmk3.core.audio.FxPreset.EXT) }
             .sortedBy { it.name.lowercase() }
         entries = buildList {
             add(Entry.BuiltIn())
@@ -157,6 +159,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
             folders.forEach { add(Entry.Folder(it)) }
             saved.forEach { add(when {
                 it.extension.equals("mid", true) -> Entry.Midi(it)
+                it.extension.equals("xpm", true) -> Entry.Xpm(it)
                 it.extension == org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(it)
                 it.extension == org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(it)
                 else -> Entry.SoundFile(it) }) }
@@ -220,6 +223,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
             }
             is Entry.Up -> if (favView) list(dir) else up()
             is Entry.Midi -> importMidi(e.file)
+            is Entry.Xpm -> if (xpmArmed != sel) { xpmArmed = sel; message = "Push again: replaces the sounds of group ${ui.groupLetter}" } else { xpmArmed = -1; importXpm(e.file) }
             is Entry.Folder -> list(e.file)
             is Entry.Wav -> load(e)
             is Entry.SoundFile -> loadSaved(e.file, group = false)
@@ -316,6 +320,39 @@ class BrowserPage(ui: Ui) : Page(ui) {
         ui.checkpoint()
         message = "${f.nameWithoutExtension}: $placed notes $how"
         AppLog.i("MIDI import ${f.name}: $message")
+    }
+
+    private var xpmArmed = -1
+
+    /** An MPC drum program onto the focused group's pads (samples, volume, pan, tuning). */
+    private fun importXpm(f: File) {
+        val g = ui.group
+        message = "Reading ${f.nameWithoutExtension}…"
+        worker.submit {
+            val res = try {
+                val pads = org.openmk3.core.audio.XpmImport.read(f)
+                pads.map { it to WavDecoder.decode(it.sample) }
+            } catch (ex: Exception) { ui.post { message = "Can't read: ${ex.message}"; ui.invalidate() }; return@submit }
+            ui.post {
+                val e = ui.engine; val sp = e.params
+                for ((k, pr) in res.withIndex()) {
+                    val (pad, smp) = pr
+                    val s = g * 16 + k
+                    e.setSample(s, smp); sp.reset(s); e.zones.clear(s); e.poly.reset(s)
+                    org.openmk3.core.audio.Names.sound[s] = ""
+                    pad.volume?.let { v -> if (v > 0f && v <= 2f) sp[s, org.openmk3.core.audio.SoundParams.VOL] = (20f * kotlin.math.log10(v)).coerceIn(-60f, 12f) }
+                    pad.pan?.let { v -> if (v in 0f..1f) sp[s, org.openmk3.core.audio.SoundParams.PAN] = (v - 0.5f) * 2f }
+                    pad.tune?.let { v -> sp[s, org.openmk3.core.audio.SoundParams.TUNE] = v.coerceIn(-36f, 36f) }
+                }
+                org.openmk3.core.audio.Names.group[g] = f.nameWithoutExtension.take(39)
+                org.openmk3.core.audio.Names.save(ui.ctx)
+                sp.save(ui.ctx); e.zones.save(ui.ctx); e.poly.save(ui.ctx); KitStore.save(ui.ctx, e.kit)
+                ui.checkpoint()
+                message = if (res.isEmpty()) "No samples found for ${f.nameWithoutExtension}" else "${res.size} pads from ${f.nameWithoutExtension} → group ${ui.groupLetter}"
+                AppLog.i("XPM import: $message")
+                ui.invalidate()
+            }
+        }
     }
 
     /** D5 / D6: the previous / next WAV in this folder goes straight onto the target pad. */
