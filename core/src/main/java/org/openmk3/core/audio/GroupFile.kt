@@ -41,21 +41,7 @@ object GroupFile {
         val j = JSONObject().put("version", 1).put("colour", colour)
         j.put("mixer", JSONObject().put("vol", p.groupVolume(g).toDouble()).put("pan", p.groupPan(g).toDouble()).put("swing", p.groupSwing(g).toDouble()))
         j.put("groupFx", fxJson(e, FxParams.GROUP0 + g))
-        j.put("sounds", JSONArray().apply {
-            for (k in 0 until 16) {
-                val s = g * 16 + k
-                val o = JSONObject()
-                o.put("sample", e.kit[s].path ?: JSONObject.NULL)
-                o.put("params", JSONArray().apply { for (i in 0 until SoundParams.COUNT) put(e.params[s, i].toDouble()) })
-                o.put("poly", JSONArray().apply { for (i in 0 until e.poly.count) put(e.poly[s, i].toDouble()) }).put("polyName", e.poly.patchName[s])
-                o.put("fx", fxJson(e, s))
-                o.put("zones", JSONArray().apply {
-                    for (z in e.zones.of(s)) if (z.sample.path != null) put(z.settingsJson(JSONObject().put("path", z.sample.path)
-                        .put("root", z.root).put("lo", z.lo).put("hi", z.hi).put("vlo", z.vlo).put("vhi", z.vhi)))
-                })
-                put(o)
-            }
-        })
+        j.put("sounds", JSONArray().apply { for (k in 0 until 16) put(soundJson(e, g * 16 + k)) })
         j.put("patterns", JSONArray().apply { for (d in p.patterns[g]) put(d?.toJson() ?: JSONObject.NULL) })
         j.put("current", p.current[g])
         dir.mkdirs()
@@ -74,9 +60,56 @@ object GroupFile {
         val j = try { JSONObject(f.readText()) } catch (ex: Exception) { AppLog.i("Group: can't read ${f.name}: ${ex.message}"); return null }
         val p = e.pattern
         val sounds = j.optJSONArray("sounds") ?: return null
-        for (k in 0 until minOf(16, sounds.length())) {
-            val s = g * 16 + k
-            val o = sounds.getJSONObject(k)
+        for (k in 0 until minOf(16, sounds.length())) loadSound(e, g * 16 + k, sounds.getJSONObject(k), onSample)
+        loadFx(e, FxParams.GROUP0 + g, j.optJSONArray("groupFx"))
+        j.optJSONObject("mixer")?.let { m ->
+            p.setGroupVolume(g, m.optDouble("vol", 0.0).toFloat()); p.setGroupPan(g, m.optDouble("pan", 0.0).toFloat()); p.setGroupSwing(g, m.optDouble("swing", 0.0).toFloat())
+        }
+        j.optJSONArray("patterns")?.let { a ->
+            for (i in 0 until Pattern.SLOTS) p.patterns[g][i] = if (i < a.length() && !a.isNull(i)) PatternData.fromJson(a.getJSONObject(i)) else null
+            p.current[g] = j.optInt("current", -1).takeIf { it in 0 until Pattern.SLOTS && p.patterns[g][it] != null } ?: -1
+            p.refreshGroup(g)
+        }
+        AppLog.i("Group loaded into ${'A' + g}: ${f.name}")
+        return j.optInt("colour", -1)
+    }
+
+    // ---- one sound (its sample, settings, synth patch, zones, effects) ----
+    const val SOUND_EXT = "omk3s"
+    val soundDir: File get() = File(dir.parentFile, "Sounds")
+    fun soundList(): List<File> = soundDir.listFiles { f -> f.isFile && f.extension == SOUND_EXT }.orEmpty().sortedByDescending { it.lastModified() }
+
+    fun soundJson(e: AudioEngine, s: Int): JSONObject {
+        val o = JSONObject()
+        o.put("sample", e.kit[s].path ?: JSONObject.NULL)
+        o.put("params", JSONArray().apply { for (i in 0 until SoundParams.COUNT) put(e.params[s, i].toDouble()) })
+        o.put("poly", JSONArray().apply { for (i in 0 until e.poly.count) put(e.poly[s, i].toDouble()) }).put("polyName", e.poly.patchName[s])
+        o.put("fx", fxJson(e, s))
+        o.put("zones", JSONArray().apply {
+            for (z in e.zones.of(s)) if (z.sample.path != null) put(z.settingsJson(JSONObject().put("path", z.sample.path)
+                .put("root", z.root).put("lo", z.lo).put("hi", z.hi).put("vlo", z.vlo).put("vhi", z.vhi)))
+        })
+        return o
+    }
+
+    fun saveSound(e: AudioEngine, s: Int, name: String): File {
+        soundDir.mkdirs()
+        val f = File(soundDir, "${Project.clean(name)}.$SOUND_EXT")
+        f.writeText(soundJson(e, s).put("version", 1).toString())
+        AppLog.i("Sound saved: ${f.absolutePath}")
+        return f
+    }
+
+    /** Loads a saved sound onto sound [s] (call off the UI thread). */
+    fun loadSoundFile(e: AudioEngine, s: Int, f: File, onSample: (Int, Sample) -> Unit): Boolean {
+        val o = try { JSONObject(f.readText()) } catch (ex: Exception) { AppLog.i("Sound: can't read ${f.name}"); return false }
+        loadSound(e, s, o, onSample)
+        AppLog.i("Sound loaded: ${f.name}")
+        return true
+    }
+
+    private fun loadSound(e: AudioEngine, s: Int, o: JSONObject, onSample: (Int, Sample) -> Unit) {
+        run {
             val path = if (o.isNull("sample")) null else o.optString("sample")
             val sample = if (path == null) e.builtIn[s] else try { WavDecoder.decode(File(path)) } catch (ex: Exception) {
                 AppLog.i("Group: missing $path"); e.builtIn[s]
@@ -100,16 +133,6 @@ object GroupFile {
                 }
             }
         }
-        loadFx(e, FxParams.GROUP0 + g, j.optJSONArray("groupFx"))
-        j.optJSONObject("mixer")?.let { m ->
-            p.setGroupVolume(g, m.optDouble("vol", 0.0).toFloat()); p.setGroupPan(g, m.optDouble("pan", 0.0).toFloat()); p.setGroupSwing(g, m.optDouble("swing", 0.0).toFloat())
-        }
-        j.optJSONArray("patterns")?.let { a ->
-            for (i in 0 until Pattern.SLOTS) p.patterns[g][i] = if (i < a.length() && !a.isNull(i)) PatternData.fromJson(a.getJSONObject(i)) else null
-            p.current[g] = j.optInt("current", -1).takeIf { it in 0 until Pattern.SLOTS && p.patterns[g][it] != null } ?: -1
-            p.refreshGroup(g)
-        }
-        AppLog.i("Group loaded into ${'A' + g}: ${f.name}")
-        return j.optInt("colour", -1)
     }
+
 }
