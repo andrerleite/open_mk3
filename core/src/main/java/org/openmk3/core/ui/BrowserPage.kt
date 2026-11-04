@@ -5,6 +5,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Environment
 import org.openmk3.core.AppLog
+import org.openmk3.core.audio.AudioEngine
 import org.openmk3.core.audio.KitStore
 import org.openmk3.core.audio.Sample
 import org.openmk3.core.audio.WavDecoder
@@ -20,6 +21,9 @@ import java.util.concurrent.Future
  *  ENCODER LEFT / PAGE LEFT = up a folder · PADS = choose the target pad (and play it)
  *  D7 = add the WAV as a zone of the target pad · D8 = add every WAV of this folder as zones
  *  (root keys from the file names; then auto-mapped) · SAMPLING (SHIFT) = the zones
+ *  D5 / D6 = load the previous / next WAV straight onto the target pad (hear it in context while
+ *  the pattern plays) · D4 = PREHEAR on / off (auditioning while scrolling) · D1 = QUICK BROWSE:
+ *  the folder of the target pad's sample, with that file selected
  *  PLAY / STOP keep working · BROWSER or SETTINGS = back
  */
 class BrowserPage(ui: Ui) : Page(ui) {
@@ -44,6 +48,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
         private var lastDir: File? = null   // reopen where the player left off
         private var lastSel = 0
         private const val ROWS = 10
+        /** PREHEAR: landing on a WAV auditions it. */
+        var prehear = true
     }
 
     private var dir = lastDir?.takeIf { it.isDirectory } ?: ROOT
@@ -139,7 +145,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
                     if (token != previewToken) return@post
                     previewed = s
                     info = s.info
-                    ui.engine.preview(s)
+                    if (prehear) ui.engine.preview(s)
                     ui.invalidate()
                 }
             } catch (ex: Exception) {
@@ -225,8 +231,31 @@ class BrowserPage(ui: Ui) : Page(ui) {
         message = "${org.openmk3.core.audio.soundLabel(slot)} ← ${s.name}"
         info = s.info
         AppLog.i("Kit: ${org.openmk3.core.audio.soundLabel(slot)} = ${s.path} (${s.info})")
-        ui.engine.trigger(slot, 0.8f)
+        if (!ui.engine.playing) ui.engine.trigger(slot, 0.8f)  // while playing: heard in the pattern
         ui.invalidate()
+    }
+
+    /** D5 / D6: the previous / next WAV in this folder goes straight onto the target pad. */
+    private fun stepLoad(d: Int) {
+        val wavs = entries.indices.filter { entries[it] is Entry.Wav }
+        if (wavs.isEmpty()) { message = "No WAV files here"; return }
+        val next = if (entries.getOrNull(sel) !is Entry.Wav) (if (d > 0) wavs.first() else wavs.last())
+            else wavs.getOrNull(wavs.indexOf(sel) + d) ?: return
+        sel = next
+        if (sel < top) top = sel
+        if (sel >= top + ROWS) top = sel - ROWS + 1
+        load(entries[sel] as Entry.Wav)
+    }
+
+    /** D1 QUICK BROWSE: back to where the target pad's sample came from. */
+    private fun quickBrowse() {
+        val path = ui.engine.kit[ui.selectedIndex].path ?: run { message = "${ui.padLabel()} has no sample file"; return }
+        val f = File(path)
+        val parent = f.parentFile?.takeIf { it.isDirectory } ?: run { message = "Folder not found"; return }
+        list(parent)
+        val i = entries.indexOfFirst { it is Entry.Wav && it.file.name == f.name }
+        if (i >= 0) { sel = i; top = (sel - ROWS / 2).coerceIn(0, maxOf(0, entries.size - ROWS)) }
+        message = "Quick browse: ${f.nameWithoutExtension}"
     }
 
     private fun up() {
@@ -259,6 +288,10 @@ class BrowserPage(ui: Ui) : Page(ui) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
             "STOP" -> e.stopPressed()
             "BROWSER", "SETTINGS" -> ui.showHome()
+            "D5" -> stepLoad(-1)
+            "D6" -> stepLoad(1)
+            "D4" -> { prehear = !prehear; message = "Prehear ${if (prehear) "on" else "off"}"; if (!prehear) ui.engine.killAll(AudioEngine.PREVIEW_SLOT) }
+            "D1" -> quickBrowse()
             "D7" -> (entries.getOrNull(sel) as? Entry.Wav)?.let { addZones(listOf(it.file)) }
             "D8" -> addZones(entries.filterIsInstance<Entry.Wav>().map { it.file })
         }
@@ -270,6 +303,9 @@ class BrowserPage(ui: Ui) : Page(ui) {
         l.set("PLAY", ui.engine.playing)
         l.set("SHIFT", shiftHeld)
         l.set("STOP", "PAGE LEFT", "PAGE RIGHT", "SETTINGS")
+        l.set("D1", ui.engine.kit[ui.selectedIndex].path != null)
+        l.set("D4", prehear)
+        l.set("D5", "D6")
         l.set("D7", entries.getOrNull(sel) is Entry.Wav)
         l.set("D8", entries.any { it is Entry.Wav })
     }
@@ -349,7 +385,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
 
         r.drawText("ENC turn: browse · push: open / load", 16f, 226f, label)
         r.drawText("◀: back · PADS: target · BROWSER: done", 16f, 246f, label)
-        r.drawText("PLAY: hear it · D7 / D8: add as zone(s)", 16f, 266f, label)
+        r.drawText("D5/D6 load prev/next · D7/D8 zone(s) · D1 quick", 16f, 266f, label)
+        r.drawText("PREHEAR ${if (prehear) "ON" else "OFF"} (D4)", 330f, 120f, label)
         val zn = ui.engine.zones.of(slot).size
         if (zn > 0) r.drawText("$zn zone(s)", 360f, 28f, label)
     }
