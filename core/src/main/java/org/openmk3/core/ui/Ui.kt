@@ -10,6 +10,7 @@ import org.openmk3.core.AppLog
 import org.openmk3.core.audio.AudioEngine
 import org.openmk3.core.mk3.Mk3Device
 import org.openmk3.core.mk3.Mk3Listener
+import kotlin.math.roundToInt
 import org.openmk3.core.mk3.Mk3Map
 import org.openmk3.core.mk3.Mk3Screen
 import java.util.concurrent.Executors
@@ -60,6 +61,88 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     val padFlash = LongArray(16)
     /** The pad being edited / loaded into (slot, 0 = bottom-left), within the focused group. */
     @Volatile var selectedSound = 0
+
+    // ---- multiple selection (SELECT mode): edits of the focused sound go to all selected ----
+    /** Selected sounds (indices 0..127); the focused sound is always part of it. */
+    private val selection = java.util.Collections.synchronizedSet(HashSet<Int>())
+    /** SELECT D8: pads add to / remove from the selection instead of replacing it. */
+    @Volatile var selectMulti = false
+    /** SELECT + D1: SELECT mode stays on after releasing SELECT. */
+    @Volatile var selectPinned = false
+    val selectActive get() = selectHeld || selectPinned
+
+    /** The selected sounds of the focused group, the focused one first. */
+    fun selectedSounds(): List<Int> {
+        val f = selectedIndex
+        // focusing a sound outside the selection moves the selection to it
+        if (f !in selection) { selection.clear(); selection.add(f) }
+        val g = f / 16
+        return listOf(f) + selection.filter { it != f && it / 16 == g }.sorted()
+    }
+    fun isSelected(sound: Int) = sound == selectedIndex || (selectedIndex in selection && sound in selection)
+    /** The other selected sounds (not the focused one). */
+    fun alsoSelected(): List<Int> = selectedSounds().drop(1)
+
+    /** SELECT + pad: MULTI off replaces the selection (or only refocuses inside it); MULTI on adds / removes. */
+    private fun selectPad(slot: Int) {
+        val s = snd(slot)
+        val cur = selectedSounds()
+        if (selectMulti) {
+            if (s !in cur) { selection.add(s); selectedSound = slot }
+            else if (s != selectedIndex) selection.remove(s)
+        } else {
+            if (s in cur && cur.size > 1) selectedSound = slot
+            else { selection.clear(); selection.add(s); selectedSound = slot }
+        }
+        AppLog.i("Selected ${padLabel(slot)} (${selectedSounds().size} selected)")
+    }
+
+    /**
+     * Mirrors a change of sound parameter [p] on the focused sound (it was [before]) to the other
+     * selected sounds: knob-type values move by the same amount (clipped at their range),
+     * switch-type values are copied.
+     */
+    fun mirrorSound(p: Int, before: Float) {
+        val others = alsoSelected()
+        if (others.isEmpty()) return
+        val sp = engine.params
+        val d = org.openmk3.core.audio.SoundParams.DEFS[p] ?: return
+        val after = sp[selectedIndex, p]
+        val discrete = d.choices != null || d.step >= 1f
+        for (o in others) {
+            if (p == org.openmk3.core.audio.SoundParams.SRC) { sp.setSource(o, after.roundToInt()); continue }
+            sp[o, p] = if (discrete) after else (sp[o, p] + (after - before)).coerceIn(d.min, d.max)
+            sp.nudge(o, p, 0, false)  // keeps start < end and loop start < loop end
+        }
+    }
+
+    /** Effect parameter [i] of slot [fxSlot] changed on the focused sound: the same effect on selected sounds follows. */
+    fun mirrorFx(fxSlot: Int, i: Int, before: Float) {
+        val others = alsoSelected()
+        if (others.isEmpty()) return
+        val fx = engine.fx
+        val f = selectedIndex
+        val t = fx.type(f, fxSlot)
+        val d = org.openmk3.core.audio.FxParams.DEFS[t]?.firstOrNull { it.index == i } ?: return
+        val after = fx[f, fxSlot, i]
+        val discrete = d.choices != null || d.step >= 1f
+        for (o in others) if (fx.type(o, fxSlot) == t)
+            fx[o, fxSlot, i] = if (discrete) after else (fx[o, fxSlot, i] + (after - before)).coerceIn(d.min, d.max)
+    }
+
+    /** An effect chosen in slot [fxSlot] of the focused sound goes to the selected sounds too. */
+    fun mirrorFxType(fxSlot: Int) {
+        val t = engine.fx.type(selectedIndex, fxSlot)
+        for (o in alsoSelected()) if (engine.fx.type(o, fxSlot) != t) engine.setFx(o, fxSlot, t)
+    }
+
+    /** POLY parameter [i] changed on the focused sound: selected POLY sounds follow. */
+    fun mirrorPoly(i: Int, before: Float) {
+        val poly = engine.poly
+        val after = poly[selectedIndex, i]
+        for (o in alsoSelected()) if (engine.params[o, org.openmk3.core.audio.SoundParams.SRC].roundToInt() == org.openmk3.core.audio.SoundParams.SRC_POLY)
+            poly[o, i] = if (poly.steps[i] > 0) after else poly[o, i] + (after - before)
+    }
     /** Focused group, 0..7 = A..H. Pads play and edit its 16 sounds. */
     @Volatile var group = 0
         private set
@@ -483,7 +566,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             dirty = false
             page.draw(left.canvas, right.canvas, now)
             if (repeatHeld) drawRepeatOverlay(left.canvas, right.canvas)
-            if (selectHeld && !page.customPads && page !is WizardPage) drawSelectOverlay(right.canvas)
+            if (selectActive && !page.customPads && page !is WizardPage) drawSelectOverlay(left.canvas, right.canvas)
             val a = left.flush(dev)
             val b = right.flush(dev)
             if (a > 0 || b > 0) {
@@ -515,11 +598,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             }
             return
         }
-        // SELECT + pad, on every page: focus that pad's sound without playing it
-        if (selectHeld && !page.customPads && page !is WizardPage) {
+        // SELECT + pad, on every page: focus / select that pad's sound without playing it
+        if (selectActive && !page.customPads && page !is WizardPage) {
             post {
-                selectedSound = slot
-                AppLog.i("Selected ${padLabel(slot)}")
+                selectPad(slot)
                 dirty = true
             }
             return
@@ -574,7 +656,24 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         val name = map.nameForBit(bit)
         if (name == "SHIFT") shiftHeld = down
         if (name == "ERASE") eraseHeld = down
-        if (name == "SELECT") { selectHeld = down; dirty = true }
+        if (name == "SELECT") {
+            selectHeld = down
+            if (down && selectPinned && !shiftHeld) selectPinned = false  // pressing SELECT again unpins
+            dirty = true
+        }
+        // SELECT mode: D1 pin · D5 all · D6 none · D8 multiple selection
+        if (selectActive && down && !shiftHeld && !page.customLeds && page !is WizardPage &&
+            (name == "D1" || name == "D5" || name == "D6" || name == "D8")) {
+            when (name) {
+                "D1" -> selectPinned = !selectPinned
+                "D5" -> { for (k in 0 until 16) selection.add(snd(k)); selection.add(selectedIndex) }
+                "D6" -> { selection.clear(); selection.add(selectedIndex) }
+                "D8" -> selectMulti = !selectMulti
+            }
+            AppLog.i("Select: ${selectedSounds().size} selected, multi ${if (selectMulti) "on" else "off"}${if (selectPinned) ", pinned" else ""}")
+            dirty = true
+            return@post
+        }
         // AUTO: hold to record knob moves; SHIFT + AUTO pins it (leaving the mode unpins)
         if (name == "AUTO" && !page.customLeds) {
             if (down && shiftHeld) autoPinned = !autoPinned
@@ -861,7 +960,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("STEP", page is HomePage && HomePage.stepMode)
         lights.set("EVENTS", page is EventsPage)
         lights.set("VARIATION", page is VariationPage)
-        lights.set("SELECT", selectHeld)
+        lights.set("SELECT", selectActive)
         lights.set("SHIFT", shiftHeld)
         lights.set("DUPLICATE", dupHeld)
         lights.set("ERASE", eraseHeld)
@@ -880,6 +979,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             lights.set("D1", "NOTE REPEAT" in pinned)
             if (repeatKind == RepeatKind.ARP) lights.set("D3", arpHold)
             lights.set("D4")
+        }
+        if (selectActive) {
+            lights.set("D1", selectPinned); lights.set("D5"); lights.set("D6"); lights.set("D8", selectMulti)
         }
         if (modeHeld == "PATTERN" || modeHeld == "SCENE" || modeHeld == "VARIATION" || modeHeld == "EVENTS") lights.set("D1", modeHeld in pinned)
         lights.set("LOCK", lock.quick != null || page is LockPage)
@@ -909,12 +1011,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private fun applyPadLights(now: Long) {
         for (slot in 0 until 16) {
             // SELECT held: the pads show the group's sounds (lit = loaded, brightest = focused)
-            if (selectHeld) {
+            if (selectActive) {
                 val sound = snd(slot)
                 val c = soundColour(sound)
                 padLed(slot, when {
                     slot == selectedSound -> org.openmk3.core.mk3.Mk3Colors.value(c, 3)
-                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 1)
+                    isSelected(sound) -> org.openmk3.core.mk3.Mk3Colors.value(if (hasSound(sound)) c else org.openmk3.core.mk3.Mk3Colors.WHITE, 2)
+                    hasSound(sound) -> org.openmk3.core.mk3.Mk3Colors.value(c, 0)
                     else -> 0
                 })
                 continue
@@ -955,9 +1058,17 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private val ovTitle = Theme.text(14f, Theme.ACCENT, bold = true)
 
     /** While SELECT is held: the group's 16 sounds in pad layout on the right screen. */
-    private fun drawSelectOverlay(r: Canvas) {
+    private fun drawSelectOverlay(l: Canvas, r: Canvas) {
+        // the D buttons of SELECT mode over the left screen's top row
+        l.drawRect(0f, 0f, 480f, 36f, ovBg)
+        l.drawText("PIN", 60f, 24f, if (selectPinned) ovOn else ovTab)
+        l.drawText("${selectedSounds().size} SELECTED", 240f, 24f, ovTitle.also { it.textAlign = android.graphics.Paint.Align.CENTER })
+        ovTitle.textAlign = android.graphics.Paint.Align.LEFT
         r.drawColor(Theme.BG)
-        r.drawText("SELECT · GROUP $groupLetter", 8f, 22f, ovTitle)
+        r.drawText("ALL", 60f, 22f, ovTab)
+        r.drawText("NONE", 180f, 22f, ovTab)
+        r.drawText("MULTI", 420f, 22f, if (selectMulti) ovOn else ovTab)
+        r.drawText("GROUP $groupLetter", 260f, 22f, ovTitle)
         val w = 114f; val h = 58f
         for (slot in 0 until 16) {
             val col = slot % 4; val row = 3 - slot / 4
@@ -966,9 +1077,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             val loaded = hasSound(sound)
             val c = org.openmk3.core.mk3.Mk3Colors.rgb(soundColour(sound))
             val fill = Theme.fill(if (loaded) c else android.graphics.Color.rgb(32, 32, 40))
-            if (loaded && slot != selectedSound) fill.alpha = 110
+            if (loaded && slot != selectedSound && !isSelected(sound)) fill.alpha = 110
             r.drawRoundRect(android.graphics.RectF(x, y, x + w, y + h), 5f, 5f, fill)
             if (slot == selectedSound) r.drawRoundRect(android.graphics.RectF(x, y, x + w, y + h), 5f, 5f, Theme.stroke(Theme.FG, 3f))
+            else if (isSelected(sound)) r.drawRoundRect(android.graphics.RectF(x, y, x + w, y + h), 5f, 5f, Theme.stroke(Theme.ACCENT, 2f))
             val src = engine.params[sound, org.openmk3.core.audio.SoundParams.SRC].toInt()
             val name = when (src) {
                 1 -> "SYNTH"; 2 -> "FM"; 3 -> engine.poly.patchName[sound]

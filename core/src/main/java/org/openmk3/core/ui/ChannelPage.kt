@@ -64,11 +64,11 @@ class ChannelPage(ui: Ui) : Page(ui) {
             0 -> when (level) {
                 0 -> ui.engine.masterGain = (ui.engine.masterGain + delta * 0.002f * k).coerceIn(0f, 1.5f)
                 1 -> p.setGroupVolume(g, p.groupVolume(g) + delta * 0.05f * k)
-                else -> { sp[s, SoundParams.VOL] = (sp[s, SoundParams.VOL] + delta * 0.05f * k).coerceIn(-60f, 12f); ui.autoWrite(s, SoundParams.VOL) }
+                else -> { val b = sp[s, SoundParams.VOL]; sp[s, SoundParams.VOL] = (sp[s, SoundParams.VOL] + delta * 0.05f * k).coerceIn(-60f, 12f); ui.mirrorSound(SoundParams.VOL, b); ui.autoWrite(s, SoundParams.VOL) }
             }
             1 -> when (level) {
                 1 -> p.setGroupPan(g, p.groupPan(g) + delta * 0.002f * k)
-                2 -> { sp[s, SoundParams.PAN] = (sp[s, SoundParams.PAN] + delta * 0.002f * k).coerceIn(-1f, 1f); ui.autoWrite(s, SoundParams.PAN) }
+                2 -> { val b = sp[s, SoundParams.PAN]; sp[s, SoundParams.PAN] = (sp[s, SoundParams.PAN] + delta * 0.002f * k).coerceIn(-1f, 1f); ui.mirrorSound(SoundParams.PAN, b); ui.autoWrite(s, SoundParams.PAN) }
             }
         } else if (knob == 0) when (level) {
             0 -> p.swing = (p.swing + delta * 0.0005f * k).coerceIn(0f, 0.5f)

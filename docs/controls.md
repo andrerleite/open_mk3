@@ -53,7 +53,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
 | STEP | From any page: the sequencer with the pads as steps (PAD MODE leaves it) | ✅ |
-| SELECT + pad | Focus a sound without playing it (on every page, in any pad mode). While SELECT is held the pads light only where a sound is loaded (focused pad brightest) and the right screen shows the group's 16 sounds | ✅ |
+| SELECT + pad | SELECT mode (hold SELECT; SELECT + D1 pins it, SELECT again unpins). A pad focuses its sound without playing it. MULTI off (D8): a pad outside the selection selects only that sound, a pad inside it only moves the focus. MULTI on: pads add sounds to the selection or take them out (the focused one stays). D5 ALL selects the group's 16 sounds, D6 NONE keeps only the focused one. Pads: focused brightest, selected bright (empty ones white), loaded dim; the right screen shows the group with the selection outlined. Every edit of the focused sound then applies to all selected sounds: sound parameters (PLUG-IN, CHANNEL volume / pan, choke and link groups), the same effect in the same slot, an effect chosen in a slot, POLY parameters. Knob-type values move by the same amount, switch-type values (reverse, loop, choke group, …) are copied. Focusing a sound outside the selection moves the selection to it | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
 | SHIFT + MUTE (Choke) | Choke groups setup | 🟡 (choke and link groups on the PAD MODE page) |
@@ -187,7 +187,7 @@ their settings are saved with the kit and in projects.
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
 | VOICE | Source | Volume | Pan | Polyphony (1–16, strict: 1 = one voice, also for chords) | Legato (polyphony 1: a new key glides the playing voice instead of restarting it) | Glide time (legato) | Bend range (touch strip PITCH, ±0–24 semitones) | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz, plain or with a low, low-mid, high-mid or high output filter) |
-| SAMPLE | Start | End | Reverse | Trigger (one-shot / gate) | Loop | Loop start | Loop end | Crossfade |
+| SAMPLE | Start | End | Reverse | Trigger (one-shot / gate) | Loop (ONE-SHOT: repeats while the pad or note is held, then plays to the end; AHD / ADSR: until the envelope ends) | Loop start | Loop end | Crossfade |
 | PITCH / ENV | Tune | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) | |
 | FX / FILTER | Compressor (4:1, threshold and make-up follow the amount) | Drive | Sample-rate reduction | Bit reduction | Filter (off / LP 12 / BP / HP / LP 24 / EQ) | Cutoff (EQ: frequency) | Resonance (EQ: bandwidth) | EQ gain (±24 dB) |
 | MOD ENV | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release (ADSR) | | | |

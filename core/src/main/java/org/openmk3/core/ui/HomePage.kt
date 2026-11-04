@@ -428,7 +428,9 @@ class HomePage(ui: Ui) : Page(ui) {
         val sp = ui.engine.params
         val snd = sd(selected)
         val idx = when (knob) { 0 -> org.openmk3.core.audio.SoundParams.CHOKE; 1 -> org.openmk3.core.audio.SoundParams.LINK; else -> return true }
+        val before = sp[snd, idx]
         sp[snd, idx] = (sp[snd, idx] + d).coerceIn(0f, 16f)
+        ui.mirrorSound(idx, before)  // all selected sounds get the same choke / link group
         sp.save(ui.ctx)
         return true
     }

@@ -144,7 +144,7 @@ enum {
     P_REL = 14,     // seconds (ADSR)
     P_POLY = 15,    // voices per sound, 1..16
     P_ENGINE = 16,  // 0 standard, 1 vintage 12-bit/26 kHz, 2 vintage 12-bit/40 kHz
-    P_LOOP = 17,    // > 0.5 = loop (AHD / ADSR only)
+    P_LOOP = 17,    // > 0.5 = loop (ONE-SHOT: while held)
     P_LSTART = 18,  // 0..1 of the sample
     P_LEND = 19,    // 0..1 of the sample
     P_XFADE = 20,   // 0..1 of the loop length
@@ -1874,11 +1874,12 @@ void Engine::renderChunk(float* out, int32_t frames) {
         // synth notes always end on note-off (with RELEASE): a model's own gate can leave a
         // faint residual that never counts as silent, so the note would hang
         const bool gateMode = P[P_GATE] > 0.5f || (synth && !fmv);  // FM voices release with their own envelopes
-        // loop (only with a releasing envelope, so a looped sound always ends)
+        // loop: with AHD / ADSR the envelope ends it; with ONE-SHOT it loops while the pad (or the
+        // note) is held, then plays on to the end of the sample, so a looped sound always ends
         const int n = s->frames;
         // a zone with its own loop setting uses its loop points, else the sound's
         const bool zLoop = zm && zm[10] >= 0.f;
-        const bool loop = !synth && v.envType != 0 && (zLoop ? zm[10] > 0.5f : P[P_LOOP] > 0.5f);
+        const bool loop = !synth && (v.envType != 0 || !v.released) && (zLoop ? zm[10] > 0.5f : P[P_LOOP] > 0.5f);
         int ls = 0, le = 0, xf = 0;
         if (loop) {
             ls = std::clamp(int(std::clamp(zLoop ? zm[11] : P[P_LSTART], 0.f, 1.f) * n), v.startF, v.endF - 1);

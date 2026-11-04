@@ -339,9 +339,14 @@ class SoundPage(ui: Ui) : Page(ui) {
     override fun onKnob(knob: Int, delta: Int) {
         when (val k = page.knobs.getOrNull(knob)) {
             is Knob.Snd -> soundKnob(k.p, delta)
-            is Knob.Fx -> { fx.nudge(chain, fxSlot, k.d, delta, shift); fxChanged() }
+            is Knob.Fx -> {
+                val before = fx[chain, fxSlot, k.d.index]
+                fx.nudge(chain, fxSlot, k.d, delta, shift)
+                if (level == 2) ui.mirrorFx(fxSlot, k.d.index, before)
+                fxChanged()
+            }
             Knob.Type -> typeKnob(delta)
-            is Knob.Poly -> { poly.nudge(slot, k.i, delta, shift); polyChanged() }
+            is Knob.Poly -> { val before = poly[slot, k.i]; poly.nudge(slot, k.i, delta, shift); ui.mirrorPoly(k.i, before); polyChanged() }
             Knob.PolyCategory -> presetStep(delta) { d ->
                 val cats = PolyPresets.categories(ui.ctx)
                 if (cats.isNotEmpty()) { polyCat = (polyCat + d).coerceIn(0, cats.size - 1); presetIdx = 0; loadPreset() }
@@ -406,10 +411,17 @@ class SoundPage(ui: Ui) : Page(ui) {
         val t = (fx.type(chain, fxSlot) + dir).coerceIn(0, FxParams.TYPES.size - 1)
         if (t == fx.type(chain, fxSlot)) return
         ui.engine.setFx(chain, fxSlot, t)
+        if (level == 2) ui.mirrorFxType(fxSlot)
         org.openmk3.core.AppLog.i("FX ${levelName()} slot ${slotIdx + 1}: ${FxParams.TYPES[t]}")
     }
 
     private fun soundKnob(p: Int, delta: Int) {
+        val before = params[slot, p]
+        soundKnobFocused(p, delta)
+        ui.mirrorSound(p, before)
+    }
+
+    private fun soundKnobFocused(p: Int, delta: Int) {
         val frames = ui.engine.kit[slot].frames
         if (p in MARKERS && frames > 0) {
             // Markers move relative to the zoomed view, and can snap to zero crossings.
@@ -435,9 +447,9 @@ class SoundPage(ui: Ui) : Page(ui) {
     override fun onKnobTouch(knob: Int, touched: Boolean) {
         if (!touched || !shift) return
         when (val k = page.knobs.getOrNull(knob)) {
-            is Knob.Snd -> { SoundParams.DEFS[k.p]?.let { params[slot, k.p] = it.default }; changed() }
-            is Knob.Fx -> { fx[chain, fxSlot, k.d.index] = k.d.default; fxChanged() }
-            is Knob.Poly -> { poly[slot, k.i] = poly.defaults[k.i]; polyChanged() }
+            is Knob.Snd -> { val b = params[slot, k.p]; SoundParams.DEFS[k.p]?.let { params[slot, k.p] = it.default }; ui.mirrorSound(k.p, b); changed() }
+            is Knob.Fx -> { val b = fx[chain, fxSlot, k.d.index]; fx[chain, fxSlot, k.d.index] = k.d.default; if (level == 2) ui.mirrorFx(fxSlot, k.d.index, b); fxChanged() }
+            is Knob.Poly -> { val b = poly[slot, k.i]; poly[slot, k.i] = poly.defaults[k.i]; ui.mirrorPoly(k.i, b); polyChanged() }
             else -> {}
         }
     }
@@ -818,7 +830,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         waveView.setColour(Mk3Colors.rgb(ui.soundColour(slot)))
         val n = s.frames
         fun fr(p: Int) = (params[slot, p] * n).toInt()
-        val loop = if (params[slot, LOOP] > 0.5f && params[slot, ENV] > 0.5f) intArrayOf(fr(LSTART), fr(LEND)) else null
+        val loop = if (params[slot, LOOP] > 0.5f) intArrayOf(fr(LSTART), fr(LEND)) else null
         val head = ui.engine.playPos(slot)
         waveView.draw(c, 16f, 60f, 196f, selA = fr(START), selB = fr(END),
             markers = intArrayOf(fr(START), fr(END)), loop = loop, playhead = if (head >= 0f) head.toInt() else -1)
@@ -905,8 +917,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             HOLD -> env == 1
             ATT, DEC -> env != 0
             SUS, REL -> env == 2
-            LOOP -> env != 0
-            LSTART, LEND, XFADE -> env != 0 && params[slot, LOOP] > 0.5f
+            LSTART, LEND, XFADE -> params[slot, LOOP] > 0.5f
             CUT, RES, DRIVE -> p == DRIVE || params[slot, FTYPE] >= 0.5f
             VCUT -> params[slot, FTYPE] >= 0.5f
             SoundParams.EQGAIN -> params[slot, FTYPE].roundToInt() == 5
