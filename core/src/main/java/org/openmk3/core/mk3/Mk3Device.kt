@@ -109,6 +109,7 @@ class Mk3Device(ctx: Context, val device: UsbDevice, private val listener: Mk3Li
             }
         }
         running = true
+        buttonLedsDirty = true; padLedsDirty = true  // a (re)connected controller starts dark
         startReader(c)
         startLedThread()
         return true
@@ -416,22 +417,33 @@ class Mk3Device(ctx: Context, val device: UsbDevice, private val listener: Mk3Li
         synchronized(ledLock) { ledLock.notify() }
     }
 
-    /** Coalesces LED changes: at most one report of each kind every 8 ms. */
+    @Volatile var ledFailures = 0L
+        private set
+
+    /**
+     * Coalesces LED changes: at most one report of each kind every 8 ms. A report the USB
+     * write didn't deliver is sent again, and the full state is re-sent every second, so a
+     * lost report never leaves a LED wrong for long.
+     */
     private fun startLedThread() {
         ledThread = Thread({
+            var lastFull = 0L
             while (running) {
                 val c = conn ?: break
-                if (buttonLedsDirty) {
+                val now = android.os.SystemClock.uptimeMillis()
+                val full = now - lastFull >= 1000
+                if (full) lastFull = now
+                if (buttonLedsDirty || full) {
                     buttonLedsDirty = false
-                    sendReport(c, 0x80, buttonLeds.copyOf())
+                    if (!sendReport(c, 0x80, buttonLeds.copyOf())) buttonLedsDirty = true
                 }
-                if (padLedsDirty) {
+                if (padLedsDirty || full) {
                     padLedsDirty = false
-                    sendReport(c, 0x81, padLeds.copyOf())
+                    if (!sendReport(c, 0x81, padLeds.copyOf())) padLedsDirty = true
                 }
                 try {
                     synchronized(ledLock) {
-                        if (!buttonLedsDirty && !padLedsDirty) ledLock.wait(1000)
+                        if (!buttonLedsDirty && !padLedsDirty) ledLock.wait(250)
                     }
                     Thread.sleep(8)
                 } catch (_: InterruptedException) {
@@ -441,11 +453,16 @@ class Mk3Device(ctx: Context, val device: UsbDevice, private val listener: Mk3Li
         }, "mk3-leds").apply { start() }
     }
 
-    private fun sendReport(c: UsbDeviceConnection, id: Int, payload: ByteArray) {
+    /** Returns false if the report wasn't delivered (it will be retried). */
+    private fun sendReport(c: UsbDeviceConnection, id: Int, payload: ByteArray): Boolean {
         val pkt = ByteArray(payload.size + 1)
         pkt[0] = id.toByte()
         System.arraycopy(payload, 0, pkt, 1, payload.size)
-        c.bulkTransfer(hidOut, pkt, pkt.size, 100)
+        val r = c.bulkTransfer(hidOut, pkt, pkt.size, 100)
+        if (r == pkt.size) return true
+        ledFailures++
+        if (ledFailures == 1L || ledFailures % 100 == 0L) AppLog.i("MK3: LED report 0x${id.toString(16)} not delivered (result $r, $ledFailures so far): retrying")
+        return false
     }
 
     // =====================================================================================

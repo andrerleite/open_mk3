@@ -313,7 +313,7 @@ class Mk3Service : Service() {
                     }
                 }
             }, handler)
-            val pc = org.openmk3.core.audio.PhoneCapture(proj) { why ->
+            val pc = org.openmk3.core.audio.PhoneCapture(this, proj, { engine?.monitoring == true }) { why ->
                 handler.post {
                     if (phoneCapture != null && projection === proj) {
                         AppLog.i("Phone capture: ended ($why)")
@@ -321,7 +321,7 @@ class Mk3Service : Service() {
                     }
                 }
             }
-            if (pc.start()) phoneCapture = pc else stopPhoneCapture()
+            if (pc.start()) { phoneCapture = pc; engine?.phoneCaptureOn = true } else stopPhoneCapture()
         } catch (e: Exception) {
             AppLog.i("Phone capture: could not start: $e")
             stopPhoneCapture()
@@ -332,6 +332,7 @@ class Mk3Service : Service() {
     private fun stopPhoneCapture() {
         val pc = phoneCapture
         phoneCapture = null
+        engine?.phoneCaptureOn = false
         pc?.stop()
         val proj = projection
         projection = null

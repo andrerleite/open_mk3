@@ -455,7 +455,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     fun show(p: Page) = post {
         page.onExit()
-        dev.clearLeds()
+        // the next frame sets every LED again; clearing first would only flash them off (pages
+        // that drive the LEDs themselves start from dark)
+        if (page.customLeds || page.customPads || p.customLeds || p.customPads) dev.clearLeds()
+        stripLedsShown = -2
         page = p
         p.onEnter()
         dirty = true

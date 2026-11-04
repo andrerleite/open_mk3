@@ -43,6 +43,10 @@ object NativeEngine {
                                 hidEp: Int, hidMax: Int): Boolean
     external fun nativeHidRead(buf: ByteArray, timeoutMs: Int): Int
     external fun nativeUsbStop()
+    /** Output on the phone (the direct USB driver then sends the MK3 silence). */
+    external fun nativeOutPhone(on: Boolean)
+    /** Phone playback captured for sampling is also heard on the output, at [gain]. */
+    external fun nativeMonitor(on: Boolean, gain: Float)
     external fun nativeUsbRunning(): Boolean
     external fun nativeUsbError(): Int
     external fun nativeUsbLate(): Int
@@ -256,7 +260,9 @@ class AudioEngine(private val ctx: Context) {
         val usbIn = if (!micOk) null else am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
             it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
         }
-        val ok = n.nativeStart(usbOut?.id ?: 0, usbIn?.id ?: 0)
+        mk3OutId = usbOut?.id ?: 0
+        mk3InId = usbIn?.id ?: 0
+        val ok = n.nativeStart(mk3OutId, mk3InId)
         running = ok
         AppLog.i(
             "Audio (native AAudio): ${if (ok) "started" else "FAILED"} out=$outputName " +
@@ -293,6 +299,7 @@ class AudioEngine(private val ctx: Context) {
                 }
             }, 250, 250, TimeUnit.MILLISECONDS)
         }
+        restoreOutput()
     }
 
     /**
@@ -320,6 +327,9 @@ class AudioEngine(private val ctx: Context) {
                         lastLate = late
                         lastGapLog = nowMs
                     }
+                    // output on the phone: keep its AAudio stream healthy (reopens after a
+                    // device change such as Bluetooth headphones connecting)
+                    if (outputPhone && n.nativeTune()) AppLog.i("Audio: phone output reopened (buffer ${bufferFrames}fr)")
                     if (!n.nativeUsbRunning()) {
                         AppLog.i("Audio: direct USB stream stopped (errno ${n.nativeUsbError()})")
                         monitor?.shutdown()
@@ -335,12 +345,87 @@ class AudioEngine(private val ctx: Context) {
                 }
             }, 250, 250, TimeUnit.MILLISECONDS)
         }
+        restoreOutput()
     }
+
+    // ---- output: the MK3, or the phone (speaker, wired or Bluetooth headphones) ----
+
+    /** True: everything plays on the phone's current output instead of the MK3. */
+    @Volatile var outputPhone = false
+        private set
+    private var mk3OutId = 0
+    private var mk3InId = 0
+
+    /** The phone output to use without the MK3: Bluetooth, then wired headphones, then the speaker. */
+    private fun phoneDevice(): AudioDeviceInfo? {
+        val am = ctx.getSystemService(AudioManager::class.java)!!
+        val outs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val order = listOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, 26 /* BLE headset */, 27 /* BLE speaker */,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+        for (t in order) outs.firstOrNull { it.type == t }?.let { return it }
+        return null
+    }
+
+    /** Switches the output (saved; applied again at the next start). */
+    fun setOutputPhone(phone: Boolean) {
+        ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).edit().putBoolean("outputPhone", phone).apply()
+        if (phone == outputPhone) return
+        applyOutput(phone)
+    }
+
+    private fun applyOutput(phone: Boolean) {
+        outputPhone = phone
+        if (direct) {
+            if (phone) {
+                n.nativeOutPhone(true)
+                // the MK3's audio stays with our driver, so Android's default output is the
+                // phone's own (and follows Bluetooth headphones connecting / disconnecting)
+                val ok = n.nativeStart(0, 0)
+                AppLog.i("Audio: output on the phone ${if (ok) "started" else "FAILED"} (buffer ${bufferFrames}fr, ${"%.1f".format(bufferFrames * 1000.0 / SR)} ms)")
+                if (!ok) { n.nativeOutPhone(false); outputPhone = false }
+            } else {
+                n.nativeStop()
+                n.nativeOutPhone(false)
+                AppLog.i("Audio: output on the MK3")
+            }
+        } else {
+            n.nativeStop()
+            val dev = if (phone) phoneDevice() else null
+            val ok = if (phone) n.nativeStart(dev?.id ?: 0, 0) else n.nativeStart(mk3OutId, mk3InId)
+            outputName = if (phone) "phone (${dev?.productName ?: "default"})" else outputName
+            AppLog.i("Audio: output on the ${if (phone) "phone: ${dev?.productName} type ${dev?.type}" else "MK3"} ${if (ok) "started" else "FAILED"}")
+        }
+        updateMonitor()
+    }
+
+    /** Re-applies the saved output (after the audio started). */
+    private fun restoreOutput() {
+        if (ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).getBoolean("outputPhone", false)) applyOutput(true)
+    }
+
+    // ---- phone playback heard on the MK3 while it is captured for sampling ----
+
+    @Volatile var phoneCaptureOn = false
+        set(v) { field = v; updateMonitor() }
+    /** Setting: phone audio plays through the MK3 while captured (the phone's speaker is muted). */
+    var monitorPhone: Boolean
+        get() = ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).getBoolean("monitorPhone", true)
+        set(v) {
+            // turning it on again also retries muting the phone's speaker
+            ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).edit().putBoolean("monitorPhone", v).putBoolean("muteSilencesCapture", false).apply()
+            updateMonitor()
+        }
+    /** True while the phone audio is routed to the MK3 (the capture then mutes the phone's speaker). */
+    val monitoring get() = phoneCaptureOn && monitorPhone && !outputPhone
+
+    private fun updateMonitor() = n.nativeMonitor(monitoring, 1f)
 
     fun stop() {
         monitor?.shutdownNow()
         monitor = null
         n.nativeStop()
+        n.nativeOutPhone(false)
+        n.nativeMonitor(false, 1f)
         running = false
     }
 

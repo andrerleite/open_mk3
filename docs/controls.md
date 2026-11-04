@@ -103,7 +103,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice, zones (D4; also SHIFT + SAMPLING) | ✅ |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
-| SETTINGS | Metronome on / level, count-in length (D8: LED check) | ✅ |
+| SETTINGS | D1 metronome on, K1 level, K2 count-in length · D5 OUTPUT: the MK3 or the PHONE (its speaker or headphones, Bluetooth included; the MK3 inputs still record) · D6 PHONE AUDIO: while phone audio is captured for sampling, play it through the MK3 and mute the phone's speaker (default on) · D8 LED check | ✅ |
 | AUTO | Hold (SHIFT + AUTO pins) and turn knobs while playing: sound parameters (PLUG-IN pages, MIXER volume / pan) are recorded per step into the pattern (16 lanes per pattern). ERASE + turn a knob removes that parameter's automation | ✅ |
 | MACRO (Set) | 8 macro knobs per group, each driving one sound parameter. SHIFT + MACRO: D1–D8 pick a macro, then turn any parameter on the PLUG-IN page to assign it; ERASE + D-button clears | ✅ |
 

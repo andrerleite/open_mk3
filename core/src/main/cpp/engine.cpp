@@ -314,6 +314,49 @@ struct Held {
 };
 constexpr int kMaxHeld = 32;
 
+/**
+ * Phone playback heard on the controller's output: the capture thread pushes, the audio thread
+ * pulls. The two run on different clocks, so the fill is held near 50 ms by skipping ahead when
+ * it grows and waiting (silence) when it runs dry.
+ */
+struct PhoneMonitor {
+    static constexpr int kFrames = 1 << 15;  // ~680 ms
+    float buf[kFrames * 2] = {};
+    std::atomic<uint32_t> w{0}, r{0};
+    std::atomic<bool> on{false};
+    std::atomic<float> gain{1.f};
+    bool primed = false;
+    void push(const float* st, int n) {
+        if (!on.load(std::memory_order_relaxed)) return;
+        uint32_t wi = w.load(std::memory_order_relaxed);
+        for (int i = 0; i < n; i++, wi++) {
+            buf[(wi & (kFrames - 1)) * 2] = st[i * 2];
+            buf[(wi & (kFrames - 1)) * 2 + 1] = st[i * 2 + 1];
+        }
+        w.store(wi, std::memory_order_release);
+    }
+    /** Adds the phone audio to [out] (audio thread). */
+    void mix(float* out, int n) {
+        if (!on.load(std::memory_order_relaxed)) { r.store(w.load(std::memory_order_acquire)); primed = false; return; }
+        const uint32_t wi = w.load(std::memory_order_acquire);
+        uint32_t ri = r.load(std::memory_order_relaxed);
+        uint32_t fill = wi - ri;
+        constexpr uint32_t target = 2400, high = 9600;
+        if (fill > uint32_t(kFrames)) { ri = wi - target; fill = target; }  // overrun
+        if (!primed) { if (fill < target) return; primed = true; }
+        if (fill > high) { ri = wi - target; fill = target; }
+        const float g = gain.load(std::memory_order_relaxed);
+        const int k = int(std::min<uint32_t>(fill, uint32_t(n)));
+        for (int i = 0; i < k; i++, ri++) {
+            out[i * 2] = std::clamp(out[i * 2] + buf[(ri & (kFrames - 1)) * 2] * g, -1.f, 1.f);
+            out[i * 2 + 1] = std::clamp(out[i * 2 + 1] + buf[(ri & (kFrames - 1)) * 2 + 1] * g, -1.f, 1.f);
+        }
+        if (k < n) primed = false;  // ran dry: wait for it to fill again
+        r.store(ri, std::memory_order_release);
+    }
+};
+static PhoneMonitor gMonitor;
+
 static void recOnBar(int delay);
 
 /** A zone's mapping and settings before anything is set: full sample, as the sound. */
@@ -326,6 +369,8 @@ class Engine {
 public:
     // ---- set from Kotlin ----
     std::atomic<float> masterGain{0.7f};
+    /** Output on the phone (AAudio) while the direct USB driver keeps the MK3 input running. */
+    std::atomic<bool> outPhone{false};
     std::atomic<float> cpuPeak{0.f};
     // VU meters: peak since the last read, per sound (voices, before its effects) and per group
     std::atomic<float> meterSound[kSounds] = {};
@@ -2184,6 +2229,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         if (a > peak) peak = a;
     }
     meterAcc = peak;
+    gMonitor.mix(out, frames);  // phone playback, after the master (its own level)
     meterFrames += frames;
     if (meterFrames >= kSampleRate / 10) {
         meter.store(meterAcc, std::memory_order_relaxed);
@@ -2208,6 +2254,7 @@ public:
     std::atomic<long long> packetsIn{0};
     std::atomic<long long> framesIn{0};
     std::atomic<int> late{0};        // OUT queue ran dry before we refilled it
+    std::atomic<int> usbBufferFrames{0};
     std::atomic<int> fifoEmpty{0};   // had to guess a packet size (no IN count available)
     std::atomic<int> fifoTrim{0};    // dropped IN counts because OUT fell behind
     std::atomic<int> inErrors{0};    // IN packets with a non-zero status
@@ -2340,7 +2387,11 @@ void UsbAudio::fillOut(Urb& u) {
         total += f;
     }
     mix_.resize(size_t(total) * 2);
-    if (total > 0) gEngine.render(mix_.data(), total);
+    if (total > 0) {
+        // output on the phone: the MK3 gets silence and the AAudio stream renders instead
+        if (gEngine.outPhone.load(std::memory_order_acquire)) std::fill(mix_.begin(), mix_.end(), 0.f);
+        else gEngine.render(mix_.data(), total);
+    }
     uint8_t* p = u.buf.data();
     int k = 0;
     for (int i = 0; i < packets_; i++) {
@@ -2441,7 +2492,8 @@ void UsbAudio::pump(bool fromCallback) {
             fillOut(*o);
             if (submit(*o)) inflightOut_++;
             activeUrbs_++;
-            gEngine.bufferFrames.store(activeUrbs_ * packets_ * nominal_);
+            usbBufferFrames.store(activeUrbs_ * packets_ * nominal_);
+            if (!gEngine.outPhone.load()) gEngine.bufferFrames.store(usbBufferFrames.load());
             queueMs.store(activeUrbs_ * packets_ / 8);
         }
     }
@@ -2620,7 +2672,8 @@ bool UsbAudio::start(int fd, int outEp, int outMax, int inEp, int inMax,
     hidCount_ = 0;
     for (auto& u : urbs_) if (u->hid) hidCount_++;
     gEngine.burstFrames.store(packets * nominal_);
-    gEngine.bufferFrames.store(urbs * packets * nominal_);
+    usbBufferFrames.store(urbs * packets * nominal_);
+    if (!gEngine.outPhone.load()) gEngine.bufferFrames.store(usbBufferFrames.load());
     queueMs.store(urbs * packets / 8);
     gEngine.exclusive.store(true);
     gEngine.xruns.store(0);
@@ -2859,6 +2912,15 @@ JNIEXPORT jint JNICALL JNI_FN(nativeHidRead)(JNIEnv* env, jobject, jbyteArray bu
     if (n > 0) env->SetByteArrayRegion(buf, 0, n, reinterpret_cast<const jbyte*>(tmp));
     return n;
 }
+/** Output on the phone: the USB driver sends the MK3 silence (its input keeps working). */
+JNIEXPORT void JNICALL JNI_FN(nativeOutPhone)(JNIEnv*, jobject, jboolean on) {
+    gEngine.outPhone.store(on == JNI_TRUE, std::memory_order_release);
+    if (on != JNI_TRUE && gUsb.running.load()) gEngine.bufferFrames.store(gUsb.usbBufferFrames.load());
+}
+JNIEXPORT void JNICALL JNI_FN(nativeMonitor)(JNIEnv*, jobject, jboolean on, jfloat gain) {
+    gMonitor.gain.store(gain);
+    gMonitor.on.store(on == JNI_TRUE);
+}
 JNIEXPORT void JNICALL JNI_FN(nativeUsbStop)(JNIEnv*, jobject) { gUsb.stop(); }
 JNIEXPORT jboolean JNICALL JNI_FN(nativeUsbRunning)(JNIEnv*, jobject) { return gUsb.running.load() ? JNI_TRUE : JNI_FALSE; }
 JNIEXPORT jint JNICALL JNI_FN(nativeUsbError)(JNIEnv*, jobject) { return gUsb.lastError.load(); }
@@ -3033,6 +3095,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeRecFeedPhone)(JNIEnv* env, jobject, jfloatAr
     jfloat* p = env->GetFloatArrayElements(data, nullptr);
     if (!p) return;
     gRec.feed(p, frames, Recorder::SRC_PHONE);
+    gMonitor.push(p, frames);
     env->ReleaseFloatArrayElements(data, p, JNI_ABORT);
 }
 

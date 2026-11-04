@@ -15,7 +15,10 @@ import org.openmk3.core.AppLog
  * out of capture, and protected content, are delivered as silence by Android.
  */
 class PhoneCapture(
+    private val ctx: android.content.Context,
     private val projection: MediaProjection,
+    /** True while the captured audio is heard on the MK3: the phone's own speaker is muted then. */
+    private val monitoring: () -> Boolean = { false },
     /** Called (from the capture thread) if capturing ends on its own. */
     private val onEnded: (String) -> Unit = {},
 ) {
@@ -59,15 +62,68 @@ class PhoneCapture(
             val buf = FloatArray(480 * 2)
             while (running) {
                 val n = r.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
-                if (n > 0) NativeEngine.nativeRecFeedPhone(buf, n / 2)
-                else if (n < 0) {
+                if (n > 0) {
+                    NativeEngine.nativeRecFeedPhone(buf, n / 2)
+                    var pk = 0f
+                    for (i in 0 until n) { val a = kotlin.math.abs(buf[i]); if (a > pk) pk = a }
+                    muteControl(pk)
+                } else if (n < 0) {
                     if (running) onEnded("read error $n")
                     break
                 }
             }
+            setMuted(false)
         }, "phone-capture").apply { start() }
         AppLog.i("Phone capture: started")
         return true
+    }
+
+    // ---- the phone's speaker while its audio plays through the MK3 ----
+
+    private val am = ctx.getSystemService(android.media.AudioManager::class.java)
+    private val prefs = ctx.getSharedPreferences("openmk3", android.content.Context.MODE_PRIVATE)
+    private var muted = false
+    private var lastSignal = 0L
+    private var checkUntil = 0L
+    private var heardWhileMuted = false
+
+    private fun setMuted(m: Boolean) {
+        if (m == muted) return
+        muted = m
+        try {
+            am?.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC,
+                if (m) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE, 0)
+        } catch (e: Exception) { AppLog.i("Phone capture: can't ${if (m) "mute" else "unmute"} the phone: $e") }
+    }
+
+    /**
+     * Mutes the phone's own output while its audio is heard on the MK3. Some phones also silence
+     * the capture when muted: if the audio stops dead the moment we mute, we unmute and don't
+     * mute again (the phone's volume then has to be lowered by hand).
+     */
+    private fun muteControl(peak: Float) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (peak > 0.003f) lastSignal = now
+        val want = monitoring() && !prefs.getBoolean("muteSilencesCapture", false)
+        if (!want) { setMuted(false); checkUntil = 0L; return }
+        if (!muted && now - lastSignal < 200) {
+            setMuted(true)
+            checkUntil = now + 500
+            heardWhileMuted = false
+            return
+        }
+        if (muted && checkUntil != 0L) {
+            if (peak > 1e-5f) heardWhileMuted = true
+            if (now >= checkUntil) {
+                checkUntil = 0L
+                if (heardWhileMuted) AppLog.i("Phone capture: phone speaker muted, its audio plays on the MK3")
+                else {
+                    setMuted(false)
+                    prefs.edit().putBoolean("muteSilencesCapture", true).apply()
+                    AppLog.i("Phone capture: muting this phone also silences the capture: not muting (lower the phone volume by hand)")
+                }
+            }
+        }
     }
 
     fun stop() {
@@ -77,5 +133,6 @@ class PhoneCapture(
         record?.release()
         record = null
         thread = null
+        setMuted(false)
     }
 }
