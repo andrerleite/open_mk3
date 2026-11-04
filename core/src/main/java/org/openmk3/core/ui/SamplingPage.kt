@@ -22,9 +22,12 @@ import kotlin.math.roundToInt
  *
  *  RECORD  D5 source (INPUT / PHONE) · D6 start (MANUAL / THRESHOLD) · D8 start / stop
  *          K1 threshold · K2 max length · pads choose the target pad
- *  EDIT    edits the take, or the focused pad's sample (pads choose which)
- *          K1 start · K2 end · K3 fade in · K4 fade out
- *          D5 normalise · D6 reverse · D7 preview · D8 save to the focused pad
+ *  EDIT    the take, or the focused pad's sample (pads choose which); ◀ ▶ pages:
+ *          1 PLAY RANGE  K1 start · K2 end (live on the pad) · K5 trigger
+ *                        D7 preview · D8 save the range as a new WAV on the focused pad
+ *          2 FUNCTIONS   K1 / K2 selection start / end · K3 or D5 / D6 function · K4 stretch
+ *                        D7 preview the selection · D8 apply · SHIFT + D8 undo
+ *                        (applied to a pad's sample: written to a new WAV and loaded on the pad)
  *  SLICE   K1 mode (GRID / DETECT) · K2 slices or sensitivity · pads play the slices
  *          D8 apply: each slice is saved and loaded onto pads 1, 2, 3…
  *
@@ -55,6 +58,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
         var sliceDetect = false
         var gridIdx = 2
         var sensitivity = 0.5f
+        var editPage = 0
+        var fnIdx = 0
+        var stretchPct = 100
     }
 
     private val n = NativeEngine
@@ -87,6 +93,12 @@ class SamplingPage(ui: Ui) : Page(ui) {
     // What the preview slot is playing, to draw its playhead on the take.
     private var previewBase = -1
     private var slices = IntArray(0)   // slice start frames within the edited region
+    // FUNCTIONS page: the selection (take frames), undo, and the WAV the edits of a pad go to
+    private var selA = 0
+    private var selB = 0
+    private val undo = ArrayDeque<FloatArray>()
+    private var busy = false
+    private var editFile: File? = null
 
     private val tabText = Theme.text(15f, Theme.DIM, bold = true, align = Paint.Align.CENTER)
     private val tabOn = Theme.text(15f, Theme.ACCENT, bold = true, align = Paint.Align.CENTER)
@@ -109,6 +121,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     private val marker = Theme.fill(Theme.ACCENT)
     private val sliceLine = Theme.fill(Color.rgb(80, 160, 255))
     private val sep = Theme.fill(Color.rgb(50, 50, 60))
+    private val pageText = Theme.text(14f, Theme.DIM, align = Paint.Align.RIGHT)
 
     private val phoneActive get() = Mk3Service.instance?.phoneCaptureActive == true
 
@@ -142,8 +155,105 @@ class SamplingPage(ui: Ui) : Page(ui) {
         fadeOutMs = 0f
         normalise = false
         reverse = false
+        selA = 0
+        selB = takeFrames
+        undo.clear()
+        editFile = null
         wave.set(data, 2)
         computeSlices()
+    }
+
+    /** The take after a destructive function: the play range becomes the whole sample. */
+    private fun replaceTake(data: FloatArray, a: Int, b: Int) {
+        take = data
+        takeFrames = data.size / 2
+        trimStart = 0; trimEnd = takeFrames
+        rawStart = 0; rawEnd = takeFrames
+        selA = a.coerceIn(0, takeFrames)
+        selB = b.coerceIn(selA, takeFrames)
+        if (selB == selA && selA == 0) selB = takeFrames
+        focus = selA
+        previewBase = -1
+        wave.set(data, 2)
+        computeSlices()
+    }
+
+    private val fn get() = org.openmk3.core.audio.SampleOps.Fn.values()[fnIdx]
+
+    /** D8 on the FUNCTIONS page. */
+    private fun applyFn() {
+        val d = take ?: run { message = "Record or open something first"; return }
+        if (busy) return
+        busy = true
+        val f = fn
+        val a = selA; val b = selB
+        val ratio = stretchPct / 100f
+        message = "${f.label}…"
+        worker.execute {
+            val res = try { org.openmk3.core.audio.SampleOps.apply(f, d, a, b, ratio) } catch (e: Throwable) { null }
+            ui.post {
+                busy = false
+                when {
+                    res == null -> message = "Can't ${f.label.lowercase()}: out of memory?"
+                    !res.changed -> message = when (f) {
+                        org.openmk3.core.audio.SampleOps.Fn.COPY -> "Copied ${secs(b - a)}"
+                        org.openmk3.core.audio.SampleOps.Fn.PASTE -> "Nothing copied yet"
+                        org.openmk3.core.audio.SampleOps.Fn.STRETCH -> "Stretch: choose an amount (K4), select at least 0.1 s"
+                        else -> "No change"
+                    }
+                    else -> {
+                        if (take === d) {
+                            undo.addLast(d)
+                            while (undo.size > 4 || undo.sumOf { it.size.toLong() } > 24_000_000L) undo.removeFirst()
+                        }
+                        replaceTake(res.data, res.selA, res.selB)
+                        message = "${f.label} done" + if (f == org.openmk3.core.audio.SampleOps.Fn.CUT) " (cut ${secs(b - a)})" else ""
+                        writeToPad()
+                    }
+                }
+                ui.invalidate()
+            }
+        }
+    }
+
+    private fun undoFn() {
+        val prev = undo.removeLastOrNull() ?: run { message = "Nothing to undo"; return }
+        replaceTake(prev, 0, prev.size / 2)
+        message = "Undone"
+        writeToPad()
+    }
+
+    /** A pad's sample being edited: the result goes to a new WAV (the original is kept) on the pad. */
+    private fun writeToPad() {
+        val snd = editSound
+        if (snd < 0) return
+        val data = take ?: return
+        val base = takeName.removeSuffix(" edit")
+        worker.execute {
+            try {
+                val f = editFile ?: run {
+                    val dir = File(BrowserPage.ROOT, "Recordings").apply { mkdirs() }
+                    var i = 1
+                    var c: File
+                    do { c = File(dir, if (i == 1) "$base edit.wav" else "$base edit $i.wav"); i++ } while (c.exists())
+                    c
+                }
+                editFile = f
+                WavWriter.write(f, data, 2)
+                val smp = Sample(f.nameWithoutExtension, data, 0, 2, f.absolutePath, info(data))
+                ui.post {
+                    if (editSound == snd) {
+                        ui.engine.setSample(snd, smp)
+                        ui.engine.params.resetRange(snd)
+                        ui.engine.params.save(ui.ctx)
+                        KitStore.save(ui.ctx, ui.engine.kit)
+                    }
+                    ui.invalidate()
+                }
+            } catch (ex: Exception) {
+                ui.post { message = "Can't save: ${ex.message}"; ui.invalidate() }
+            }
+        }
     }
 
     /** Applies zero-crossing snap to the raw marker positions. */
@@ -416,7 +526,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
 
     private fun preview(data: FloatArray?, base: Int = 0) {
         val e = data ?: return
-        previewBase = base
+        previewBase = base; selPreview = -1
         ui.engine.preview(Sample("Preview", e, 0, 2, null, ""))
     }
 
@@ -476,6 +586,19 @@ class SamplingPage(ui: Ui) : Page(ui) {
         else preview(edited(), 0)
     }
 
+    private val FNS = org.openmk3.core.audio.SampleOps.Fn.values().size
+
+    /** D7 on the FUNCTIONS page: play the selection (press again to stop). */
+    private fun previewSel() {
+        if (ui.engine.isSounding(AudioEngine.PREVIEW_SLOT)) { ui.engine.killAll(AudioEngine.PREVIEW_SLOT); return }
+        val d = take ?: return
+        if (selB - selA < 2) return
+        previewBase = -1
+        selPreview = selA
+        ui.engine.preview(Sample("Preview", d.copyOfRange(selA * 2, selB * 2), 0, 2, null, ""))
+    }
+    private var selPreview = -1
+
     private val gate get() = ui.engine.params[ui.selectedIndex, org.openmk3.core.audio.SoundParams.GATE] > 0.5f
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
@@ -510,11 +633,13 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 "D8" -> startStop()
             }
             Tab.EDIT -> when (name) {
+                "PAGE LEFT" -> editPage = 0
+                "PAGE RIGHT" -> editPage = 1
                 "D4" -> toggleSnap()
-                "D7" -> previewToggle()
-                "D5" -> { normalise = !normalise; computeSlices() }
-                "D6" -> { reverse = !reverse; computeSlices() }
-                "D8" -> save()
+                "D7" -> if (editPage == 0) previewToggle() else previewSel()
+                "D5" -> if (editPage == 1) fnIdx = (fnIdx - 1 + FNS) % FNS
+                "D6" -> if (editPage == 1) fnIdx = (fnIdx + 1) % FNS
+                "D8" -> if (editPage == 0) save() else if (shift) undoFn() else applyFn()
             }
             Tab.SLICE -> when (name) {
                 "D4" -> toggleSnap()
@@ -542,8 +667,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
             }
             Tab.EDIT -> {
                 l.set("D4", ui.zeroSnap)
-                l.set("D5", normalise)
-                l.set("D6", reverse)
+                l.set("PAGE LEFT", editPage == 1)
+                l.set("PAGE RIGHT", editPage == 0)
+                if (editPage == 1) l.set("D5", "D6")
                 l.set("D7", "D8")
             }
             Tab.SLICE -> {
@@ -574,7 +700,14 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 0 -> threshold = (threshold + delta / 1000f).coerceIn(0.002f, 0.9f)
                 1 -> maxSeconds = (maxSeconds + if (delta > 0) 1 else -1).coerceIn(1, 30)
             }
-            Tab.EDIT -> {
+            Tab.EDIT -> if (editPage == 1) {
+                when (knob) {
+                    0 -> { selA = (selA + delta * step).coerceIn(0, max(0, selB - 1)); snapSel(true); focus = selA; wave.follow(selA) }
+                    1 -> { selB = (selB + delta * step).coerceIn(min(takeFrames, selA + 1), takeFrames); snapSel(false); focus = selB; wave.follow(selB) }
+                    2 -> if (stepped(delta)) fnIdx = (fnIdx + if (delta > 0) 1 else -1).coerceIn(0, FNS - 1)
+                    3 -> stretchPct = (stretchPct + if (shift) delta.coerceIn(-1, 1) else delta / 2).coerceIn(25, 400)
+                }
+            } else {
                 when (knob) {
                     0 -> {
                         rawStart = (rawStart + delta * step).coerceIn(0, max(0, rawEnd - 48))
@@ -584,8 +717,6 @@ class SamplingPage(ui: Ui) : Page(ui) {
                         rawEnd = (rawEnd + delta * step).coerceIn(min(takeFrames, rawStart + 48), takeFrames)
                         snapTrim(); focus = trimEnd; wave.follow(trimEnd); pushPlayRange()
                     }
-                    2 -> fadeInMs = (fadeInMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
-                    3 -> fadeOutMs = (fadeOutMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
                     4 -> if (stepped(delta)) {
                         // TRIGGER of the focused pad: play the whole sample, or only while held
                         val sp = ui.engine.params
@@ -612,6 +743,14 @@ class SamplingPage(ui: Ui) : Page(ui) {
         if (abs(knobAcc) < 25) return false
         knobAcc = 0
         return true
+    }
+
+    /** Zero-crossing snap for the selection markers. */
+    private fun snapSel(start: Boolean) {
+        val d = take ?: return
+        if (!ui.zeroSnap) return
+        if (start) selA = WaveView.zeroCross(d, 2, selA).coerceIn(0, max(0, selB - 1))
+        else if (selB < takeFrames) selB = WaveView.zeroCross(d, 2, selB).coerceIn(min(takeFrames, selA + 1), takeFrames)
     }
 
     override fun onEncoder(delta: Int) {
@@ -697,29 +836,52 @@ class SamplingPage(ui: Ui) : Page(ui) {
         meter(l, 178f, meterPhone, thresholdMode && source == SRC_PHONE)
         knob(l, 0, "THRESHOLD", "${(threshold * 100).toInt()}%")
         knob(l, 1, "MAX LENGTH", "$maxSeconds s")
-        drawWave(r, showTrim = false)
+        drawWave(r, -1, -1)
         knob(r, 7, "TARGET", ui.padLabel())
     }
 
     private fun drawEdit(l: Canvas, r: Canvas) {
-        dButton(r, 4, "LEVEL", if (normalise) "NORMALISED" else "NORMALISE", normalise)
-        dButton(r, 5, "DIRECTION", if (reverse) "REVERSED" else "REVERSE", reverse)
+        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
+        if (editPage == 1) { drawFunctions(l, r); return }
         dButton(r, 6, "PREVIEW", "PLAY")
         dButton(r, 7, "SAVE TO", ui.padLabel())
-        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
-        l.drawText("EDIT", 16f, 72f, title)
-        l.drawText(ellipsize(takeName, 26), 80f, 72f, value)
+        l.drawText("EDIT · PLAY RANGE", 16f, 72f, title)
+        l.drawText("1/2 ▶", 470f, 72f, pageText)
+        l.drawText(ellipsize(takeName, 40), 16f, 98f, value)
         if (take != null) {
-            l.drawText("Length ${secs(trimEnd - trimStart)} of ${secs(takeFrames)}", 16f, 106f, value)
-            l.drawText("Pads open a pad's sample · D8 saves a new WAV", 16f, 136f, label)
-            l.drawText("(the original file is kept) · Encoder: zoom, tilt: scroll", 16f, 156f, label)
+            l.drawText("Plays ${secs(trimEnd - trimStart)} of ${secs(takeFrames)}", 16f, 124f, value)
+            l.drawText("The pad plays this range at once (the file is unchanged)", 16f, 150f, label)
+            l.drawText("D8: save the range as a new WAV · ▶: functions", 16f, 170f, label)
+            l.drawText("Pads open a pad's sample · Encoder: zoom, tilt: scroll", 16f, 190f, label)
         }
         knob(l, 0, "START", secs(trimStart))
         knob(l, 1, "END", secs(trimEnd))
-        knob(l, 2, "FADE IN", "${fadeInMs.roundToInt()} ms")
-        knob(l, 3, "FADE OUT", "${fadeOutMs.roundToInt()} ms")
         knob(r, 4, "TRIGGER", if (gate) "GATE" else "ONE-SHOT")
-        drawWave(r, showTrim = true)
+        drawWave(r, trimStart, trimEnd)
+    }
+
+    private fun drawFunctions(l: Canvas, r: Canvas) {
+        val f = fn
+        dButton(r, 4, "◀ FUNCTION", "PREV")
+        dButton(r, 5, "FUNCTION ▶", "NEXT")
+        dButton(r, 6, "PREVIEW", "SELECTION")
+        dButton(r, 7, if (shift) "UNDO" else "APPLY", if (shift) "${undo.size} LEFT" else f.label, !shift)
+        l.drawText("EDIT · FUNCTIONS", 16f, 72f, title)
+        l.drawText("◀ 2/2", 470f, 72f, pageText)
+        l.drawText(f.label, 16f, 104f, big)
+        l.drawText(f.help, 16f, 128f, label)
+        if (take != null) {
+            l.drawText("Selection ${secs(selB - selA)} of ${secs(takeFrames)}", 16f, 154f, value)
+            val clip = org.openmk3.core.audio.SampleOps.clipboard
+            l.drawText((if (clip != null) "Copied ${secs(clip.size / 2)} · " else "") +
+                (if (editSound >= 0) "applies to ${ui.padLabel()} (new WAV)" else "applies to the recording"), 16f, 178f, label)
+            if (busy) l.drawText("working…", 16f, 200f, warn)
+        }
+        knob(l, 0, "SEL START", secs(selA))
+        knob(l, 1, "SEL END", secs(selB))
+        knob(l, 2, "FUNCTION", f.label)
+        knob(l, 3, "STRETCH", if (f == org.openmk3.core.audio.SampleOps.Fn.STRETCH) "$stretchPct%" else "—")
+        drawWave(r, selA, selB)
     }
 
     private fun drawSlice(l: Canvas, r: Canvas) {
@@ -736,10 +898,11 @@ class SamplingPage(ui: Ui) : Page(ui) {
         knob(l, 0, "MODE", if (sliceDetect) "DETECT" else "GRID")
         if (sliceDetect) knob(l, 1, "SENSITIVITY", "${(sensitivity * 100).roundToInt()}%")
         else knob(l, 1, "SLICES", "${GRID[gridIdx]}")
-        drawWave(r, showTrim = true, sliceMarks = true)
+        drawWave(r, trimStart, trimEnd, sliceMarks = true)
     }
 
-    private fun drawWave(r: Canvas, showTrim: Boolean, sliceMarks: Boolean = false) {
+    private fun drawWave(r: Canvas, a: Int, b: Int, sliceMarks: Boolean = false) {
+        val showTrim = a >= 0
         val top = 60f
         val bot = 200f
         if (take == null) {
@@ -750,15 +913,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
         var head = -1
         val pp = ui.engine.playPos(AudioEngine.PREVIEW_SLOT)
         if (pp >= 0f && previewBase >= 0) head = editedToTake(previewBase + pp.toInt())
+        else if (pp >= 0f && selPreview >= 0 && tab == Tab.EDIT && editPage == 1) head = selPreview + pp.toInt()
         else if (tab == Tab.EDIT) {
             val ps = ui.engine.playPos(ui.selectedIndex)
             if (ps >= 0f && ui.engine.kit[ui.selectedIndex].frames == takeFrames) head = ps.toInt()
         }
-        val marks = if (showTrim) intArrayOf(trimStart, trimEnd) else IntArray(0)
+        val marks = if (showTrim) intArrayOf(a, b) else IntArray(0)
         val sl = if (sliceMarks) IntArray(slices.size) { editedToTake(slices[it]) } else IntArray(0)
         wave.setColour(org.openmk3.core.mk3.Mk3Colors.rgb(ui.soundColour(ui.selectedIndex)))
         wave.draw(r, 16f, top, bot,
-            selA = if (showTrim) trimStart else -1, selB = trimEnd,
+            selA = if (showTrim) a else -1, selB = b,
             markers = marks, slices = sl, playhead = head)
     }
 
