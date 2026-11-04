@@ -129,7 +129,7 @@ They work in every pad mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that
 |---|---|---|
 | PITCH | Strip bends the focused sound ±2 semitones (springs back) | ✅ |
 | MOD | Strip closes a low-pass filter on the focused sound (stays where left) | ✅ |
-| PERFORM (FX Select) | Strip plays the perform FX while touched (position = amount, off when released): FILTER on the focused group (left low-pass, right high-pass), or on the master STUTTER (repeats the last 1/4 · 1/8 · 1/16 · 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI | ✅ |
+| PERFORM (FX Select) | Strip plays the perform FX while touched (position = amount, off when released): FILTER on the focused group (left low-pass, right high-pass), or on the master STUTTER (repeats the last 1/4 · 1/8 · 1/16 · 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI, FLANGER (the strip sweeps it), BURST ECHO (dotted 1/8, more repeats to the right), RING (30 Hz – 2 kHz), TREMOLO (1/4 … 1/32 on the beat), SCRATCHER (the strip scratches the last beat) | ✅ |
 | SHIFT + PERFORM | Choose the perform FX (pads 1–5) | ✅ |
 | NOTES | Strip plays the keyboard layout's notes on the focused sound as you slide | ✅ |
 

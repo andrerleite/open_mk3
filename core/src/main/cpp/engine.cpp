@@ -410,6 +410,13 @@ public:
     float pfxMix = 0.f;                        // 0 dry .. 1 effect (smoothed in and out)
     float pfxHold[2] = {0, 0};
     float pfxHoldPh = 1.f;
+    // perform flanger / burst echo / ring / tremolo / scratcher state
+    static constexpr int kPfxEcho = 1 << 16;
+    float pfxEcho[kPfxEcho][2] = {};
+    int pfxEchoW = 0;
+    float pfxFl[2048][2] = {};
+    int pfxFlW = 0;
+    float pfxLfo = 0.f, pfxTone[2] = {};
     void runPerform(float* out, int frames, const float* p, double bpm);
     std::atomic<float*> pattern{nullptr};
     /** Sounds with a note held (not released) right now, and the held notes of [watchSlot]: pad lights. */
@@ -1568,7 +1575,7 @@ void Engine::render(float* out, int32_t frames) {
  * 4 LO-FI (sample rate and bit reduction). Type 0 (FILTER) works per group elsewhere.
  */
 void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
-    const int type = std::clamp(int(p[OFF_PFX] + 0.5f), 0, 4);
+    const int type = std::clamp(int(p[OFF_PFX] + 0.5f), 0, 9);
     const bool on = p[OFF_PFX + 1] > 0.5f && type != 0;
     const float amt = std::clamp(p[OFF_PFX + 2], 0.f, 1.f);
     if (!(bpm >= 20.0 && bpm <= 400.0)) bpm = 120.0;
@@ -1643,6 +1650,61 @@ void Engine::runPerform(float* out, int frames, const float* p, double bpm) {
                 }
                 wet[0] = pfxHold[0];
                 wet[1] = pfxHold[1];
+                break;
+            }
+            case 5: {  // flanger: the strip sweeps the delay (jet), strong feedback
+                pfxLfo += (amt - pfxLfo) * 0.0008f;  // glides with the finger
+                const float d = 2.f + (1.f - pfxLfo) * 0.006f * kSampleRate;
+                for (int c = 0; c < 2; c++) {
+                    const float rp = float(pfxFlW) - d;
+                    const int ip = int(std::floor(rp));
+                    const float t = rp - float(ip);
+                    const float y = pfxFl[ip & 2047][c] * (1.f - t) + pfxFl[(ip + 1) & 2047][c] * t;
+                    pfxFl[pfxFlW][c] = dry[c] + y * 0.6f;
+                    // the feedback adds up to 1 / (1 - 0.6) at low frequencies: level-compensated
+                    wet[c] = 0.5f * dry[c] + 0.5f * y * 0.4f;
+                }
+                pfxFlW = (pfxFlW + 1) & 2047;
+                break;
+            }
+            case 6: {  // burst echo: dotted 1/8 echoes, feedback rising along the strip
+                const int d = std::clamp(int(stepLen * 3.0), 1, kPfxEcho - 1);
+                const float fb = 0.35f + amt * 0.6f;
+                for (int c = 0; c < 2; c++) {
+                    const float y = pfxEcho[(pfxEchoW - d) & (kPfxEcho - 1)][c];
+                    pfxTone[c] += 0.25f * (y - pfxTone[c]);  // darker repeats
+                    pfxEcho[pfxEchoW][c] = dry[c] + pfxTone[c] * fb;
+                    wet[c] = dry[c] + pfxTone[c];
+                }
+                pfxEchoW = (pfxEchoW + 1) & (kPfxEcho - 1);
+                break;
+            }
+            case 7: {  // ring modulation: the strip sets the frequency (30 Hz .. 2 kHz)
+                pfxLfo += (amt - pfxLfo) * 0.002f;
+                pfxHoldPh += 30.f * std::exp2(pfxLfo * 6.f) / kSampleRate;
+                pfxHoldPh -= std::floor(pfxHoldPh);
+                const float m = std::sin(6.2831853f * pfxHoldPh);
+                wet[0] = dry[0] * m; wet[1] = dry[1] * m;
+                break;
+            }
+            case 8: {  // tremolo locked to the beat: 1/4, 1/8, 1/16, 1/32 along the strip
+                static constexpr double kRate[] = {4.0, 2.0, 1.0, 0.5};
+                const double len = kRate[std::min(3, int(amt * 4.f))];
+                const double ph = std::fmod(((wasPlaying ? seqPhase : double(framesDone) / stepLen) + double(i) / stepLen) / len, 1.0);
+                const float g = 0.5f + 0.5f * std::cos(6.2831853f * float(ph));
+                wet[0] = dry[0] * g; wet[1] = dry[1] * g;
+                break;
+            }
+            case 9: {  // scratcher: the strip is the position within the last beat; moving it scratches
+                const double back = (1.0 - double(amt)) * stepLen * 4.0;
+                const double want = double(pfxW) - 2.0 - back;
+                pfxRead += (want - pfxRead) * 0.003;  // follows the finger with some inertia
+                if (double(pfxW) - pfxRead > kPfxRing - 4 || pfxRead > double(pfxW) - 1.0) pfxRead = double(pfxW) - 2.0;
+                const int ip = int(std::floor(pfxRead));
+                const float t = float(pfxRead - ip);
+                const int a = ip & (kPfxRing - 1), b = (ip + 1) & (kPfxRing - 1);
+                wet[0] = pfxRing[a][0] * (1.f - t) + pfxRing[b][0] * t;
+                wet[1] = pfxRing[a][1] * (1.f - t) + pfxRing[b][1] * t;
                 break;
             }
             default: break;

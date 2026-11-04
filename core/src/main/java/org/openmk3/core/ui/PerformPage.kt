@@ -8,7 +8,7 @@ import org.openmk3.core.mk3.Mk3Colors
 
 /**
  * SHIFT + PERFORM: the effect the touch strip plays in PERFORM mode.
- *  Pads 1–5: FILTER (focused group: left low-pass, right high-pass), STUTTER (repeats the last
+ *  Pads 1–10: FILTER (focused group: left low-pass, right high-pass), STUTTER (repeats the last
  *  1/4 … 1/32), TAPE STOP, TRANCE GATE (1/16 chops), LO-FI. The effect is on while the strip is
  *  touched; the strip position is the amount. SHIFT + PERFORM or PERFORM again: back.
  */
@@ -31,6 +31,11 @@ class PerformPage(ui: Ui) : Page(ui) {
         "Slows the master to a halt (further right = slower)",
         "Chops the master in 1/16ths (further right = deeper)",
         "Lower sample rate and bit depth (further right = rougher)",
+        "Jet flanger: the strip sweeps it",
+        "Dotted 1/8 echoes; further right = more repeats",
+        "Ring modulation: the strip sets the pitch (30 Hz – 2 kHz)",
+        "Tremolo on the beat: 1/4 · 1/8 · 1/16 · 1/32 along the strip",
+        "Scratch the last beat: move your finger along the strip",
     )
 
     override fun tick(now: Long): Boolean = true
@@ -63,7 +68,7 @@ class PerformPage(ui: Ui) : Page(ui) {
         l.drawText(Pattern.PERFORM_FX[p.performType], 16f, 96f, big)
         l.drawText(help[p.performType], 16f, 124f, label)
         l.drawText("PERFORM lights the strip for it; touch to play", 16f, 196f, label)
-        l.drawText("Pads 1–5 choose · PERFORM: back", 16f, 216f, label)
+        l.drawText("Pads choose · PERFORM: back", 16f, 216f, label)
         val w = 112f; val h = 44f
         for (i in 0 until 16) {
             val col = i % 4; val row = 3 - i / 4
