@@ -26,6 +26,9 @@ public:
     virtual void reset() {}
     /** A level for the screen: gain reduction (dB) for the compressor, else 0. */
     float meter = 0.f;
+    /** Side-chain key (stereo, [keyFrames] frames), set by the engine before process(); null: none. */
+    const float* key = nullptr;
+    int keyFrames = 0;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -110,7 +113,8 @@ private:
 // ---------------------------------------------------------------------------------------
 // Compressor: feed-forward, stereo-linked peak detection, soft knee, parallel mix.
 //  p2 threshold dB (-60..0), p3 ratio (1..20), p4 attack ms, p5 release ms,
-//  p6 knee dB (0..24), p7 makeup dB (0..24), p8 mix (0..1)
+//  p6 knee dB (0..24), p7 makeup dB (0..24), p8 mix (0..1), p9 side-chain (0 off, 1..8 group A..H:
+//  the key's level drives the gain reduction, e.g. a kick group ducking a bass)
 
 class Compressor : public Effect {
 public:
@@ -127,7 +131,9 @@ public:
         for (int i = 0; i < frames; i++) {
             const float makeup = makeupG_.next(makeupT, gc), mix = mixG_.next(mixT, gc);
             float l = io[i * 2], r = io[i * 2 + 1];
-            float level = gainToDb(std::max(std::fabs(l), std::fabs(r)));
+            float level = key && keyFrames > 0
+                ? gainToDb(std::max(std::fabs(key[std::min(i, keyFrames - 1) * 2]), std::fabs(key[std::min(i, keyFrames - 1) * 2 + 1])))
+                : gainToDb(std::max(std::fabs(l), std::fabs(r)));
             // static curve: gain reduction in dB (>= 0)
             float over = level - thr;
             float gr;

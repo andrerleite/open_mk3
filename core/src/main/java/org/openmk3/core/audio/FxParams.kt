@@ -68,6 +68,8 @@ class FxParams {
                 Def(7, "MAKEUP", 0f, 24f, 0f, 0.02f, ::db),
                 Def(8, "MIX", 0f, 1f, 1f, 0.002f, ::pct),
                 Def(6, "KNEE", 0f, 24f, 6f, 0.02f, { v -> "%.1f dB".format(v) }),
+                // side-chain: another group's signal drives the compression (ducking)
+                Def(9, "SIDECHAIN", 0f, 8f, 0f, 1f, { "" }, choices = listOf("OFF") + ('A'..'H').map { "GROUP $it" }),
             ),
             CHORUS to listOf(
                 Def(4, "MIX", 0f, 1f, 0.5f, 0.002f, ::pct),

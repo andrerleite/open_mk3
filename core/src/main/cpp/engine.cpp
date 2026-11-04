@@ -685,7 +685,14 @@ private:
         for (int k = 0; k < kFxSlots; k++) {
             const float* q = fp + (chain * kFxSlots + k) * openmk3::kFxParams;
             openmk3::Effect* e = fxCur[chain][k];
-            if (e && q[0] > 0.5f && q[1] < 0.5f) { e->process(buf, frames, q, bpm, float(kSampleRate)); any = true; }
+            if (e && q[0] > 0.5f && q[1] < 0.5f) {
+                // compressor side-chain: a group's bus (this chunk if already processed, else the last)
+                const int sc = int(q[0] + 0.5f) == openmk3::FX_COMPRESSOR ? int(q[9] + 0.5f) : 0;
+                if (sc >= 1 && sc <= kGroups) { e->key = keyBus[sc - 1]; e->keyFrames = keyFrames[sc - 1]; }
+                else { e->key = nullptr; e->keyFrames = 0; }
+                e->process(buf, frames, q, bpm, float(kSampleRate));
+                any = true;
+            }
         }
         if (!any) return;
         if (in < 1e-6f && peakOf(buf, frames * 2) < 2e-5f) chainQuiet[chain]++;
@@ -695,6 +702,8 @@ private:
     float gfIc1[kGroups][2] = {}, gfIc2[kGroups][2] = {};  // performance filter state
     bool soundUsed[kSounds];
     float groupBus[kGroups][kChunk * 2];
+    float keyBus[kGroups][kChunk * 2] = {};  // each group's bus after its effects: side-chain keys
+    int keyFrames[kGroups] = {};
     float sendBus[2][kChunk * 2];
     float synthOut[kSynthMaxBlockFrames];
     float synthAux[kSynthMaxBlockFrames];
@@ -2213,6 +2222,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
     for (int g = 0; g < kGroups; g++) {
         if (fp) runChain(fp, kChainGroup0 + g, groupBus[g], frames, bpm);
         float* gb = groupBus[g];
+        std::memcpy(keyBus[g], gb, sizeof(float) * frames * 2);
+        keyFrames[g] = frames;
         float gl = 1.f, gr = 1.f, filt = 0.f;
         if (pp2) {
             float db = std::clamp(pp2[OFF_GVOL + g], -60.f, 12.f);

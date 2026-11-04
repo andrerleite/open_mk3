@@ -100,7 +100,7 @@ They work in every pad mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that
 | PLUG-IN (Instance) | Plug-in chains of the master, the focused group and the focused sound (D1 again: RETURN A, RETURN B) | ✅ (full app) |
 | ARRANGER | Song view: a list of sections, each playing a scene. D1 song mode on / off, D2 loop, D3 jump to the selected section, D5 duplicate, D6 delete; encoder or ◀ ▶ select, K1 moves a section; scene pads add a section after the selected one (SHIFT + pad replaces it). A section lasts as long as its scene's longest pattern, and all groups start their patterns together at each section. In song mode, a scene pad in SCENE mode jumps to that scene's section | ✅ |
 | MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder. VU meters beside each channel (green to -12 dB, yellow to 0 dB, red above, with a peak hold) and a master meter across the top of the right screen. D7 / D8: the groups' sends to RETURN A / B (post-fader); SHIFT + D7 / D8 opens that return's effects. Returns start as a reverb (A) and a delay (B), fully wet | ✅ |
-| BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
+| BROWSER | Browse samples, saved sounds (♪, onto the focused pad) and saved groups (▦, into the focused group, replacing it) | ✅ |
 | SHIFT + BROWSER (+Plug-in) | Instrument browser: POLY factory patches by category, FM banks and patches, SYNTH models; loading switches the focused sound's source and plays a note | ✅ (full app) |
 | SAMPLING | Record a sample (controller inputs or phone playback), edit, slice, zones (D4; also SHIFT + SAMPLING) | ✅ |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
@@ -255,7 +255,7 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 
 | Effect | Parameters |
 |---|---|
-| Compressor | Threshold, ratio, attack, release, makeup, mix, knee (gain reduction shown on the scope) |
+| Compressor | Threshold, ratio, attack, release, makeup, mix, knee, SIDECHAIN (OFF or a group A–H: that group drives the compression, e.g. a kick group ducking the bass; gain reduction shown on the scope) |
 | Chorus | Mix, rate, depth, delay, feedback, width |
 | Delay | Mix, time (ms, or note values when synced), feedback, sync, ping-pong, low cut, high cut; page 2: modulation |
 | Reverb | Mix, decay, size, character (DENSE / LUSH / VAST), pre-delay, high cut, low cut; page 2: diffusion, modulation, width, freeze |

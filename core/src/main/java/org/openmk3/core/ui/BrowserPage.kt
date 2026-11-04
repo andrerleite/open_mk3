@@ -33,6 +33,8 @@ class BrowserPage(ui: Ui) : Page(ui) {
         class Up : Entry("‹ back ›")
         class Folder(val file: File) : Entry(file.name + "/")
         class Wav(val file: File) : Entry(file.nameWithoutExtension)
+        class SoundFile(val file: File) : Entry("♪ " + file.nameWithoutExtension)
+        class GroupFile(val file: File) : Entry("▦ " + file.nameWithoutExtension)
     }
 
     companion object {
@@ -91,13 +93,16 @@ class BrowserPage(ui: Ui) : Page(ui) {
             .sortedBy { it.name.lowercase() }
         val wavs = files.orEmpty().filter { it.isFile && it.extension.equals("wav", true) }
             .sortedBy { it.name.lowercase() }
+        val saved = files.orEmpty().filter { it.isFile && (it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT) }
+            .sortedBy { it.name.lowercase() }
         entries = buildList {
             add(Entry.BuiltIn())
             if (d.canonicalPath != ROOT.canonicalPath) add(Entry.Up())
             folders.forEach { add(Entry.Folder(it)) }
+            saved.forEach { add(if (it.extension == org.openmk3.core.audio.GroupFile.EXT) Entry.GroupFile(it) else Entry.SoundFile(it)) }
             wavs.forEach { add(Entry.Wav(it)) }
         }
-        if (files != null && folders.isEmpty() && wavs.isEmpty()) {
+        if (files != null && folders.isEmpty() && wavs.isEmpty() && saved.isEmpty()) {
             problem = "No WAV files or folders here."
         }
         sel = select.coerceIn(0, entries.size - 1)
@@ -156,9 +161,36 @@ class BrowserPage(ui: Ui) : Page(ui) {
             is Entry.Up -> up()
             is Entry.Folder -> list(e.file)
             is Entry.Wav -> load(e)
+            is Entry.SoundFile -> loadSaved(e.file, group = false)
+            is Entry.GroupFile -> loadSaved(e.file, group = true)
             null -> {}
         }
         ui.invalidate()
+    }
+
+    /** A saved sound onto the focused pad, or a saved group into the focused group (replacing it; UNDO only brings back patterns). */
+    private fun loadSaved(f: File, group: Boolean) {
+        val slot = ui.selectedIndex
+        val g = ui.group
+        message = "Loading ${f.nameWithoutExtension}…"
+        worker.submit {
+            val e = ui.engine
+            val colour: Int? = if (group) org.openmk3.core.audio.GroupFile.load(e, g, f) { s, smp -> e.setSample(s, smp) }
+                else if (org.openmk3.core.audio.GroupFile.loadSoundFile(e, slot, f) { s, smp -> e.setSample(s, smp) }) 0 else null
+            ui.post {
+                if (colour == null) message = "Can't load ${f.name}"
+                else {
+                    if (group && colour > 0) { Colours.group[g] = colour; Colours.save(ui.ctx) }
+                    KitStore.save(ui.ctx, e.kit); e.params.save(ui.ctx); e.fx.save(ui.ctx); e.poly.save(ui.ctx); e.zones.save(ui.ctx)
+                    if (group) e.pattern.save(ui.ctx)
+                    org.openmk3.core.audio.Names.save(ui.ctx)
+                    ui.checkpoint()
+                    message = if (group) "Group ${'A' + g} ← ${f.nameWithoutExtension}" else "${ui.padLabel()} ← ${f.nameWithoutExtension}"
+                    if (!group) e.trigger(slot, 0.8f)
+                }
+                ui.invalidate()
+            }
+        }
     }
 
     private fun load(e: Entry.Wav) {
