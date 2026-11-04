@@ -513,7 +513,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             org.openmk3.core.audio.Names.sound[b] = org.openmk3.core.audio.Names.sound[a]; org.openmk3.core.audio.Names.save(ctx)
             e.poly.copy(a, b)
             e.zones.copy(a, b)
+            copyFxChain(a, b)
         }
+        copyFxChain(org.openmk3.core.audio.FxParams.GROUP0 + from, org.openmk3.core.audio.FxParams.GROUP0 + to)
         e.pattern.copyGroup(from, to)
         Colours.group[to] = Colours.group[from]
         saveAll()
@@ -529,6 +531,18 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         e.poly.swap(a, b)
         e.zones.swap(a, b)
         swapFxChains(a, b)
+    }
+
+    /** Copies effect chain [from] onto [to] (types and settings). */
+    fun copyFxChain(from: Int, to: Int) {
+        val e = engine
+        val fx = org.openmk3.core.audio.FxParams
+        for (k in 0 until fx.SLOTS) {
+            val t = e.fx.type(from, k)
+            if (e.fx.type(to, k) != t) e.setFx(to, k, t)
+            for (i in 0 until fx.PER_SLOT) e.fx[to, k, i] = e.fx[from, k, i]
+        }
+        e.fx.save(ctx)
     }
 
     private fun swapFxChains(x: Int, y: Int) {

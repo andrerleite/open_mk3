@@ -618,6 +618,7 @@ class HomePage(ui: Ui) : Page(ui) {
         org.openmk3.core.audio.Names.sound[b] = org.openmk3.core.audio.Names.sound[a]; org.openmk3.core.audio.Names.save(ui.ctx)
         e.poly.copy(a, b)
         e.zones.copy(a, b)
+        ui.copyFxChain(a, b)
         e.zones.save(ui.ctx)
         e.poly.save(ui.ctx)
         if (a / 16 == b / 16) pattern.copySound(a, b)  // notes come along within a group
