@@ -157,14 +157,34 @@ class SamplingPage(ui: Ui) : Page(ui) {
     /** Edited-sample frame -> frame of the take (for drawing). */
     private fun editedToTake(e: Int) = if (reverse) trimEnd - 1 - e else trimStart + e
 
-    /** Opens the sample on [slot] in the editor (mono becomes stereo). */
+    /** Sound whose sample is in the editor (-1: a new recording). Its START / END follow the play range. */
+    private var editSound = -1
+
+    /** Opens the sample on [slot] in the editor (mono becomes stereo), with the pad's play range. */
     private fun loadFromPad(slot: Int) {
-        val s = ui.engine.kit[ui.snd(slot)]
-        if (s.frames < 2) { message = "${ui.padLabel(slot)} is empty"; return }
+        val snd = ui.snd(slot)
+        val s = ui.engine.kit[snd]
+        if (s.frames < 2) { message = "${ui.padLabel(slot)} is empty"; editSound = -1; return }
         val st = if (s.channels == 2) s.data.copyOf() else FloatArray(s.frames * 2) { s.data[it / 2] }
         setTake(st, s.name)
+        editSound = snd
+        // the play range is the pad's own START / END (non-destructive)
+        val sp = ui.engine.params
+        rawStart = (sp[snd, org.openmk3.core.audio.SoundParams.START] * takeFrames).toInt().coerceIn(0, takeFrames - 1)
+        rawEnd = (sp[snd, org.openmk3.core.audio.SoundParams.END] * takeFrames).toInt().coerceIn(rawStart + 1, takeFrames)
+        snapTrim()
         message = "Editing ${ui.padLabel(slot)}: ${s.name}"
     }
+
+    /** The play range goes to the pad at once: hitting the pad plays the trimmed sample. */
+    private fun pushPlayRange() {
+        if (editSound < 0 || takeFrames <= 0) return
+        val sp = ui.engine.params
+        sp[editSound, org.openmk3.core.audio.SoundParams.START] = trimStart.toFloat() / takeFrames
+        sp[editSound, org.openmk3.core.audio.SoundParams.END] = trimEnd.toFloat() / takeFrames
+        rangeDirtyAt = android.os.SystemClock.uptimeMillis()
+    }
+    private var rangeDirtyAt = 0L
 
     /** The edited sample: trimmed, reversed, normalised, faded. */
     private var editedKey: List<Any?>? = null
@@ -235,6 +255,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
             return
         }
         setTake(data, "Rec")
+        editSound = -1
         message = "Recorded ${"%.2f".format(takeFrames.toDouble() / AudioEngine.SR)} s"
         AppLog.i("Sampling: $message")
         tab = Tab.EDIT
@@ -418,6 +439,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     ui.engine.params.resetRange(slot)
                     ui.engine.params.save(ui.ctx)
                     KitStore.save(ui.ctx, ui.engine.kit)
+                    loadFromPad(ui.selectedSound)  // the saved sample is now the pad's, full range
                     message = "Saved ${f.name} → $label"
                     AppLog.i("Sampling: saved ${f.absolutePath} to $label")
                     ui.engine.trigger(slot, 0.8f)
@@ -434,6 +456,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     // =====================================================================================
 
     override fun tick(now: Long): Boolean {
+        if (rangeDirtyAt != 0L && now - rangeDirtyAt > 1500) { ui.engine.params.save(ui.ctx); rangeDirtyAt = 0L }
         if (slicesDirty) { ensureSlices(); if (!slicesDirty) ui.invalidate() }
         val pi = n.nativeRecTakePeak(SRC_INPUT)
         val pp = n.nativeRecTakePeak(SRC_PHONE)
@@ -535,7 +558,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
         if (ui.padMode != Ui.PadMode.PAD) return  // KEYBOARD / CHORDS / 16 VEL: pads only play notes
         when (tab) {
             Tab.RECORD -> ui.selectedSound = slot
-            Tab.EDIT -> { ui.selectedSound = slot; loadFromPad(slot) }
+            // the pad being edited just plays (with its play range); another pad opens its sample
+            Tab.EDIT -> if (ui.snd(slot) != editSound) { ui.selectedSound = slot; loadFromPad(slot) }
             Tab.SLICE -> {
                 // pad 1 = bottom-left = slot 0 plays slice 1
                 if (slot < slices.size) sliceData(slot)?.let { preview(it, slices[slot]) }
@@ -554,11 +578,11 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 when (knob) {
                     0 -> {
                         rawStart = (rawStart + delta * step).coerceIn(0, max(0, rawEnd - 48))
-                        snapTrim(); focus = trimStart; wave.follow(trimStart)
+                        snapTrim(); focus = trimStart; wave.follow(trimStart); pushPlayRange()
                     }
                     1 -> {
                         rawEnd = (rawEnd + delta * step).coerceIn(min(takeFrames, rawStart + 48), takeFrames)
-                        snapTrim(); focus = trimEnd; wave.follow(trimEnd)
+                        snapTrim(); focus = trimEnd; wave.follow(trimEnd); pushPlayRange()
                     }
                     2 -> fadeInMs = (fadeInMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
                     3 -> fadeOutMs = (fadeOutMs + delta * (if (shift) 0.1f else 1f)).coerceIn(0f, 5000f)
