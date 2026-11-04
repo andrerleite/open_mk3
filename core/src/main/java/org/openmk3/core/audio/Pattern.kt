@@ -405,6 +405,24 @@ class Pattern {
         writeCell(g, sound % PADS, step, d)
     }
 
+    /**
+     * Moves the note of [sound] at [step] to position [newPos] (steps, wraps around the pattern).
+     * Returns its new step, or [step] if the target step already holds a note.
+     */
+    fun moveNote(sound: Int, step: Int, newPos: Float): Int {
+        val g = sound / PADS
+        val d = cur(g) ?: return step
+        val pad = sound % PADS
+        if (!d.has(pad, step)) return step
+        val len = d.length
+        val p = ((newPos % len) + len) % len
+        val to = kotlin.math.floor(p).toInt().coerceIn(0, len - 1)
+        if (to != step && d.has(pad, to)) return step
+        d.moveCell(pad, step, to, (p - to).coerceIn(0f, 0.999f))
+        refreshGroup(g)
+        return to
+    }
+
     /** Steps (of the playing pattern) that hold notes of [sound]. */
     fun stepsOf(sound: Int): List<Int> {
         val d = cur(sound / PADS) ?: return emptyList()

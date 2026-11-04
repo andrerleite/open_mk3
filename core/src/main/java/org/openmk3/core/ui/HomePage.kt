@@ -263,8 +263,8 @@ class HomePage(ui: Ui) : Page(ui) {
         if (Edition.full) l.set("PLUG-IN")
     }
 
-    /** Step i (0 = top-left, reading order) <-> pad slot (0 = bottom-left). Self-inverse. */
-    private fun stepForSlot(slot: Int) = (3 - slot / 4) * 4 + slot % 4
+    /** Step i <-> pad slot: as on the hardware, step 1 is pad 1 (bottom-left), counting up row by row. */
+    private fun stepForSlot(slot: Int) = slot
 
     // =====================================================================================
     // input
@@ -301,7 +301,10 @@ class HomePage(ui: Ui) : Page(ui) {
                     else -> {
                         val c = kotlin.math.floor(pos).toInt()
                         if (p.hasStep(sound, c)) p.clearStep(sound, c)  // one note start per 16th cell
-                        p.recordNote(sound, c, ui.keys.groupBase[ui.group], velocity, pos - c, g.coerceAtMost(1f))
+                        // a new step: the sound's base key, the pad's velocity, one step long; it becomes
+                        // the selected step (the knobs edit it until another one is chosen)
+                        p.recordNote(sound, c, ui.keys.groupBase[ui.group], velocity, pos - c, g)
+                        selStep = c; lastStepSound = sound
                         changed()
                     }
                 }
@@ -353,6 +356,9 @@ class HomePage(ui: Ui) : Page(ui) {
                 ui.keys.save(ui.ctx)
             }
             "PAD MODE" -> mode = Mode.PAD
+            // 4D encoder up / down: the focused sound (as in STEP mode on the hardware)
+            "ENCODER UP" -> { selected = (selected + 1) % 16 }
+            "ENCODER DOWN" -> { selected = (selected + 15) % 16 }
             "PAGE LEFT" -> if (mode == Mode.STEP) { stepPage = (stepViewPage - 1).coerceAtLeast(0); ui.follow = false } else selected = (selected + 15) % 16
             "PAGE RIGHT" -> if (mode == Mode.STEP) { stepPage = (stepViewPage + 1).coerceAtMost(stepPagesN - 1); ui.follow = false } else selected = (selected + 1) % 16
             "SETTINGS" -> ui.show(SettingsPage(ui))
@@ -434,28 +440,58 @@ class HomePage(ui: Ui) : Page(ui) {
         return true
     }
 
-    /** STEP mode, a step held: K1 position, K2 note (pitch), K3 velocity, K4 length. */
+    // ---- STEP mode editing: the held steps, else the last step created ----
+    private var selStep = -1
+    private var lastStepSound = -1
     private val stepKnobAcc = IntArray(4)
+
+    /** The steps (of the focused sound) the knobs edit now. */
+    private fun stepSelection(): List<Int> {
+        val snd = sd(selected)
+        val held = (0 until 16).filter { ui.padPressure[it] > 0 }.mapNotNull { noteAtPos(snd, padPos(it)) }.distinct()
+        if (held.isNotEmpty()) return held
+        return if (lastStepSound == snd && selStep >= 0 && pattern.hasStep(snd, selStep)) listOf(selStep) else emptyList()
+    }
+
+    /** STEP mode: K1 position (nudge grid; SHIFT fine), K2 pitch, K3 velocity, K4 length (step grid; SHIFT fine). */
     private fun stepKnob(knob: Int, delta: Int): Boolean {
         if (mode != Mode.STEP || knob > 3) return false
-        val held = (0 until 16).firstOrNull { ui.padPressure[it] > 0 } ?: return false
+        val sel = stepSelection()
+        if (sel.isEmpty()) return knob <= 3
         val snd = sd(selected)
-        val st = noteAtPos(snd, padPos(held)) ?: return true
-        val fine = if (shift) 0.2f else 1f
+        // knob-type moves: continuous with SHIFT, else one grid step per notch
+        fun notch(): Int {
+            stepKnobAcc[knob] += delta
+            if (kotlin.math.abs(stepKnobAcc[knob]) < 12) return 0
+            val d = if (stepKnobAcc[knob] > 0) 1 else -1
+            stepKnobAcc[knob] = 0
+            return d
+        }
         when (knob) {
-            0 -> pattern.editStep(snd, st, posDelta = delta * 0.004f * fine)
+            0 -> {
+                val move = if (shift) delta * 0.005f else notch() * ui.nudgeGrid
+                if (move == 0f) return true
+                // move from the end that leads, so notes don't land on each other
+                val moved = (if (move > 0) sel.sortedDescending() else sel.sorted()).map { st ->
+                    pattern.moveNote(snd, st, st + pattern.noteOffset(snd, st) + move)
+                }
+                if (lastStepSound == snd && selStep in sel) selStep = moved[(if (move > 0) sel.sortedDescending() else sel.sorted()).indexOf(selStep)]
+            }
             1 -> {
-                stepKnobAcc[1] += delta
-                if (kotlin.math.abs(stepKnobAcc[1]) < 12) return true
-                pattern.editStep(snd, st, semis = if (stepKnobAcc[1] > 0) 1 else -1)
-                stepKnobAcc[1] = 0
+                val d = notch(); if (d == 0) return true
+                for (st in sel) pattern.editStep(snd, st, semis = d)
                 // hear the new pitch
+                val st = sel.first()
                 val nn = pattern.noteOf(snd, st)
                 ui.engine.noteOn(snd, nn, pattern.vel(snd, st).coerceAtLeast(0.3f))
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ ui.engine.noteOff(snd, nn) }, 250)
             }
-            2 -> pattern.editStep(snd, st, velDelta = delta * 0.004f * fine)
-            3 -> pattern.setNoteLength(snd, st, pattern.noteLength(snd, st) + delta * 0.01f * fine * maxOf(1f, g))
+            2 -> for (st in sel) pattern.editStep(snd, st, velDelta = delta * (if (shift) 0.001f else 0.004f))
+            3 -> {
+                val add = if (shift) delta * 0.005f else notch() * g
+                if (add == 0f) return true
+                for (st in sel) pattern.setNoteLength(snd, st, (pattern.noteLength(snd, st) + add).coerceAtLeast(if (shift) 0.05f else minOf(g, 1f)))
+            }
         }
         stepEdited = true
         changed()
@@ -694,7 +730,7 @@ class HomePage(ui: Ui) : Page(ui) {
             select -> "SELECT: hit a pad to choose a sound"
             mute -> "MUTE: hit pads to mute / unmute"
             solo -> "SOLO: hit pads to solo / unsolo"
-            mode == Mode.STEP -> "Steps of ${ui.padLabel()} · hold a step: K1 pos K2 note K3 vel K4 len"
+            mode == Mode.STEP -> "Steps of ${ui.padLabel()} (▲▼ sound) · K1 pos K2 pitch K3 vel K4 len"
             rec -> "Recording: play the pads"
             else -> "K1 vol · K2 sens · K3 tempo · K4 swing"
         }
@@ -707,17 +743,18 @@ class HomePage(ui: Ui) : Page(ui) {
         )
         l.drawRect(16f, 250f, 464f, 262f, cell)
         l.drawRect(16f, 250f, 16f + 448f * e.meter.coerceIn(0f, 1f), 262f, if (e.meter > 0.95f) warnFill else ok)
-        // STEP mode with a step held: that note's settings on K1–K4
+        // STEP mode: the selected step(s) (held, else the last created) on K1–K4
         if (mode == Mode.STEP) {
-            val held = (0 until 16).firstOrNull { ui.padPressure[it] > 0 }
-            val st = held?.let { noteAtPos(sd(selected), padPos(it)) }
-            if (st != null) {
+            val sel = stepSelection()
+            if (sel.isNotEmpty()) {
                 val snd = sd(selected)
+                val multi = sel.size > 1
+                val st = sel.first()
                 l.drawRect(0f, 222f, 480f, 272f, Theme.fill(Theme.BG))
-                knobLabel(l, 0, "POSITION", "%+.2f".format(pattern.noteOffset(snd, st)))
-                knobLabel(l, 1, "NOTE", org.openmk3.core.audio.Keys.noteName(pattern.noteOf(snd, st)))
-                knobLabel(l, 2, "VELOCITY", "${(pattern.vel(snd, st) * 127).toInt()}")
-                knobLabel(l, 3, "LENGTH", "%.2f".format(pattern.noteLength(snd, st)))
+                knobLabel(l, 0, "POSITION", if (multi) "(MULTI)" else "%.2f".format(st + 1 + pattern.noteOffset(snd, st)))
+                knobLabel(l, 1, "PITCH", if (multi) "(MULTI)" else org.openmk3.core.audio.Keys.noteName(pattern.noteOf(snd, st)))
+                knobLabel(l, 2, "VELOCITY", if (multi) "(MULTI)" else "${(pattern.vel(snd, st) * 127).toInt()}")
+                knobLabel(l, 3, "LENGTH", if (multi) "(MULTI)" else "%.2f".format(pattern.noteLength(snd, st)))
             }
         }
 
