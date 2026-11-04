@@ -311,6 +311,10 @@ class Pattern {
         return true
     }
 
+    /** The automation value of [sound]'s [param] at [step] (NaN: none). */
+    fun automationAt(sound: Int, param: Int, step: Int): Float =
+        cur(sound / PADS)?.lanes?.firstOrNull { it.pad == sound % PADS && it.param == param }?.values?.getOrNull(step) ?: Float.NaN
+
     /** Removes automation: one parameter of a sound, all of a sound (param < 0), or the group (sound < 0). */
     fun clearAutomation(g: Int, sound: Int = -1, param: Int = -1) {
         val d = cur(g) ?: return

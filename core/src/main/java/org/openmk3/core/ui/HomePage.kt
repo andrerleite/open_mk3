@@ -294,6 +294,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 val sound = sd(selected)
                 stepEdited = false
                 val cell = noteAtPos(sound, pos)
+                ui.stepHold[slot] = sound to (cell ?: kotlin.math.floor(pos).toInt())
                 when {
                     erase -> { if (cell != null) { p.clearStep(sound, cell); changed() } }
                     // an existing step goes on release, unless it was edited while held

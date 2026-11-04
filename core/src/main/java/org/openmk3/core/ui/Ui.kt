@@ -819,6 +819,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
         post {
             padPressure[slot] = 0
+            stepHold.remove(slot)
             // a recorded note lasts as long as its pad was held
             val held = recHeld[slot]
             if (held.isNotEmpty()) {
@@ -1164,6 +1165,30 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         knobTouched[knob.coerceIn(0, 7)] = touched
         page.onKnobTouch(knob, touched)
         dirty = true
+    }
+
+    // ---- per-step modulation: STEP pads held (sound, step) while a PLUG-IN knob turns ----
+    val stepHold = java.util.concurrent.ConcurrentHashMap<Int, Pair<Int, Int>>()
+
+    /**
+     * Writes [param] = the focused value at the held steps only: the step gets the new value and
+     * the step after it (if it has no value of its own) the old one, so the change lasts one step.
+     * Returns true if steps were held.
+     */
+    fun stepModulate(sound: Int, param: Int, before: Float): Boolean {
+        val steps = stepHold.values.filter { it.first == sound }.map { it.second }.distinct()
+        if (steps.isEmpty()) return false
+        val p = engine.pattern
+        val len = p.length(sound / 16)
+        val v = engine.params[sound, param]
+        for (st in steps) {
+            if (!p.writeAutomation(sound, param, st, v)) { toast("AUTO: 16 lanes per pattern are in use"); return true }
+            val nx = (st + 1) % len
+            if (nx !in steps && p.automationAt(sound, param, nx).isNaN()) p.writeAutomation(sound, param, nx, before)
+        }
+        patternChanged()
+        toast("Step modulation: step${if (steps.size > 1) "s" else ""} ${steps.sorted().joinToString(" ") { "${it + 1}" }}")
+        return true
     }
 
     // ---- touch auto-write: with AUTO on and playing, a touched knob keeps writing its value ----

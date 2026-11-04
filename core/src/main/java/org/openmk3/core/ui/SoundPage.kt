@@ -440,8 +440,11 @@ class SoundPage(ui: Ui) : Page(ui) {
     private fun soundKnob(p: Int, delta: Int) {
         val before = params[slot, p]
         soundKnobFocused(p, delta)
+        // STEP pads held: the knob sets this parameter for those steps only
+        if (ui.stepModulate(slot, p, before)) { stepLocked = true; return }
         ui.mirrorSound(p, before)
     }
+    private var stepLocked = false
 
     private fun soundKnobFocused(p: Int, delta: Int) {
         val frames = ui.engine.kit[slot].frames
