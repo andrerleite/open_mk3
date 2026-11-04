@@ -790,6 +790,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
                     } else ""
                 }
                 "D6" -> if (state == IDLE) startMode = (startMode + 1) % 3
+                "D7" -> if (state == IDLE) { ui.show(AutoSamplerPage(ui, this)); return }
                 "D8" -> startStop()
             }
             Tab.EDIT -> when (name) {
@@ -1080,6 +1081,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
     private fun drawRecord(l: Canvas, r: Canvas) {
         dButton(r, 4, "SOURCE", listOf("INPUT", "PHONE", "MASTER")[source])
         dButton(r, 5, "START", when (startMode) { MODE_THRESHOLD -> "THRESHOLD"; MODE_SYNC -> "SYNC"; else -> "MANUAL" })
+        dButton(r, 6, "AUTO", "SAMPLER")
         dButton(r, 7, "RECORD", if (state == IDLE) "START" else "STOP", state != IDLE)
         l.drawText(listOf("Controller inputs", "Phone playback", "Resampling: Open MK3's own output")[source], 16f, 70f, value)
         val st = when (state) {
