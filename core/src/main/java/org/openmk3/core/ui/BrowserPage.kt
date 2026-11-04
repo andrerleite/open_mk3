@@ -35,6 +35,7 @@ class BrowserPage(ui: Ui) : Page(ui) {
         class Wav(val file: File) : Entry(file.nameWithoutExtension)
         class SoundFile(val file: File) : Entry("♪ " + file.nameWithoutExtension)
         class GroupFile(val file: File) : Entry("▦ " + file.nameWithoutExtension)
+        class FxFile(val file: File) : Entry("⚙ " + file.nameWithoutExtension)
     }
 
     companion object {
@@ -93,13 +94,13 @@ class BrowserPage(ui: Ui) : Page(ui) {
             .sortedBy { it.name.lowercase() }
         val wavs = files.orEmpty().filter { it.isFile && it.extension.equals("wav", true) }
             .sortedBy { it.name.lowercase() }
-        val saved = files.orEmpty().filter { it.isFile && (it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT) }
+        val saved = files.orEmpty().filter { it.isFile && (it.extension == org.openmk3.core.audio.GroupFile.EXT || it.extension == org.openmk3.core.audio.GroupFile.SOUND_EXT || it.extension == org.openmk3.core.audio.FxPreset.EXT) }
             .sortedBy { it.name.lowercase() }
         entries = buildList {
             add(Entry.BuiltIn())
             if (d.canonicalPath != ROOT.canonicalPath) add(Entry.Up())
             folders.forEach { add(Entry.Folder(it)) }
-            saved.forEach { add(if (it.extension == org.openmk3.core.audio.GroupFile.EXT) Entry.GroupFile(it) else Entry.SoundFile(it)) }
+            saved.forEach { add(when (it.extension) { org.openmk3.core.audio.GroupFile.EXT -> Entry.GroupFile(it); org.openmk3.core.audio.FxPreset.EXT -> Entry.FxFile(it); else -> Entry.SoundFile(it) }) }
             wavs.forEach { add(Entry.Wav(it)) }
         }
         if (files != null && folders.isEmpty() && wavs.isEmpty() && saved.isEmpty()) {
@@ -163,6 +164,11 @@ class BrowserPage(ui: Ui) : Page(ui) {
             is Entry.Wav -> load(e)
             is Entry.SoundFile -> loadSaved(e.file, group = false)
             is Entry.GroupFile -> loadSaved(e.file, group = true)
+            is Entry.FxFile -> {
+                // into the effect slot last open on PLUG-IN (else the focused sound's first effect)
+                val (c, k) = SoundPageNav.fxTarget ?: (ui.selectedIndex to 0)
+                message = if (org.openmk3.core.audio.FxPreset.load(ui.engine, c, k, e.file)) "${e.file.nameWithoutExtension} → effect slot ${k + 1}" else "Can't load ${e.file.name}"
+            }
             null -> {}
         }
         ui.invalidate()

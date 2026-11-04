@@ -79,6 +79,8 @@ import kotlin.math.sqrt
 /** Opens the PLUG-IN page on return [a] (0 = A, 1 = B) next time it is shown. */
 object SoundPageNav {
     @Volatile var openReturn = -1
+    /** The effect slot last shown on PLUG-IN (chain, slot): where the browser loads an effect preset. */
+    @Volatile var fxTarget: Pair<Int, Int>? = null
     /** Open the focused sound's source on this parameter page (Navigate PAGE NAV), -1 = none. */
     @Volatile var wantPage = -1
     /** Parameter page names of a sound source (SRC_*). */
@@ -297,7 +299,8 @@ class SoundPage(ui: Ui) : Page(ui) {
             "D2" -> { level = 1; slotIdx = 0; resetPage() }
             "D3" -> { level = 2; slotIdx = 0; resetPage() }
             "D4" -> { slotIdx = (slotIdx + 1) % slotCount; resetPage() }
-            "D5" -> if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) {
+            "D5" -> if (!isSource && shift) saveFxPreset()
+            else if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) {
                 fx[chain, fxSlot, 1] = if (fx.bypassed(chain, fxSlot)) 0f else 1f
                 fxChanged()
             }
@@ -412,6 +415,12 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     /** Moves the selected effect one slot earlier / later in its chain. */
+    /** SHIFT + D5 on an effect: save it as a preset (BROWSER loads it into a slot). */
+    private fun saveFxPreset() {
+        val f = org.openmk3.core.audio.FxPreset.save(ui.engine, chain, fxSlot)
+        ui.toast(if (f != null) "Preset saved: ${f.nameWithoutExtension}" else "Empty slot: nothing to save")
+    }
+
     private fun moveFx(d: Int) {
         val to = fxSlot + d
         val toIdx = slotIdx + d
@@ -710,6 +719,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
+        SoundPageNav.fxTarget = if (!isSource) chain to fxSlot else SoundPageNav.fxTarget
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
         // D-button labels

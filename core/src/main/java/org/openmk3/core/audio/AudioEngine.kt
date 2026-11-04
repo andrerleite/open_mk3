@@ -111,7 +111,7 @@ object NativeEngine {
 /** "A1".."H16": group letter and pad number of a sound index. */
 fun soundLabel(sound: Int) = "${'A' + sound / Pattern.PADS}${sound % Pattern.PADS + 1}"
 
-class AudioEngine(private val ctx: Context) {
+class AudioEngine(val ctx: Context) {
 
     companion object {
         const val SR = 48000
