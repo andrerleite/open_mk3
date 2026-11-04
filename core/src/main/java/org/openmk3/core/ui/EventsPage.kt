@@ -73,7 +73,66 @@ class EventsPage(ui: Ui, private val back: Page) : Page(ui) {
         l.set("PAGE LEFT", "PAGE RIGHT")
     }
 
+    /** The selected notes, or (none selected) all notes of the group. */
+    private fun target(): List<Pair<Int, Int>> =
+        if (sel.isNotEmpty()) sel.toList() else (0 until 16).flatMap { i -> events(ui.snd(i)).map { ui.snd(i) to it } }
+
+    /** SHIFT + pad on EVENTS: the printed shortcuts, on the selected notes. */
+    private fun shortcut(slot: Int) {
+        val t = target()
+        when (slot) {
+            0, 2 -> { ui.shiftShortcut(slot); sel.clear() }
+            1, 3 -> { ui.shiftShortcut(slot); sel.clear() }
+            4, 5 -> {
+                // quantise the notes to the step grid (pad 6: half way)
+                val g = ui.stepGrid
+                val amt = if (slot == 4) 1f else 0.5f
+                val order = t.sortedBy { it.second }
+                val moved = order.map { (snd, st) ->
+                    val pos = st + p.noteOffset(snd, st)
+                    val q = kotlin.math.round(pos / g) * g
+                    snd to p.moveNote(snd, st, pos + (q - pos) * amt)
+                }
+                if (sel.isNotEmpty()) { sel.clear(); sel.addAll(moved) }
+                changed(if (slot == 4) "Quantised" else "Quantised 50 %")
+            }
+            6, 7 -> {
+                val move = if (slot == 6) -ui.nudgeGrid else ui.nudgeGrid
+                val order = if (move > 0) t.sortedByDescending { it.second } else t.sortedBy { it.second }
+                val moved = order.map { (snd, st) -> snd to p.moveNote(snd, st, st + p.noteOffset(snd, st) + move) }
+                if (sel.isNotEmpty()) { sel.clear(); sel.addAll(moved) }
+                changed(if (slot == 6) "Nudged left" else "Nudged right")
+            }
+            8 -> { for ((snd, st) in t) p.clearStep(snd, st); sel.clear(); changed("${t.size} note${if (t.size != 1) "s" else ""} cleared") }
+            9 -> ui.shiftShortcut(slot)
+            10 -> {
+                ui.noteClipboard = t.map { (snd, st) -> Ui.CopiedNote(snd % 16, st + p.noteOffset(snd, st), p.noteOf(snd, st), p.vel(snd, st), p.noteLength(snd, st)) }
+                changed("${t.size} note${if (t.size != 1) "s" else ""} copied")
+            }
+            11 -> {
+                val c = ui.noteClipboard
+                if (c.isEmpty()) { changed("Nothing copied"); return }
+                // pasted at the same places, into this group's pattern (the copy can come from another pattern)
+                sel.clear()
+                for (n in c) {
+                    val snd = ui.snd(n.pad)
+                    val st = kotlin.math.floor(n.pos).toInt()
+                    if (st >= p.length(ui.group)) continue
+                    p.recordNote(snd, st, n.note, n.vel, n.pos - st, n.len)
+                    sel.add(snd to st)
+                }
+                changed("${c.size} note${if (c.size != 1) "s" else ""} pasted")
+            }
+            12, 13, 14, 15 -> {
+                val d = intArrayOf(-1, 1, -12, 12)[slot - 12]
+                for ((snd, st) in t) p.editStep(snd, st, semis = d)
+                changed("Transposed ${if (d > 0) "+" else ""}$d")
+            }
+        }
+    }
+
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+        if (shift) { shortcut(slot); return }
         val snd = ui.snd(slot)
         if (erase) { p.clear(snd); sel.removeAll { it.first == snd }; changed("${ui.padLabel(slot)} notes erased"); return }
         if (events(snd).isEmpty()) return

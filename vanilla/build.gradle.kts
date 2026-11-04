@@ -16,8 +16,8 @@ android {
         applicationId = "org.openmk3.vanilla"
         minSdk = 33
         targetSdk = 35
-        versionCode = 63
-        versionName = "0.48.0"
+        versionCode = 64
+        versionName = "0.49.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 

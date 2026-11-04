@@ -291,6 +291,9 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     private val redoStack = ArrayDeque<String>()
     private var lastState: String? = null
     var clipboard: org.openmk3.core.audio.PatternData? = null
+    /** Notes copied in EVENTS (SHIFT + pad 11): pad, position (steps), note, velocity, length. */
+    class CopiedNote(val pad: Int, val pos: Float, val note: Int, val vel: Float, val len: Float)
+    var noteClipboard: List<CopiedNote> = emptyList()
 
     /** Call after a finished edit: the previous state becomes undoable. */
     fun checkpoint() {
