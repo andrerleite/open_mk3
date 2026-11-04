@@ -1216,11 +1216,11 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     override fun onKnob(knob: Int, delta: Int, value: Int) = post {
         if (recPrepare) {
-            if (knob == 3) {  // K4 LENGTH: AUTO, 1, 2, 4 bars
+            if (knob == 3) {  // K4 LENGTH: AUTO, 1, 2, 4, 8, 16 bars
                 prepAcc += delta
                 if (kotlin.math.abs(prepAcc) >= 25) {
-                    val opts = listOf(0, 16, 32, 64)
-                    prepareLen = opts[(opts.indexOf(prepareLen) + if (prepAcc > 0) 1 else -1).coerceIn(0, 3)]
+                    val opts = listOf(0, 16, 32, 64, 128, 256)
+                    prepareLen = opts[(opts.indexOf(prepareLen).coerceAtLeast(0) + if (prepAcc > 0) 1 else -1).coerceIn(0, opts.size - 1)]
                     prepAcc = 0
                 }
             }

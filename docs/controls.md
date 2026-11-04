@@ -17,7 +17,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | PLAY | Start / stop playback | ✅ |
-| REC | Toggle recording (starts playback if stopped), on every page whose pads play. Hold REC while not recording: RECORD PREPARE (D5 1 bar, D6 2 bars, D7 4 bars, D8 AUTO or K4 LENGTH; D2 metronome); releasing arms REC and PLAY starts the take. AUTO: an empty 1-bar pattern grows a bar at a time while recording, and is trimmed to its last bar with notes when recording stops | ✅ |
+| REC | Toggle recording (starts playback if stopped), on every page whose pads play. Hold REC while not recording: RECORD PREPARE (D5 1 bar, D6 2 bars, D7 4 bars, D8 AUTO, or K4 LENGTH: AUTO, 1, 2, 4, 8 or 16 bars; D2 metronome); releasing arms REC and PLAY starts the take. AUTO: an empty 1-bar pattern grows a bar at a time while recording, and is trimmed to its last bar with notes when recording stops | ✅ |
 | SHIFT + REC (Count-in) | Record with a one-bar count-in (clicks) | ✅ |
 | STOP | Stop. Pressed again while stopped: every sound fades out (stops long samples and tails). | ✅ |
 | RESTART | Restart playback from the beginning of the loop (song mode: from section 1) | ✅ |
