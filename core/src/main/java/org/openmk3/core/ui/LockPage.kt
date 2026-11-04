@@ -7,7 +7,7 @@ import org.openmk3.core.AppLog
 import org.openmk3.core.mk3.Mk3Colors
 
 /**
- * Extended LOCK (SHIFT + LOCK): 16 snapshots on the pads.
+ * Extended LOCK (SHIFT + LOCK): 64 snapshots, 16 on the pads per bank (D7 / D8: bank).
  *  Empty pad: store the current settings · stored pad: recall it (morphing if MORPH is on)
  *  ERASE + pad: delete · D5 update the selected snapshot with the current settings
  *  K1 morph on / off · K2 morph time (bars) · LOCK or SHIFT + LOCK: back
@@ -15,6 +15,7 @@ import org.openmk3.core.mk3.Mk3Colors
 class LockPage(ui: Ui, private val back: Page) : Page(ui) {
 
     override val customPads = true
+    private companion object { var bank = 0 }
     private val lock = ui.lock
     private var erase = false
     private var acc = 0
@@ -36,10 +37,11 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
     override fun lights(l: Lights) {
         l.set("LOCK", true)
         l.set("ERASE", erase)
-        l.set("D5")
+        l.set("D5"); l.set("D7", bank > 0); l.set("D8", bank < 3)
     }
 
-    override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
+    override fun onPadHit(pad: Int, hid: Int, velocity: Float, pressure: Int) {
+        val slot = bank * 16 + pad
         val s = lock.slots[slot]
         when {
             erase -> if (s != null) { lock.slots[slot] = null; message = "Snapshot ${slot + 1} deleted" }
@@ -55,6 +57,8 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         when (name) {
             "D5" -> if (lock.selected >= 0) { lock.slots[lock.selected] = lock.take(); message = "Snapshot ${lock.selected + 1} updated" }
             "LOCK" -> back()
+            "D7" -> bank = (bank - 1).coerceAtLeast(0)
+            "D8" -> bank = (bank + 1).coerceAtMost(3)
         }
     }
 
@@ -70,17 +74,21 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
     }
 
     override fun draw(l: Canvas, r: Canvas, now: Long) {
-        for (i in 0 until 16) {
+        for (p in 0 until 16) {
+            val i = bank * 16 + p
             val v = when {
                 i == lock.selected && lock.slots[i] != null -> Mk3Colors.value(Mk3Colors.WHITE, 3)
                 lock.slots[i] != null -> Mk3Colors.value(Mk3Colors.WHITE, 0)
                 else -> 0
             }
-            ui.padLed(i, v)
+            ui.padLed(p, v)
         }
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
         r.drawText("UPDATE", 60f, 24f, dLabel)
+        r.drawText("◀ BANK", 300f, 24f, dLabel)
+        r.drawText("BANK ▶", 420f, 24f, dLabel)
+        l.drawText("BANK ${bank + 1} / 4", 330f, 56f, label)
         l.drawText("EXTENDED LOCK", 16f, 56f, title)
         l.drawText("Empty pad: store · pad: recall · ERASE + pad: delete", 16f, 90f, label)
         l.drawText("LOCK alone: quick snapshot / recall", 16f, 112f, label)
@@ -91,9 +99,10 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         l.drawText("${lock.morphBars} bar${if (lock.morphBars > 1) "s" else ""}", 180f, 260f, kValue)
         val w = 112f
         val h = 44f
-        for (i in 0 until 16) {
-            val c = i % 4
-            val row = 3 - i / 4
+        for (p in 0 until 16) {
+            val i = bank * 16 + p
+            val c = p % 4
+            val row = 3 - p / 4
             val x = 8f + c * (w + 4f)
             val y = 44f + row * (h + 4f)
             val fill = if (lock.slots[i] == null) empty else Theme.fill(if (i == lock.selected) Theme.ACCENT else android.graphics.Color.rgb(90, 90, 110))

@@ -2,14 +2,15 @@ package org.openmk3.core.audio
 
 /**
  * LOCK snapshots: every sound setting, every effect setting, group volume / pan and the master
- * volume. One quick snapshot (LOCK) plus 16 stored ones (SHIFT + LOCK), with optional morphing
+ * volume, mute and solo. One quick snapshot (LOCK) plus 64 stored ones in 4 banks (SHIFT + LOCK), with optional morphing
  * from the current state to a recalled snapshot.
  */
 class Lock(private val e: AudioEngine) {
 
-    class Snapshot(val sound: FloatArray, val fx: FloatArray, val group: FloatArray, val master: Float)
+    /** [mutes]: sound mute, sound solo, group mute, group solo flags (they switch at the end of a morph). */
+    class Snapshot(val sound: FloatArray, val fx: FloatArray, val group: FloatArray, val master: Float, val mutes: BooleanArray = BooleanArray(0))
 
-    val slots = arrayOfNulls<Snapshot>(16)
+    val slots = arrayOfNulls<Snapshot>(64)  // 4 banks of 16
     var quick: Snapshot? = null
     var selected = -1
     var morph = false
@@ -32,7 +33,16 @@ class Lock(private val e: AudioEngine) {
             e.fx[c, k, i % FxParams.PER_SLOT]
         }
         val group = FloatArray(Pattern.GROUPS * 2) { if (it < 8) e.pattern.groupVolume(it) else e.pattern.groupPan(it - 8) }
-        return Snapshot(sound, fx, group, e.masterGain)
+        val p = e.pattern
+        val mutes = BooleanArray(Pattern.SOUNDS * 2 + Pattern.GROUPS * 2) { i ->
+            when {
+                i < Pattern.SOUNDS -> p.mute[i]
+                i < Pattern.SOUNDS * 2 -> p.solo[i - Pattern.SOUNDS]
+                i < Pattern.SOUNDS * 2 + Pattern.GROUPS -> p.groupMute[i - Pattern.SOUNDS * 2]
+                else -> p.groupSolo[i - Pattern.SOUNDS * 2 - Pattern.GROUPS]
+            }
+        }
+        return Snapshot(sound, fx, group, e.masterGain, mutes)
     }
 
     /** Sets the state to [a] -> [b] at [t] (0..1); discrete values (types, choices) jump at the end. */
@@ -57,6 +67,12 @@ class Lock(private val e: AudioEngine) {
             e.pattern.setGroupPan(g, a.group[g + 8] + (b.group[g + 8] - a.group[g + 8]) * t)
         }
         e.masterGain = a.master + (b.master - a.master) * t
+        // mute / solo switch when the recall is complete
+        if (t >= 1f && b.mutes.size == Pattern.SOUNDS * 2 + Pattern.GROUPS * 2) {
+            val p = e.pattern
+            for (i in 0 until Pattern.SOUNDS) { p.mute[i] = b.mutes[i]; p.solo[i] = b.mutes[Pattern.SOUNDS + i] }
+            for (g in 0 until Pattern.GROUPS) { p.groupMute[g] = b.mutes[Pattern.SOUNDS * 2 + g]; p.groupSolo[g] = b.mutes[Pattern.SOUNDS * 2 + Pattern.GROUPS + g] }
+        }
     }
 
     /** Recalls [s]: at once, or morphing over [morphBars] bars. */

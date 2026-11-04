@@ -121,7 +121,7 @@ They work in every pad mode (PAD, KEYBOARD, CHORDS, STEP) and on every page that
 | SWING (Position) | Encoder adjusts swing. SHIFT + SWING: the encoder moves the focused sound's notes by the nudge grid (SHIFT: fine) | ✅ |
 | TEMPO (Tune) | Encoder adjusts tempo (SHIFT: fine). SHIFT + TEMPO: encoder tunes the focused sound. | ✅ |
 | NOTE REPEAT (Arp) | Hold: pads repeat (arpeggiator in KEYBOARD / CHORDS); repeats and arp notes swing with the master and group swing (the swing is not recorded: the pattern swings them when it plays). Hold + D1 pins it. SHIFT + NOTE REPEAT: KEYBOARD with the arpeggiator. | ✅ |
-| LOCK (Ext Lock) | LOCK: quick snapshot of every sound / effect / mixer setting, press again to recall. SHIFT + LOCK: 16 snapshots on the pads (empty pad stores, pad recalls, ERASE + pad deletes, D5 updates), K1 morph on / off, K2 morph time in bars | ✅ |
+| LOCK (Ext Lock) | LOCK: quick snapshot of every sound / effect / mixer setting and mute / solo, press again to recall. SHIFT + LOCK: 64 snapshots in 4 banks of 16 on the pads (D7 / D8 bank) (empty pad stores, pad recalls, ERASE + pad deletes, D5 updates), K1 morph on / off, K2 morph time in bars | ✅ |
 
 ## Touch strip
 
