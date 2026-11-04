@@ -311,6 +311,8 @@ struct Held {
 };
 constexpr int kMaxHeld = 32;
 
+static void recOnBar(int delay);  // the sample recorder's SYNC start (defined after it)
+
 class Engine {
 public:
     // ---- set from Kotlin ----
@@ -626,7 +628,7 @@ Engine gEngine;
 
 class Recorder {
 public:
-    enum { IDLE = 0, ARMED = 1, RECORDING = 2 };
+    enum { IDLE = 0, ARMED = 1, RECORDING = 2, SYNC = 3 };
     enum { SRC_INPUT = 0, SRC_PHONE = 1 };
     std::atomic<int> state{IDLE};
     std::atomic<int> source{SRC_INPUT};
@@ -637,6 +639,7 @@ public:
     std::vector<float> buf;  // stereo interleaved
     int maxFrames = 0;
     std::atomic<int> writers{0};  // feed() calls currently past the state check
+    std::atomic<int> skip{0};     // SYNC: input frames to drop before the bar's audio arrives
 
     /** Waits until no audio thread is inside feed(), so buf can be touched safely. */
     void quiesce() {
@@ -651,7 +654,26 @@ public:
         maxFrames = std::max(1, seconds) * kSampleRate;
         buf.assign(size_t(maxFrames) * 2, 0.f);
         frames.store(0);
+        skip.store(0);
         state.store(waitForThreshold ? ARMED : RECORDING);
+    }
+
+    /** SYNC: records exactly [len] frames from the next bar the sequencer plays. */
+    void armSync(int src, int len) {
+        quiesce();
+        source.store(src);
+        maxFrames = std::clamp(len, 480, 120 * kSampleRate);
+        buf.assign(size_t(maxFrames) * 2, 0.f);
+        frames.store(0);
+        skip.store(0);
+        state.store(SYNC);
+    }
+
+    /** Sequencer (audio thread): a bar starts [delay] frames from now, as the input will hear it. */
+    void onBar(int delay) {
+        int s = SYNC;
+        skip.store(std::max(0, delay), std::memory_order_relaxed);
+        state.compare_exchange_strong(s, RECORDING, std::memory_order_acq_rel);
     }
 
     void stop() { quiesce(); }
@@ -678,6 +700,12 @@ public:
             state.store(RECORDING, std::memory_order_release);
         } else if (s != RECORDING) {
             return;
+        } else if (int sk = skip.load(std::memory_order_relaxed); sk > 0) {
+            // SYNC: the input lags the output; drop what was played before the bar
+            int d = std::min(sk, n);
+            skip.store(sk - d, std::memory_order_relaxed);
+            start = d;
+            if (start >= n) return;
         }
         int f = frames.load(std::memory_order_relaxed);
         int take = std::min(n - start, maxFrames - f);
@@ -690,6 +718,7 @@ public:
 };
 
 Recorder gRec;
+static void recOnBar(int delay) { gRec.onBar(delay); }
 
 
 aaudio_data_callback_result_t dataCallback(AAudioStream*, void* user, void* audio, int32_t frames) {
@@ -1097,6 +1126,7 @@ void Engine::runSequencer(int frames) {
         if (n < 0) { nextStep = n + 1; continue; }  // counting in
         if (n == 0) p[OFF_COUNTING] = 0.f;
         p[OFF_NOW] = float(n);
+        if (n % 16 == 0) recOnBar(int(off) + 2 * bufferFrames.load(std::memory_order_relaxed));
         // song sections: every queued pattern starts together at this step
         const bool switchAll = p[OFF_SWITCHAT] >= 0.f && int64_t(p[OFF_SWITCHAT]) <= n;
         if (switchAll) p[OFF_SWITCHAT] = -1.f;
@@ -2945,6 +2975,9 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetParamBuffer)(JNIEnv* env, jobject, jobjec
 
 JNIEXPORT void JNICALL JNI_FN(nativeRecArm)(JNIEnv*, jobject, jint source, jboolean threshold, jfloat thr, jint seconds) {
     gRec.arm(source, threshold == JNI_TRUE, thr, seconds);
+}
+JNIEXPORT void JNICALL JNI_FN(nativeRecArmSync)(JNIEnv*, jobject, jint source, jint frames) {
+    gRec.armSync(source, frames);
 }
 JNIEXPORT void JNICALL JNI_FN(nativeRecStop)(JNIEnv*, jobject) { gRec.stop(); }
 JNIEXPORT jint JNICALL JNI_FN(nativeRecState)(JNIEnv*, jobject) { return gRec.state.load(); }

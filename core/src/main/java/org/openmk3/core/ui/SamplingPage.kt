@@ -20,8 +20,9 @@ import kotlin.math.roundToInt
 /**
  * Sampling, in three tabs (D1–D3), like the hardware workflow:
  *
- *  RECORD  D5 source (INPUT / PHONE) · D6 start (MANUAL / THRESHOLD) · D8 start / stop
- *          K1 threshold · K2 max length · pads choose the target pad
+ *  RECORD  D5 source (INPUT / PHONE) · D6 start (MANUAL / THRESHOLD / SYNC) · D8 start / stop
+ *          K1 threshold · K2 max length (SYNC: length in bars, or FREE) · pads choose the target
+ *          pad; the recording is saved as a WAV and loaded onto it at once
  *  EDIT    the take, or the focused pad's sample (pads choose which); ◀ ▶ pages:
  *          1 PLAY RANGE  K1 start · K2 end (live on the pad) · K5 trigger
  *                        D7 preview · D8 save the range as a new WAV on the focused pad
@@ -48,10 +49,16 @@ class SamplingPage(ui: Ui) : Page(ui) {
         const val IDLE = 0
         const val ARMED = 1
         const val RECORDING = 2
+        const val SYNCED = 3
+        const val MODE_MANUAL = 0
+        const val MODE_THRESHOLD = 1
+        const val MODE_SYNC = 2
+        val SYNC_BARS = intArrayOf(1, 2, 4, 8, 16, 0)  // 0 = FREE (from the bar until stopped)
         val GRID = intArrayOf(2, 4, 8, 16)
         // Kept across visits.
         var source = SRC_INPUT
-        var thresholdMode = false
+        var startMode = MODE_MANUAL
+        var syncIdx = 0
         var threshold = 0.05f
         var maxSeconds = 30
         var lastTab = Tab.RECORD
@@ -350,10 +357,17 @@ class SamplingPage(ui: Ui) : Page(ui) {
             message = "Allow phone audio: see the phone (notification or app button)"
             return
         }
-        n.nativeRecArm(source, thresholdMode, threshold, maxSeconds)
-        state = if (thresholdMode) ARMED else RECORDING
+        if (startMode == MODE_SYNC) {
+            val bars = SYNC_BARS[syncIdx]
+            val frames = if (bars > 0) (bars * 4 * 60.0 / ui.engine.bpm * AudioEngine.SR).roundToInt() else maxSeconds * AudioEngine.SR
+            n.nativeRecArmSync(source, frames)
+            state = SYNCED
+        } else {
+            n.nativeRecArm(source, startMode == MODE_THRESHOLD, threshold, maxSeconds)
+            state = if (startMode == MODE_THRESHOLD) ARMED else RECORDING
+        }
         message = ""
-        AppLog.i("Sampling: armed (${if (source == SRC_PHONE) "phone" else "input"}, ${if (thresholdMode) "threshold ${"%.2f".format(threshold)}" else "manual"}, max $maxSeconds s)")
+        AppLog.i("Sampling: armed (${if (source == SRC_PHONE) "phone" else "input"}, ${when (startMode) { MODE_THRESHOLD -> "threshold ${"%.2f".format(threshold)}"; MODE_SYNC -> "sync ${syncText()}"; else -> "manual" }}, max $maxSeconds s)")
     }
 
     private fun finish() {
@@ -366,9 +380,10 @@ class SamplingPage(ui: Ui) : Page(ui) {
         }
         setTake(data, "Rec")
         editSound = -1
-        message = "Recorded ${"%.2f".format(takeFrames.toDouble() / AudioEngine.SR)} s"
-        AppLog.i("Sampling: $message")
+        AppLog.i("Sampling: recorded ${"%.2f".format(takeFrames.toDouble() / AudioEngine.SR)} s")
         tab = Tab.EDIT
+        editPage = 0
+        save()  // straight onto the target pad (as a new WAV), then edited from there
     }
 
     // =====================================================================================
@@ -552,7 +567,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
                     loadFromPad(ui.selectedSound)  // the saved sample is now the pad's, full range
                     message = "Saved ${f.name} → $label"
                     AppLog.i("Sampling: saved ${f.absolutePath} to $label")
-                    ui.engine.trigger(slot, 0.8f)
+                    if (!ui.engine.playing) ui.engine.trigger(slot, 0.8f)  // audition (not over a running song)
                     ui.invalidate()
                 }
             } catch (ex: Exception) {
@@ -629,7 +644,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
                         "Allow phone audio: see the phone (notification or app button)"
                     } else ""
                 }
-                "D6" -> if (state == IDLE) thresholdMode = !thresholdMode
+                "D6" -> if (state == IDLE) startMode = (startMode + 1) % 3
                 "D8" -> startStop()
             }
             Tab.EDIT -> when (name) {
@@ -662,7 +677,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         when (tab) {
             Tab.RECORD -> {
                 l.set("D5", source == SRC_PHONE)
-                l.set("D6", thresholdMode)
+                l.set("D6", startMode != MODE_MANUAL)
                 l.set("D8", state != IDLE)
             }
             Tab.EDIT -> {
@@ -698,7 +713,9 @@ class SamplingPage(ui: Ui) : Page(ui) {
         when (tab) {
             Tab.RECORD -> when (knob) {
                 0 -> threshold = (threshold + delta / 1000f).coerceIn(0.002f, 0.9f)
-                1 -> maxSeconds = (maxSeconds + if (delta > 0) 1 else -1).coerceIn(1, 30)
+                1 -> if (startMode == MODE_SYNC) {
+                    if (stepped(delta)) syncIdx = (syncIdx + if (delta > 0) 1 else -1).coerceIn(0, SYNC_BARS.size - 1)
+                } else maxSeconds = (maxSeconds + if (delta > 0) 1 else -1).coerceIn(1, 30)
             }
             Tab.EDIT -> if (editPage == 1) {
                 when (knob) {
@@ -819,23 +836,27 @@ class SamplingPage(ui: Ui) : Page(ui) {
         }
     }
 
+    private fun syncText() = SYNC_BARS[syncIdx].let { if (it == 0) "FREE" else if (it == 1) "1 BAR" else "$it BARS" }
+
     private fun drawRecord(l: Canvas, r: Canvas) {
         dButton(r, 4, "SOURCE", if (source == SRC_PHONE) "PHONE" else "INPUT")
-        dButton(r, 5, "START", if (thresholdMode) "THRESHOLD" else "MANUAL")
+        dButton(r, 5, "START", when (startMode) { MODE_THRESHOLD -> "THRESHOLD"; MODE_SYNC -> "SYNC"; else -> "MANUAL" })
         dButton(r, 7, "RECORD", if (state == IDLE) "START" else "STOP", state != IDLE)
         l.drawText(if (source == SRC_PHONE) "Phone playback" else "Controller inputs", 16f, 70f, value)
         val st = when (state) {
             ARMED -> "WAITING FOR SIGNAL"
+            SYNCED -> if (ui.engine.playing) "WAITING FOR NEXT BAR" else "PRESS PLAY TO START"
             RECORDING -> "● REC ${"%.1f".format(n.nativeRecFrames().toDouble() / AudioEngine.SR)} s"
             else -> "READY"
         }
         l.drawText(st, 16f, 106f, if (state == IDLE) big else recText)
         l.drawText("INPUT", 16f, 134f, label)
-        meter(l, 140f, meterIn, thresholdMode && source == SRC_INPUT)
+        meter(l, 140f, meterIn, startMode == MODE_THRESHOLD && source == SRC_INPUT)
         l.drawText(if (phoneActive) "PHONE" else "PHONE (not allowed yet: confirm on the phone)", 16f, 172f, label)
-        meter(l, 178f, meterPhone, thresholdMode && source == SRC_PHONE)
+        meter(l, 178f, meterPhone, startMode == MODE_THRESHOLD && source == SRC_PHONE)
         knob(l, 0, "THRESHOLD", "${(threshold * 100).toInt()}%")
-        knob(l, 1, "MAX LENGTH", "$maxSeconds s")
+        if (startMode == MODE_SYNC) knob(l, 1, "LENGTH", syncText())
+        else knob(l, 1, "MAX LENGTH", "$maxSeconds s")
         drawWave(r, -1, -1)
         knob(r, 7, "TARGET", ui.padLabel())
     }
