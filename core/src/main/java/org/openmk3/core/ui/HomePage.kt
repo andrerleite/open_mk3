@@ -78,12 +78,12 @@ class HomePage(ui: Ui) : Page(ui) {
     private fun padPos(slot: Int) = (stepViewPage * 16 + stepForSlot(slot)) * g
     /** The step holding a note at [pos] (start matching within a hair), or null. */
     private fun noteAtPos(sound: Int, pos: Float): Int? {
-        // a STEP pad covers the time around its step (half a step either side), so notes recorded
-        // live, a little off the grid, light and edit the step they belong to
+        // a STEP pad covers its step up to the next one (as the grid shows notes), so notes recorded
+        // live, a little off the grid, light and edit the step they start in
         val len = pattern.length(ui.group)
         if (pos >= len) return null
-        val lo = pos - g / 2f
-        val hi = pos + g / 2f
+        val lo = pos
+        val hi = pos + g
         var best: Int? = null
         var bestD = Float.MAX_VALUE
         for (c in kotlin.math.floor(lo).toInt()..kotlin.math.floor(hi).toInt()) {

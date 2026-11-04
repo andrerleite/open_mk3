@@ -184,6 +184,11 @@ class FilePage(ui: Ui) : Page(ui) {
     private var shift = false
     private var knobAcc = IntArray(2)
     private val CHARS = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.&'()#!"
+    /** The character grid shown while SHIFT is held (rows of 13). */
+    private val GRID = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.&'()#!+=@"
+    private val GCOLS = 13
+    private var gridSel = 0
+    private var gridTyped = false
 
     private fun startEdit(initial: String, rename: Boolean) {
         editing = true; renaming = rename
@@ -201,6 +206,10 @@ class FilePage(ui: Ui) : Page(ui) {
             val i = CHARS.indexOf(c).coerceAtLeast(0)
             name.setCharAt(cursor, CHARS[Math.floorMod(i + d, CHARS.length)])
         }
+    }
+
+    private fun caseAt(upper: Boolean) {
+        if (cursor < name.length && name[cursor].isLetter()) name.setCharAt(cursor, if (upper) name[cursor].uppercaseChar() else name[cursor].lowercaseChar())
     }
 
     private fun backspace() { if (cursor > 0) { name.deleteCharAt(cursor - 1); cursor-- } }
@@ -276,10 +285,32 @@ class FilePage(ui: Ui) : Page(ui) {
         ui.invalidate()
     }
 
-    override fun onEncoder(delta: Int) { if (editing) { turnChar(delta); ui.invalidate() } else move(delta) }
+    override fun onEncoder(delta: Int) {
+        if (editing && shift) { gridSel = Math.floorMod(gridSel + delta, GRID.length); ui.invalidate(); return }
+        if (editing) { turnChar(delta); ui.invalidate() } else move(delta)
+    }
+
+    /** Writes the grid's character at the cursor (past the end: adds it). */
+    private fun putGridChar(advance: Boolean) {
+        val c = GRID[gridSel]
+        if (cursor >= name.length) name.append(c) else name.setCharAt(cursor, c)
+        if (advance) moveCursor(1)
+    }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
-        if (name == "SHIFT") { shift = down; return }
+        if (name == "SHIFT") {
+            if (editing) {
+                if (down) {
+                    // SHIFT held: the character grid, starting on the letter under the cursor
+                    val cur = if (cursor < this.name.length) this.name[cursor] else 'A'
+                    gridSel = GRID.indexOf(cur).let { if (it < 0) 0 else it }
+                    gridTyped = false
+                } else if (!gridTyped) putGridChar(false)  // released: the chosen character goes in
+                ui.invalidate()
+            }
+            shift = down
+            return
+        }
         if (!down) return
         if (exporting) {
             when (name) {
@@ -296,16 +327,16 @@ class FilePage(ui: Ui) : Page(ui) {
             when (name) {
                 // 4D encoder (like a hardware sampler's naming screen): turn = letter, tilt ◀ ▶ =
                 // cursor, tilt ▲ ▼ = upper / lower case, SHIFT + ◀ = backspace, SHIFT + ▶ = space
-                "PAGE LEFT", "ENCODER LEFT" -> if (shift) backspace() else moveCursor(-1)
-                "PAGE RIGHT", "ENCODER RIGHT" -> if (shift) { this.name.insert(cursor.coerceAtMost(this.name.length), ' '); moveCursor(1) } else moveCursor(1)
-                "ENCODER UP", "ENCODER DOWN" -> if (cursor < this.name.length) {
-                    val c = this.name[cursor]
-                    if (c.isLetter()) this.name.setCharAt(cursor, if (name == "ENCODER UP") c.uppercaseChar() else c.lowercaseChar())
-                }
+                // SHIFT held: the 4D encoder moves around the character grid
+                "PAGE LEFT", "ENCODER LEFT" -> if (shift) gridSel = Math.floorMod(gridSel - 1, GRID.length) else moveCursor(-1)
+                "PAGE RIGHT", "ENCODER RIGHT" -> if (shift) gridSel = Math.floorMod(gridSel + 1, GRID.length) else moveCursor(1)
+                "ENCODER UP" -> if (shift) gridSel = Math.floorMod(gridSel - GCOLS, GRID.length) else caseAt(true)
+                "ENCODER DOWN" -> if (shift) gridSel = Math.floorMod(gridSel + GCOLS, GRID.length) else caseAt(false)
+                "ENCODER PUSH" -> if (shift) { putGridChar(true); gridTyped = true } else finishEdit()
                 "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
                 "D6" -> if (cursor < this.name.length) this.name.deleteCharAt(cursor) else backspace()
                 "D7" -> { editing = false; savingGroup = false; savingSound = false; nameTarget = 0; message = "Cancelled" }
-                "D8", "ENCODER PUSH" -> finishEdit()
+                "D8" -> finishEdit()
                 "FILE" -> ui.showHome()
             }
             ui.invalidate()
@@ -432,8 +463,19 @@ class FilePage(ui: Ui) : Page(ui) {
         val cx = x0 + nameText.measureText(n, 0, cursor.coerceAtMost(n.length))
         val cw = if (cursor < n.length) nameText.measureText(n, cursor, cursor + 1).coerceAtLeast(8f) else 14f
         if ((now / 400) % 2 == 0L || true) l.drawRect(cx, y + 6f, cx + cw, y + 10f, cursorFill)
-        l.drawText("Turn: letter · ◀ ▶: cursor · ▲ ▼: upper / lower case", 16f, 170f, label)
-        l.drawText("SHIFT + ◀: backspace · SHIFT + ▶: space · push: OK", 16f, 192f, label)
+        if (shift) {
+            // the character grid: the 4D encoder moves the highlight, releasing SHIFT enters it
+            val gx = 16f; val gy = 150f; val cw2 = 34f; val ch2 = 20f
+            val gTxt = Theme.text(17f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+            for (i in GRID.indices) {
+                val x = gx + (i % GCOLS) * cw2; val yy = gy + (i / GCOLS) * ch2
+                if (i == gridSel) l.drawRect(x, yy - 17f, x + cw2 - 2f, yy + 4f, cursorFill)
+                l.drawText(if (GRID[i] == ' ') "␣" else GRID[i].toString(), x + cw2 / 2, yy, gTxt)
+            }
+        } else {
+            l.drawText("Turn: letter · ◀ ▶: cursor · ▲ ▼: upper / lower case", 16f, 170f, label)
+            l.drawText("Hold SHIFT: letters (4D encoder moves, release enters, push types)", 16f, 192f, label)
+        }
         // the characters around the one under the cursor, as a strip
         val cur = if (cursor < n.length) n[cursor] else ' '
         val ci = CHARS.indexOf(cur).coerceAtLeast(0)
