@@ -119,6 +119,8 @@ class SoundParams {
         const val MWCUT = 78
         const val MWLFO = 79
         const val MWPAN = 80
+        /** The sound's own swing, added to the master and group swing (CHANNEL GROOVE). */
+        const val SWING = 81
         /** LFO note values when synced (same order as kLfoDivs in the engine). */
         val LFO_DIVS = listOf("16 BARS", "8 BARS", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4 T", "1/8 T", "1/16 T")
 
@@ -214,6 +216,7 @@ class SoundParams {
             Def(MWCUT, "MW → CUTOFF", -10f, 10f, -7f, 0.01f, ::octs),
             Def(MWLFO, "MW → LFO", 0f, 1f, 0f, 0.002f, ::pct),
             Def(MWPAN, "MW → PAN", -1f, 1f, 0f, 0.002f, ::pct),
+            Def(SWING, "SWING", 0f, 0.5f, 0f, 0.001f, { v -> "+${(v * 200).roundToInt()}%" }),
             // trigger mode and source
             Def(GATE, "TRIGGER", 0f, 1f, 0f, 1f, { "" }, choices = listOf("ONE-SHOT", "GATE")),
             Def(SRC, "SOURCE", 0f, 3f, 0f, 1f, { "" }, choices = listOf("SAMPLER", "SYNTH", "FM", "POLY")),

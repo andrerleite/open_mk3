@@ -208,6 +208,7 @@ enum {
     P_MWCUT = 78,   // mod wheel -> cutoff, octaves
     P_MWLFO = 79,   // mod wheel -> LFO depth, 0..1 (1: the wheel sets the whole depth)
     P_MWPAN = 80,   // mod wheel -> pan, -1..1
+    P_SWING = 81,   // the sound's own swing (added to the master and group swing), 0..0.5
 };
 /** LFO note values when synced, in quarter notes: 16 bars .. 1/32. */
 static constexpr float kLfoDivs[] = {64.f, 32.f, 16.f, 8.f, 4.f, 2.f, 1.f, 0.5f, 0.25f, 0.125f, 2.f / 3.f, 1.f / 3.f, 1.f / 6.f};
@@ -1313,8 +1314,10 @@ void Engine::runSequencer(int frames) {
                 const int chord = (v > 0.f) + extras;
                 float nl = bk[B_NLEN + cell];
                 const int gate = std::max(16, int((nl > 0.f ? nl : 1.f) * stepLen));
-                // the note's own offset plus the group's extra swing on odd 16ths
-                const float gsw = (n & 1) ? std::clamp(p[OFF_GSWING + g], 0.f, 0.5f) : 0.f;
+                // the note's own offset plus the group's and the sound's extra swing on odd 16ths
+                float ssw = 0.f;
+                if (const float* pb = params.load(std::memory_order_relaxed)) ssw = pb[s * kParams + P_SWING];
+                const float gsw = (n & 1) ? std::clamp(p[OFF_GSWING + g] + std::clamp(ssw, 0.f, 0.5f), 0.f, 0.5f) : 0.f;
                 const float noff = std::clamp(bk[B_OFF + cell] + gsw, 0.f, 1.499f);
                 auto fire = [&](float vel, int note) {
                     if (noff < 0.001f) { startVoice(s, vel, int(off), gate, true, note, chord); return; }

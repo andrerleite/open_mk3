@@ -73,6 +73,7 @@ class ChannelPage(ui: Ui) : Page(ui) {
         } else if (knob == 0) when (level) {
             0 -> p.swing = (p.swing + delta * 0.0005f * k).coerceIn(0f, 0.5f)
             1 -> p.setGroupSwing(g, p.groupSwing(g) + delta * 0.0005f * k)
+            else -> { val b = sp[s, SoundParams.SWING]; sp[s, SoundParams.SWING] = (b + delta * 0.0005f * k).coerceIn(0f, 0.5f); ui.mirrorSound(SoundParams.SWING, b) }
         }
         saveAt = android.os.SystemClock.uptimeMillis()
     }
@@ -112,7 +113,7 @@ class ChannelPage(ui: Ui) : Page(ui) {
             when (level) {
                 0 -> knob(0, "SWING", "${(p.swing * 200).roundToInt()}%")
                 1 -> knob(0, "SWING", "+${(p.groupSwing(ui.group) * 200).roundToInt()}%")
-                else -> l.drawText("Groove is set per group and for the master", 16f, 150f, label)
+                else -> { knob(0, "SWING", "+${(sp[ui.selectedIndex, SoundParams.SWING] * 200).roundToInt()}%"); l.drawText("Added to the master and group swing", 16f, 150f, label) }
             }
         }
     }
