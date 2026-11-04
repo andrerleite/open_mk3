@@ -25,6 +25,8 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         object SaveNew : Item("SAVE AS…  (name it)")
         class Rename(name: String) : Item("RENAME  \"$name\"")
         object New : Item("NEW EMPTY PROJECT")
+        class Collect(name: String) : Item("SAVE WITH SAMPLES  \"$name\"  (copies them into its folder)")
+        class SaveGroupSamples(letter: Char) : Item("SAVE GROUP $letter WITH SAMPLES…")
         object Export : Item("EXPORT AUDIO…  (loop or song as WAV)")
         class SaveGroup(letter: Char) : Item("SAVE GROUP $letter…  (kit + patterns)")
         class LoadGroup(val file: File, letter: Char) : Item("GROUP → $letter:  ${file.nameWithoutExtension}")
@@ -66,9 +68,11 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             if (cur != null) add(Item.Save(cur))
             add(Item.SaveNew)
             if (cur != null) add(Item.Rename(cur))
+            if (cur != null) add(Item.Collect(cur))
             add(Item.Export)
             add(Item.New)
             add(Item.SaveGroup(ui.groupLetter))
+            add(Item.SaveGroupSamples(ui.groupLetter))
             add(Item.SaveSound(ui.padLabel()))
             add(Item.RenameSound(ui.padLabel(), ui.soundName(ui.selectedIndex)))
             add(Item.RenameGroup(ui.groupName(ui.group)))
@@ -182,6 +186,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
     private var editing = false
     private var renaming = false
     private var savingGroup = false
+    private var groupSamples = false
     private var savingSound = false
     /** 1: naming the focused sound, 2: the focused group. */
     private var nameTarget = 0
@@ -253,9 +258,11 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             savingGroup = false
             editing = false
             message = try {
-                org.openmk3.core.audio.GroupFile.save(ui.engine, ui.group, Colours.group[ui.group], n)
-                "Group ${ui.groupLetter} saved as \"$n\""
+                val f = org.openmk3.core.audio.GroupFile.save(ui.engine, ui.group, Colours.group[ui.group], n)
+                if (groupSamples) { collectInto(f); "Group ${ui.groupLetter} saved as \"$n\": copying samples…" }
+                else "Group ${ui.groupLetter} saved as \"$n\""
             } catch (e: Exception) { "Can't save: ${e.message}" }
+            groupSamples = false
             refresh()
             return
         }
@@ -348,7 +355,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
                 "ENCODER PUSH" -> if (shift) { putGridChar(true); gridTyped = true } else finishEdit()
                 "D5" -> startEdit(Project.suggestName(ui.engine.bpm), renaming)
                 "D6" -> if (cursor < this.name.length) this.name.deleteCharAt(cursor) else backspace()
-                "D7" -> { editing = false; savingGroup = false; savingSound = false; nameTarget = 0; message = "Cancelled"; if (doneDirect()) return }
+                "D7" -> { editing = false; savingGroup = false; groupSamples = false; savingSound = false; nameTarget = 0; message = "Cancelled"; if (doneDirect()) return }
                 "D8" -> finishEdit()
                 "FILE" -> ui.showHome()
             }
@@ -379,6 +386,12 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
                 armed = -1
                 refresh()
             }
+            is Item.Collect -> {
+                val cur = Project.currentName(ui.ctx) ?: return
+                try { collectInto(Project.save(ui.ctx, ui.engine, Colours.group, ui.keys, cur)); message = "Saved \"$cur\": copying samples…" }
+                catch (e: Exception) { message = "Can't save: ${e.message}" }
+            }
+            is Item.SaveGroupSamples -> { savingGroup = true; groupSamples = true; startEdit("Kit ${ui.groupLetter} " + Project.suggestName(ui.engine.bpm).substringBefore(' '), false) }
             is Item.SaveGroup -> { savingGroup = true; startEdit("Kit ${ui.groupLetter} " + Project.suggestName(ui.engine.bpm).substringBefore(' '), false) }
             is Item.RenameSound -> { nameTarget = 1; startEdit(ui.soundName(ui.selectedIndex), false) }
             is Item.RenameGroup -> { nameTarget = 2; startEdit(org.openmk3.core.audio.Names.group[ui.group].ifEmpty { "Group ${ui.groupLetter}" }, false) }
@@ -389,6 +402,18 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             null -> {}
         }
         ui.invalidate()
+    }
+
+    /** Copies the samples [f] uses next to it (in the background) and reports. */
+    private fun collectInto(f: File) {
+        busy = true
+        worker.execute {
+            val msg = try {
+                val r = org.openmk3.core.audio.SampleCollector.collect(f)
+                "${r.copied} sample${if (r.copied == 1) "" else "s"} copied to \"${f.nameWithoutExtension} Samples\"" + if (r.missing > 0) " · ${r.missing} missing" else ""
+            } catch (e: Exception) { "Can't copy samples: ${e.message}" }
+            ui.post { busy = false; message = msg; ui.invalidate() }
+        }
     }
 
     private fun save(name: String) {
