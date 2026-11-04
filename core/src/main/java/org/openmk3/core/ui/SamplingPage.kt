@@ -167,7 +167,19 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     /** The edited sample: trimmed, reversed, normalised, faded. */
+    private var editedKey: List<Any?>? = null
+    private var editedCache: FloatArray? = null
+
+    /** The edited sample, rebuilt only when the take or an edit setting changes. */
     private fun edited(): FloatArray? {
+        val key = listOf(System.identityHashCode(take), trimStart, trimEnd, reverse, normalise, fadeInMs, fadeOutMs, takeFrames)
+        if (key == editedKey) return editedCache
+        editedCache = buildEdited()
+        editedKey = key
+        return editedCache
+    }
+
+    private fun buildEdited(): FloatArray? {
         val d = take ?: return null
         val len = trimEnd - trimStart
         if (len <= 0) return null
@@ -232,7 +244,20 @@ class SamplingPage(ui: Ui) : Page(ui) {
     // slicing
     // =====================================================================================
 
-    private fun computeSlices() {
+    private var slicesDirty = false
+    private var slicesAt = 0L
+    /** Marks the slices for recomputing (at most every 120 ms, so knob turns stay smooth). */
+    private fun computeSlices() { slicesDirty = true }
+    private fun ensureSlices(force: Boolean = false) {
+        if (!slicesDirty) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && now - slicesAt < 120) return
+        slicesAt = now
+        slicesDirty = false
+        computeSlicesNow()
+    }
+
+    private fun computeSlicesNow() {
         val len = trimEnd - trimStart
         if (take == null || len <= 0) { slices = IntArray(0); return }
         val raw = if (!sliceDetect) {
@@ -245,38 +270,70 @@ class SamplingPage(ui: Ui) : Page(ui) {
         }
     }
 
-    /** Transient detection on the edited region: energy jumps between 5 ms hops. */
+    /**
+     * Transient detection on the edited region. The attack edge of a hit is in its high
+     * frequencies, so the detector follows the energy of the signal's first difference in 5 ms
+     * hops, in dB. A hit is a local peak where that energy jumps above the level of the last
+     * ~20 ms by the threshold SENSITIVITY sets (100 %: 3 dB, 0 %: 15 dB) and that is no more than
+     * 50 dB below the loudest part. Hits are at least 50 ms apart; the 16 strongest are kept, in
+     * time order, each placed at the quiet point just before its attack.
+     */
     private fun detectOnsets(): IntArray {
         val d = edited() ?: return IntArray(0)
         val len = d.size / 2
         val hop = 240
         val hops = len / hop
-        if (hops < 2) return intArrayOf(0)
-        val e = FloatArray(hops)
+        if (hops < 4) return intArrayOf(0)
+        val lev = FloatArray(hops)
+        var prev = 0f
+        var top = -200f
         for (h in 0 until hops) {
             var acc = 0f
-            for (f in h * hop until (h + 1) * hop) { val m = (d[f * 2] + d[f * 2 + 1]) * 0.5f; acc += m * m }
-            e[h] = acc / hop
+            for (f in h * hop until (h + 1) * hop) {
+                val m = (d[f * 2] + d[f * 2 + 1]) * 0.5f
+                val diff = m - prev
+                prev = m
+                acc += diff * diff
+            }
+            lev[h] = 10f * kotlin.math.log10(acc / hop + 1e-12f)
+            top = max(top, lev[h])
         }
-        val factor = 1.5f + (1f - sensitivity) * 10f
-        val floor = 1e-5f + (1f - sensitivity) * 2e-4f
+        val thr = 3f + (1f - sensitivity) * 12f
+        val floor = top - 50f
+        val rise = FloatArray(hops)
+        for (h in 1 until hops) {
+            var ref = lev[h - 1]
+            for (k in 2..4) if (h - k >= 0) ref = max(ref, lev[h - k])
+            rise[h] = lev[h] - ref
+        }
+        val hits = ArrayList<Pair<Int, Float>>()
+        var last = -100
+        for (h in 1 until hops - 1) {
+            if (rise[h] < thr || lev[h] < floor) continue
+            if (rise[h] < rise[h - 1] || rise[h] < rise[h + 1]) continue  // the steepest point of the rise
+            if (h - last < 10) {  // within 50 ms: keep the stronger one
+                if (hits.isNotEmpty() && rise[h] > hits.last().second) { hits[hits.size - 1] = h to rise[h]; last = h }
+                continue
+            }
+            hits.add(h to rise[h])
+            last = h
+        }
+        // the 16 strongest (the start of the sample counts as one), back in time order
+        val kept = hits.sortedByDescending { it.second }.take(15).map { it.first }.sorted()
         val out = ArrayList<Int>()
         out.add(0)
-        var last = 0
-        for (h in 4 until hops) {
-            var mean = 0f
-            for (k in h - 4 until h) mean += e[k]
-            mean /= 4f
-            if (e[h] > floor && e[h] > mean * factor && h - last >= 12) { // at least 60 ms apart
-                out.add(max(0, h * hop - hop / 2))
-                last = h
-                if (out.size >= 16) break
-            }
+        for (h in kept) {
+            // back up to the quietest hop just before the attack
+            var b = h
+            for (k in 1..3) if (h - k >= 0 && lev[h - k] < lev[b]) b = h - k
+            val pos = b * hop
+            if (pos - out.last() >= 2400) out.add(pos)
         }
         return out.toIntArray()
     }
 
     private fun sliceData(i: Int): FloatArray? {
+        ensureSlices(force = true)
         val d = edited() ?: return null
         val len = d.size / 2
         if (i >= slices.size) return null
@@ -291,6 +348,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     private fun applySlices() {
+        ensureSlices(force = true)
         val count = min(slices.size, 16)
         if (count == 0) { message = "No slices"; return }
         val parts = (0 until count).mapNotNull { i -> sliceData(i)?.let { i to it } }
@@ -376,6 +434,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     // =====================================================================================
 
     override fun tick(now: Long): Boolean {
+        if (slicesDirty) { ensureSlices(); if (!slicesDirty) ui.invalidate() }
         val pi = n.nativeRecTakePeak(SRC_INPUT)
         val pp = n.nativeRecTakePeak(SRC_PHONE)
         meterIn = max(pi, meterIn * 0.85f)

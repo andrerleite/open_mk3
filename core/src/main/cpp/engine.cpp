@@ -523,7 +523,8 @@ public:
     std::atomic<bool> recorded{false};   // set when the engine wrote into the pattern (Kotlin syncs)
 private:
     void killSlot(int slot);
-    int fxResetChunks = 0;
+    int fxResetChunks = 0;   // > 0: a reset sweep starts after this many chunks
+    int fxResetPos = -1;     // next chain * kFxSlots + slot the sweep resets (-1 = none)
     int64_t framesDone = 0;  // frames rendered so far (absolute time for duplicate checks)
     void renderChunk(float* out, int32_t frames);
     void freeSynth(Voice& v) {
@@ -805,7 +806,7 @@ void Engine::releaseSlot(int slot, int note) {
 void Engine::killSlot(int slot) {
     for (auto& v : voices)
         if (v.sample && (slot < 0 || v.slot == slot) && v.fadeOut < 0) v.fadeOut = kFadeOut;
-    if (slot < 0) fxResetChunks = 3;  // everything off: effect tails too (after the fade-outs)
+    if (slot < 0) fxResetChunks = 2;  // everything off: effect tails too (after the fade-outs)
     for (auto& pi : polyInst)
         if (pi.slot >= 0 && (slot < 0 || pi.slot == slot)) { pi.push({0, 2, 0, 0.f}); pi.notes = 0; }
 }
@@ -1560,9 +1561,21 @@ void Engine::renderChunk(float* out, int32_t frames) {
     runRepeat(frames);
     runSequencer(frames);
 
-    if (fxResetChunks > 0) {
-        fxResetChunks--;
-        for (auto& chain : fxCur) for (auto* e : chain) if (e) e->reset();
+    // everything off: effect tails are cleared too, a couple of effects per chunk (clearing
+    // every delay line at once stalled the audio thread); chains already silent are skipped
+    if (fxResetChunks > 0 && --fxResetChunks == 0) fxResetPos = 0;
+    if (fxResetPos >= 0) {
+        int budget = 2;
+        while (fxResetPos < kChains * kFxSlots && budget > 0) {
+            const int c = fxResetPos / kFxSlots, k = fxResetPos % kFxSlots;
+            fxResetPos++;
+            openmk3::Effect* e = fxCur[c][k];
+            if (!e || chainAsleep(c)) continue;
+            e->reset();
+            budget--;
+            if (k == kFxSlots - 1) chainQuiet[c] = kChainSleep + 1;  // cleared: asleep until sound comes
+        }
+        if (fxResetPos >= kChains * kFxSlots) fxResetPos = -1;
     }
     const int64_t tVoices = nowNanos();
     // 3. voices -> sound buses (sounds with effects) or group buses
