@@ -770,11 +770,22 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         return true
     }
 
+    // samples found elsewhere / missing while loading: one message once loading has settled
+    private var locSeen = 0
+    private var locAt = 0L
+    private fun locatorTick(now: Long) {
+        val n = org.openmk3.core.audio.SampleLocator.relocated + org.openmk3.core.audio.SampleLocator.missing
+        if (n == 0) return
+        if (n != locSeen) { locSeen = n; locAt = now; return }
+        if (now - locAt > 1500) { org.openmk3.core.audio.SampleLocator.takeReport()?.let { toast(it) }; locSeen = 0 }
+    }
+
     private fun frame() {
         try {
             val now = SystemClock.uptimeMillis()
             if (page.tick(now)) dirty = true
             if (lock.tick(now)) dirty = true
+            locatorTick(now)
             engine.pattern.songTick(engine.playing)
             engine.pollHeld(selectedIndex)
             recordTick(now)

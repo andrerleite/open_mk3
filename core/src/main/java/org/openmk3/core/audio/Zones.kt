@@ -175,7 +175,7 @@ class Zones(private val native: NativeEngine) {
             for (i in 0 until minOf(MAX, zs.length())) {
                 val q = zs.getJSONObject(i)
                 val path = q.getString("path")
-                val sample = try { WavDecoder.decode(File(path)) } catch (e: Exception) { AppLog.i("Zone missing: $path"); continue }
+                val sample = try { SampleLocator.decode(path) } catch (e: Exception) { AppLog.i("Zone missing: $path"); continue }
                 z[s].add(Zone(sample, q.optInt("root", 60), q.optInt("lo", 0), q.optInt("hi", 127), q.optInt("vlo", 1), q.optInt("vhi", 127)).also { it.readSettings(q) })
             }
             push(s)

@@ -224,7 +224,7 @@ class Mk3Service : Service() {
         for ((slot, path) in paths.withIndex()) {
             if (path == null) continue
             try {
-                e.setSample(slot, org.openmk3.core.audio.WavDecoder.decode(java.io.File(path)))
+                e.setSample(slot, org.openmk3.core.audio.SampleLocator.decode(path))
                 loaded++
             } catch (ex: Exception) {
                 AppLog.i("Kit: pad ${slot + 1} could not load $path: ${ex.message}")

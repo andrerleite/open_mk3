@@ -59,6 +59,7 @@ object GroupFile {
     fun load(e: AudioEngine, g: Int, f: File, onSample: (Int, Sample) -> Unit): Int? {
         val j = try { JSONObject(f.readText()) } catch (ex: Exception) { AppLog.i("Group: can't read ${f.name}: ${ex.message}"); return null }
         val p = e.pattern
+        SampleLocator.reset()
         val sounds = j.optJSONArray("sounds") ?: return null
         for (k in 0 until minOf(16, sounds.length())) loadSound(e, g * 16 + k, sounds.getJSONObject(k), onSample)
         loadFx(e, FxParams.GROUP0 + g, j.optJSONArray("groupFx"))
@@ -113,7 +114,7 @@ object GroupFile {
     private fun loadSound(e: AudioEngine, s: Int, o: JSONObject, onSample: (Int, Sample) -> Unit) {
         run {
             val path = if (o.isNull("sample")) null else o.optString("sample")
-            val sample = if (path == null) e.builtIn[s] else try { WavDecoder.decode(File(path)) } catch (ex: Exception) {
+            val sample = if (path == null) e.builtIn[s] else try { SampleLocator.decode(path) } catch (ex: Exception) {
                 AppLog.i("Group: missing $path"); e.builtIn[s]
             }
             onSample(s, sample)
@@ -128,7 +129,7 @@ object GroupFile {
             o.optJSONArray("zones")?.let { zs ->
                 for (i in 0 until zs.length()) {
                     val q = zs.getJSONObject(i)
-                    val zsmp = try { WavDecoder.decode(File(q.getString("path"))) } catch (ex: Exception) { continue }
+                    val zsmp = try { SampleLocator.decode(q.getString("path")) } catch (ex: Exception) { continue }
                     val idx = e.zones.add(s, zsmp, q.optInt("root", 60))
                     if (idx >= 0) e.zones.update(s, idx) { z ->
                         z.lo = q.optInt("lo", 0); z.hi = q.optInt("hi", 127); z.vlo = q.optInt("vlo", 1); z.vhi = q.optInt("vhi", 127); z.readSettings(q)

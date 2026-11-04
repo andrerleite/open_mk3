@@ -95,6 +95,7 @@ object Project {
      */
     fun load(ctx: Context, e: AudioEngine, colours: IntArray, keys: Keys, f: File, onSample: (Int, Sample) -> Unit): String? {
         val j = try { JSONObject(f.readText()) } catch (ex: Exception) { return "Can't read ${f.name}: ${ex.message}" }
+        SampleLocator.reset()   // files may have moved since the last search
         e.pattern.loadJson(j.getJSONObject("song"))
         j.optJSONArray("params")?.let { a ->
             for (s in 0 until minOf(Pattern.SOUNDS, a.length())) {
@@ -128,7 +129,7 @@ object Project {
         for (s in 0 until Pattern.SOUNDS) {
             val path = kit?.let { if (s < it.length() && !it.isNull(s)) it.getString(s) else null }
             val sample = if (path == null) e.builtIn[s] else try {
-                WavDecoder.decode(File(path))
+                SampleLocator.decode(path)
             } catch (ex: Exception) {
                 AppLog.i("Project: ${soundLabel(s)} missing $path"); e.builtIn[s]
             }
