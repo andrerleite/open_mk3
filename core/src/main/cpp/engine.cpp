@@ -373,7 +373,7 @@ struct CutLog {
 };
 static CutLog gCuts;
 
-static void recOnBar(int delay);
+static void recOnBar(int off, int latency, int64_t step);
 
 /** A zone's mapping and settings before anything is set: full sample, as the sound. */
 static void zoneDefaults(float* m) {
@@ -716,7 +716,9 @@ Engine gEngine;
 class Recorder {
 public:
     enum { IDLE = 0, ARMED = 1, RECORDING = 2, SYNC = 3 };
-    enum { SRC_INPUT = 0, SRC_PHONE = 1 };
+    enum { SRC_INPUT = 0, SRC_PHONE = 1, SRC_MASTER = 2 };  // MASTER: our own output (resampling, export)
+    std::atomic<bool> fromStart{false};  // SYNC: wait for step 1 of the loop / song (export)
+    std::atomic<float> peakMaster{0.f};
     std::atomic<int> state{IDLE};
     std::atomic<int> source{SRC_INPUT};
     std::atomic<int> frames{0};
@@ -746,10 +748,11 @@ public:
     }
 
     /** SYNC: records exactly [len] frames from the next bar the sequencer plays. */
-    void armSync(int src, int len) {
+    void armSync(int src, int len, bool waitForStart = false) {
+        fromStart.store(waitForStart);
         quiesce();
         source.store(src);
-        maxFrames = std::clamp(len, 480, 120 * kSampleRate);
+        maxFrames = std::clamp(len, 480, 180 * kSampleRate);
         buf.assign(size_t(maxFrames) * 2, 0.f);
         frames.store(0);
         skip.store(0);
@@ -757,8 +760,12 @@ public:
     }
 
     /** Sequencer (audio thread): a bar starts [delay] frames from now, as the input will hear it. */
-    void onBar(int delay) {
+    void onBar(int off, int latency, int64_t step) {
+        if (state.load(std::memory_order_relaxed) != SYNC) return;
+        if (fromStart.load(std::memory_order_relaxed) && step != 0) return;
         int s = SYNC;
+        // our own output arrives in the same callback (exact); an input lags by the latency
+        const int delay = source.load(std::memory_order_relaxed) == SRC_MASTER ? off : off + latency;
         skip.store(std::max(0, delay), std::memory_order_relaxed);
         state.compare_exchange_strong(s, RECORDING, std::memory_order_acq_rel);
     }
@@ -767,7 +774,7 @@ public:
 
     /** Audio-thread safe: no allocation, no locks. */
     void feed(const float* st, int n, int src) {
-        std::atomic<float>& pk = src == SRC_INPUT ? peakInput : peakPhone;
+        std::atomic<float>& pk = src == SRC_INPUT ? peakInput : src == SRC_PHONE ? peakPhone : peakMaster;
         float peak = pk.load(std::memory_order_relaxed);
         for (int i = 0; i < n * 2; i++) {
             float a = std::fabs(st[i]);
@@ -805,7 +812,7 @@ public:
 };
 
 Recorder gRec;
-static void recOnBar(int delay) { gRec.onBar(delay); }
+static void recOnBar(int off, int latency, int64_t step) { gRec.onBar(off, latency, step); }
 
 
 aaudio_data_callback_result_t dataCallback(AAudioStream*, void* user, void* audio, int32_t frames) {
@@ -1235,7 +1242,7 @@ void Engine::runSequencer(int frames) {
         if (n < 0) { nextStep = n + 1; continue; }  // counting in
         if (n == 0) p[OFF_COUNTING] = 0.f;
         p[OFF_NOW] = float(n);
-        if (n % 16 == 0) recOnBar(int(off) + 2 * bufferFrames.load(std::memory_order_relaxed));
+        if (n % 16 == 0) recOnBar(int(off), 2 * bufferFrames.load(std::memory_order_relaxed), n);
         // song sections: every queued pattern starts together at this step
         const bool switchAll = p[OFF_SWITCHAT] >= 0.f && int64_t(p[OFF_SWITCHAT]) <= n;
         if (switchAll) p[OFF_SWITCHAT] = -1.f;
@@ -2273,6 +2280,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         if (a > peak) peak = a;
     }
     meterAcc = peak;
+    gRec.feed(out, frames, Recorder::SRC_MASTER);  // resampling / export: the master as heard
     gMonitor.mix(out, frames);  // phone playback, after the master (its own level)
     meterFrames += frames;
     if (meterFrames >= kSampleRate / 10) {
@@ -3144,11 +3152,15 @@ JNIEXPORT void JNICALL JNI_FN(nativeRecArm)(JNIEnv*, jobject, jint source, jbool
 JNIEXPORT void JNICALL JNI_FN(nativeRecArmSync)(JNIEnv*, jobject, jint source, jint frames) {
     gRec.armSync(source, frames);
 }
+/** Export: records [frames] of the master from step 1 of the loop / song (restart the transport after). */
+JNIEXPORT void JNICALL JNI_FN(nativeRecArmExport)(JNIEnv*, jobject, jint frames) {
+    gRec.armSync(Recorder::SRC_MASTER, frames, true);
+}
 JNIEXPORT void JNICALL JNI_FN(nativeRecStop)(JNIEnv*, jobject) { gRec.stop(); }
 JNIEXPORT jint JNICALL JNI_FN(nativeRecState)(JNIEnv*, jobject) { return gRec.state.load(); }
 JNIEXPORT jint JNICALL JNI_FN(nativeRecFrames)(JNIEnv*, jobject) { return gRec.frames.load(); }
 JNIEXPORT jfloat JNICALL JNI_FN(nativeRecTakePeak)(JNIEnv*, jobject, jint source) {
-    return (source == Recorder::SRC_INPUT ? gRec.peakInput : gRec.peakPhone).exchange(0.f);
+    return (source == Recorder::SRC_INPUT ? gRec.peakInput : source == Recorder::SRC_PHONE ? gRec.peakPhone : gRec.peakMaster).exchange(0.f);
 }
 /** Copies the recorded frames (stereo interleaved); call after stopping. */
 JNIEXPORT jfloatArray JNICALL JNI_FN(nativeRecTake)(JNIEnv* env, jobject) {

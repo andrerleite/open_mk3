@@ -23,6 +23,7 @@ class FilePage(ui: Ui) : Page(ui) {
         object SaveNew : Item("SAVE AS…  (name it)")
         class Rename(name: String) : Item("RENAME  \"$name\"")
         object New : Item("NEW EMPTY PROJECT")
+        object Export : Item("EXPORT AUDIO…  (loop or song as WAV)")
         class Load(val file: File) : Item(file.nameWithoutExtension)
     }
 
@@ -53,11 +54,110 @@ class FilePage(ui: Ui) : Page(ui) {
             if (cur != null) add(Item.Save(cur))
             add(Item.SaveNew)
             if (cur != null) add(Item.Rename(cur))
+            add(Item.Export)
             add(Item.New)
             Project.list().forEach { add(Item.Load(it)) }
         }
         sel = sel.coerceIn(0, items.size - 1)
         ui.invalidate()
+    }
+
+    // ---- audio export: the loop or the song, played once from the top and recorded from the master ----
+    private var exporting = false
+    private var exportState = 0       // 0 setup, 1 recording, 2 saving
+    private var exportSong = false
+    private var exportLoops = 1
+    private var exportFrames = 0
+    private val LOOPS = listOf(1, 2, 4, 8)
+
+    /** Steps of one pass: the song (song mode) or the longest pattern playing. */
+    private fun exportSteps(): Int {
+        val p = ui.engine.pattern
+        if (exportSong && p.songMode && p.song.isNotEmpty()) return p.song.sumOf { p.sceneLength(it) }
+        var len = 16
+        for (g in 0 until 8) if (!p.groupEmpty(g)) len = maxOf(len, p.length(g))
+        return len
+    }
+
+    private fun exportSeconds(): Double = exportSteps() * (if (exportSong) 1 else exportLoops) * 60.0 / ui.engine.bpm / 4.0
+
+    private fun startExport() {
+        val secs = exportSeconds()
+        if (secs > 180) { message = "Can't export more than 3 minutes at once"; return }
+        exportFrames = (secs * org.openmk3.core.audio.AudioEngine.SR).toInt()
+        val n = org.openmk3.core.audio.NativeEngine
+        n.nativeRecArmExport(exportFrames)
+        val e = ui.engine
+        if (e.pattern.songMode) e.pattern.songRestart()
+        if (e.playing) e.transportRestart() else e.transportPlay()
+        exportState = 1
+        message = ""
+        AppLog.i("Export: ${if (exportSong) "song" else "loop ×$exportLoops"}, ${"%.1f".format(secs)} s")
+    }
+
+    override fun tick(now: Long): Boolean {
+        if (!exporting || exportState != 1) return false
+        val n = org.openmk3.core.audio.NativeEngine
+        if (n.nativeRecState() == 0) {  // done
+            exportState = 2
+            val data = n.nativeRecTake()
+            ui.engine.transportStop()
+            val base = (Project.currentName(ui.ctx) ?: "Open MK3") + if (exportSong) " song" else " loop"
+            worker.execute {
+                val msg = try {
+                    val dir = java.io.File(Project.dir.parentFile, "Exports").apply { mkdirs() }
+                    var i = 1
+                    var f: java.io.File
+                    do { f = java.io.File(dir, "%s %03d.wav".format(base, i++)) } while (f.exists())
+                    org.openmk3.core.audio.WavWriter.write(f, data, 2)
+                    AppLog.i("Export: saved ${f.absolutePath}")
+                    "Saved Exports/${f.name}"
+                } catch (e: Exception) { "Can't save: ${e.message}" }
+                ui.post { exportState = 0; exporting = false; message = msg; refresh() }
+            }
+        }
+        return true
+    }
+
+    private var expAcc = IntArray(2)
+    private fun exportKnob(knob: Int, delta: Int) {
+        if (exportState != 0 || knob > 1) return
+        expAcc[knob] += delta
+        if (kotlin.math.abs(expAcc[knob]) < 25) return
+        val d = if (expAcc[knob] > 0) 1 else -1
+        expAcc[knob] = 0
+        if (knob == 0) exportSong = d > 0
+        else exportLoops = LOOPS[(LOOPS.indexOf(exportLoops) + d).coerceIn(0, LOOPS.size - 1)]
+        ui.invalidate()
+    }
+
+    private fun drawExport(l: Canvas, r: Canvas) {
+        l.drawText("EXPORT AUDIO", 16f, 30f, title)
+        val p = ui.engine.pattern
+        val songOk = p.songMode && p.song.isNotEmpty()
+        l.drawText(if (exportSong) (if (songOk) "The song, from section 1" else "Song mode is off: the loop instead") else "The loop playing, $exportLoops time${if (exportLoops > 1) "s" else ""}", 16f, 70f, row)
+        l.drawText("%.1f s · 48 kHz · 24-bit · stereo".format(exportSeconds()), 16f, 98f, label)
+        when (exportState) {
+            1 -> {
+                val done = org.openmk3.core.audio.NativeEngine.nativeRecFrames().toFloat() / exportFrames.coerceAtLeast(1)
+                l.drawText("● Recording the master… ${(done * 100).toInt()}%", 16f, 140f, warn)
+                l.drawRect(16f, 156f, 464f, 166f, selFill)
+                l.drawRect(16f, 156f, 16f + 448f * done.coerceIn(0f, 1f), 166f, Theme.fill(Theme.OK))
+            }
+            2 -> l.drawText("Saving…", 16f, 140f, ok)
+            else -> {
+                l.drawText("It plays from the top and is recorded as you hear it", 16f, 140f, label)
+                l.drawText("(the master, after its effects)", 16f, 160f, label)
+            }
+        }
+        val kn = Theme.text(13f, Theme.DIM, align = Paint.Align.CENTER)
+        val kv = Theme.text(16f, Theme.FG, bold = true, align = Paint.Align.CENTER)
+        l.drawText("WHAT", 60f, 238f, kn); l.drawText(if (exportSong) "SONG" else "LOOP", 60f, 260f, kv)
+        l.drawText("LOOPS", 180f, 238f, kn); l.drawText(if (exportSong) "—" else "$exportLoops", 180f, 260f, kv)
+        r.drawText("CANCEL", 300f, 24f, dLabel)
+        r.drawText(if (exportState == 0) "START" else "…", 420f, 24f, dLabel)
+        r.drawText("Saved in Download/…/Exports", 16f, 70f, label)
+        if (message.isNotEmpty()) r.drawText(message.take(44), 16f, 220f, if (message.startsWith("Can't")) warn else ok)
     }
 
     // ---- the name editor ----
@@ -105,6 +205,7 @@ class FilePage(ui: Ui) : Page(ui) {
     }
 
     override fun onKnob(knob: Int, delta: Int) {
+        if (exporting) { exportKnob(knob, delta); return }
         if (!editing || knob > 1) return
         knobAcc[knob] += delta
         if (kotlin.math.abs(knobAcc[knob]) < 12) return
@@ -116,6 +217,7 @@ class FilePage(ui: Ui) : Page(ui) {
 
     override fun lights(l: Lights) {
         l.set("FILE", true)
+        if (exporting) { l.set("D7"); l.set("D8", exportState == 1); return }
         if (editing) { l.set("D5", "D6", "D7"); l.set("D8", true); l.set("SHIFT", shift); l.set("PAGE LEFT", "PAGE RIGHT"); return }
         l.set("D8", armed >= 0)
         l.set("PAGE LEFT", "PAGE RIGHT")
@@ -134,6 +236,17 @@ class FilePage(ui: Ui) : Page(ui) {
     override fun onButton(name: String?, bit: Int, down: Boolean) {
         if (name == "SHIFT") { shift = down; return }
         if (!down) return
+        if (exporting) {
+            when (name) {
+                "D7" -> if (exportState == 1) {
+                    org.openmk3.core.audio.NativeEngine.nativeRecStop(); ui.engine.transportStop(); exportState = 0; message = "Export cancelled"
+                } else if (exportState == 0) exporting = false
+                "D8", "ENCODER PUSH" -> if (exportState == 0) startExport()
+                "FILE" -> if (exportState == 0) ui.showHome()
+            }
+            ui.invalidate()
+            return
+        }
         if (editing) {
             when (name) {
                 "PAGE LEFT", "ENCODER LEFT" -> moveCursor(-1)
@@ -163,6 +276,7 @@ class FilePage(ui: Ui) : Page(ui) {
         if (busy) return
         when (val it = items.getOrNull(sel)) {
             is Item.Save -> save(Project.currentName(ui.ctx) ?: Project.nextName())
+            Item.Export -> { exporting = true; exportState = 0; message = "" }
             Item.SaveNew -> startEdit(Project.suggestName(ui.engine.bpm), false)
             is Item.Rename -> startEdit(Project.currentName(ui.ctx) ?: "", true)
             Item.New -> if (armed != sel) { armed = sel; message = "Push again: unsaved changes are lost" } else {
@@ -234,6 +348,7 @@ class FilePage(ui: Ui) : Page(ui) {
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
         if (editing) { drawEditor(l, r, now); return }
+        if (exporting) { drawExport(l, r); return }
         l.drawText("FILE", 16f, 30f, title)
         l.drawText(Project.currentName(ui.ctx)?.let { "Project: $it" } ?: "Unsaved project", 90f, 29f, label)
         for (i in 0 until 8) {

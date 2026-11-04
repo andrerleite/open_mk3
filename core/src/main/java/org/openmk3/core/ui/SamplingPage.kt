@@ -52,6 +52,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
     private companion object {
         const val SRC_INPUT = 0
         const val SRC_PHONE = 1
+        const val SRC_MASTER = 2   // resampling: Open MK3's own output
         const val IDLE = 0
         const val ARMED = 1
         const val RECORDING = 2
@@ -97,6 +98,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
     private var state = IDLE
     private var meterIn = 0f
     private var meterPhone = 0f
+    private var meterMaster = 0f
     private var shift = false
     private var message = ""
     private var knobAcc = 0
@@ -397,7 +399,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
             state = if (startMode == MODE_THRESHOLD) ARMED else RECORDING
         }
         message = ""
-        AppLog.i("Sampling: armed (${if (source == SRC_PHONE) "phone" else "input"}, ${when (startMode) { MODE_THRESHOLD -> "threshold ${"%.2f".format(threshold)}"; MODE_SYNC -> "sync ${syncText()}"; else -> "manual" }}, max $maxSeconds s)")
+        AppLog.i("Sampling: armed (${listOf("input", "phone", "master (resampling)")[source]}, ${when (startMode) { MODE_THRESHOLD -> "threshold ${"%.2f".format(threshold)}"; MODE_SYNC -> "sync ${syncText()}"; else -> "manual" }}, max $maxSeconds s)")
     }
 
     private fun finish() {
@@ -728,6 +730,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
         val pp = n.nativeRecTakePeak(SRC_PHONE)
         meterIn = max(pi, meterIn * 0.85f)
         meterPhone = max(pp, meterPhone * 0.85f)
+        meterMaster = max(n.nativeRecTakePeak(SRC_MASTER), meterMaster * 0.85f)
         if (state != IDLE) {
             val s = n.nativeRecState()
             if (s == IDLE) finish()      // reached the maximum length
@@ -780,7 +783,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
         when (tab) {
             Tab.RECORD -> when (name) {
                 "D5" -> if (state == IDLE) {
-                    source = 1 - source
+                    source = (source + 1) % 3
                     message = if (source == SRC_PHONE && !phoneActive) {
                         Mk3Service.instance?.requestPhoneCapture()
                         "Allow phone audio: see the phone (notification or app button)"
@@ -850,7 +853,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
         l.set("D4")
         when (tab) {
             Tab.RECORD -> {
-                l.set("D5", source == SRC_PHONE)
+                l.set("D5", source != SRC_INPUT)
                 l.set("D6", startMode != MODE_MANUAL)
                 l.set("D8", state != IDLE)
             }
@@ -1075,10 +1078,10 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
     private fun syncText() = SYNC_BARS[syncIdx].let { if (it == 0) "FREE" else if (it == 1) "1 BAR" else "$it BARS" }
 
     private fun drawRecord(l: Canvas, r: Canvas) {
-        dButton(r, 4, "SOURCE", if (source == SRC_PHONE) "PHONE" else "INPUT")
+        dButton(r, 4, "SOURCE", listOf("INPUT", "PHONE", "MASTER")[source])
         dButton(r, 5, "START", when (startMode) { MODE_THRESHOLD -> "THRESHOLD"; MODE_SYNC -> "SYNC"; else -> "MANUAL" })
         dButton(r, 7, "RECORD", if (state == IDLE) "START" else "STOP", state != IDLE)
-        l.drawText(if (source == SRC_PHONE) "Phone playback" else "Controller inputs", 16f, 70f, value)
+        l.drawText(listOf("Controller inputs", "Phone playback", "Resampling: Open MK3's own output")[source], 16f, 70f, value)
         val st = when (state) {
             ARMED -> "WAITING FOR SIGNAL"
             SYNCED -> if (ui.engine.playing) "WAITING FOR NEXT BAR" else "PRESS PLAY TO START"
@@ -1090,6 +1093,7 @@ class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
         meter(l, 140f, meterIn, startMode == MODE_THRESHOLD && source == SRC_INPUT)
         l.drawText(if (phoneActive) "PHONE" else "PHONE (not allowed yet: confirm on the phone)", 16f, 172f, label)
         meter(l, 178f, meterPhone, startMode == MODE_THRESHOLD && source == SRC_PHONE)
+        if (source == SRC_MASTER) { l.drawText("MASTER", 330f, 134f, label); meter(l, 196f, meterMaster, startMode == MODE_THRESHOLD) }
         knob(l, 0, "THRESHOLD", "${(threshold * 100).toInt()}%")
         if (startMode == MODE_SYNC) knob(l, 1, "LENGTH", syncText())
         else knob(l, 1, "MAX LENGTH", "$maxSeconds s")

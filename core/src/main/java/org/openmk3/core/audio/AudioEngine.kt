@@ -94,6 +94,8 @@ object NativeEngine {
     external fun nativeRecArm(source: Int, threshold: Boolean, thr: Float, seconds: Int)
     /** Records exactly [frames] frames, starting with the next bar the sequencer plays. */
     external fun nativeRecArmSync(source: Int, frames: Int)
+    /** Export: records [frames] of the master from step 1 of the loop / song. */
+    external fun nativeRecArmExport(frames: Int)
     external fun nativeRecStop()
     external fun nativeRecState(): Int
     external fun nativeRecFrames(): Int
