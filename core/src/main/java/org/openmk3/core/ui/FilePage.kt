@@ -60,7 +60,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         if (directName == 4) { nameTarget = 4; startEdit(ui.engine.pattern.let { p -> p.sceneNames[p.currentScene].ifEmpty { "Scene ${p.currentScene + 1}" } }, false) }
     }
 
-    override fun onExit() { worker.shutdown() }
+    override fun onExit() { restoreSolo(); worker.shutdown() }
 
     private fun refresh() {
         val cur = Project.currentName(ui.ctx)
@@ -91,6 +91,15 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
     private var exportLoops = 1
     private var exportFrames = 0
     private val LOOPS = listOf(1, 2, 4, 8)
+    /** K3 STEMS: one file per group (each played solo in turn) instead of the mix. */
+    private var exportStems = false
+    private var stemQueue = listOf<Int>()
+    private var stemIdx = 0
+    private var savedSolo: BooleanArray? = null
+    private var stemDir: java.io.File? = null
+
+    private fun soloOnly(g: Int) { val p = ui.engine.pattern; for (i in 0 until 8) p.groupSolo[i] = i == g }
+    private fun restoreSolo() { savedSolo?.let { s -> for (i in 0 until 8) ui.engine.pattern.groupSolo[i] = s[i] }; savedSolo = null }
 
     /** Steps of one pass: the song (song mode) or the longest pattern playing. */
     private fun exportSteps(): Int {
@@ -107,6 +116,20 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         val secs = exportSeconds()
         if (secs > 180) { message = "Can't export more than 3 minutes at once"; return }
         exportFrames = (secs * org.openmk3.core.audio.AudioEngine.SR).toInt()
+        if (exportStems) {
+            val p = ui.engine.pattern
+            stemQueue = (0 until 8).filter { !p.groupEmpty(it) }
+            if (stemQueue.isEmpty()) { message = "No group has notes"; return }
+            stemIdx = 0
+            savedSolo = BooleanArray(8) { p.groupSolo[it] }
+            soloOnly(stemQueue[0])
+            stemDir = null
+        }
+        runPass()
+    }
+
+    /** One recording pass (the mix, or the current stem). */
+    private fun runPass() {
         val n = org.openmk3.core.audio.NativeEngine
         n.nativeRecArmExport(exportFrames)
         val e = ui.engine
@@ -114,7 +137,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         if (e.playing) e.transportRestart() else e.transportPlay()
         exportState = 1
         message = ""
-        AppLog.i("Export: ${if (exportSong) "song" else "loop ×$exportLoops"}, ${"%.1f".format(secs)} s")
+        AppLog.i("Export: ${if (exportSong) "song" else "loop ×$exportLoops"}" + if (exportStems) " stem ${'A' + stemQueue[stemIdx]}" else "")
     }
 
     override fun tick(now: Long): Boolean {
@@ -125,6 +148,32 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
             val data = n.nativeRecTake()
             ui.engine.transportStop()
             val base = (Project.currentName(ui.ctx) ?: "Open MK3") + if (exportSong) " song" else " loop"
+            if (exportStems) {
+                val g = stemQueue[stemIdx]
+                val gname = ui.groupName(g)
+                if (stemDir == null) {
+                    val ex = java.io.File(Project.dir.parentFile, "Exports")
+                    var i = 1
+                    var d: java.io.File
+                    do { d = java.io.File(ex, "%s stems %03d".format(base, i++)) } while (d.exists())
+                    stemDir = d.apply { mkdirs() }
+                }
+                val dir = stemDir!!
+                val last = stemIdx == stemQueue.size - 1
+                worker.execute {
+                    val err = try {
+                        org.openmk3.core.audio.WavWriter.write(java.io.File(dir, "%s %c %s.wav".format(base, 'A' + g, Project.clean(gname))), data, 2); null
+                    } catch (e: Exception) { "Can't save: ${e.message}" }
+                    ui.post {
+                        if (err != null || last) {
+                            restoreSolo(); exportState = 0; exporting = false
+                            message = err ?: "Saved ${stemQueue.size} stems in Exports/${dir.name}"
+                            AppLog.i("Export: $message"); refresh()
+                        } else { stemIdx++; soloOnly(stemQueue[stemIdx]); runPass() }
+                    }
+                }
+                return true
+            }
             worker.execute {
                 val msg = try {
                     val dir = java.io.File(Project.dir.parentFile, "Exports").apply { mkdirs() }
@@ -143,12 +192,13 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
 
     private var expAcc = IntArray(2)
     private fun exportKnob(knob: Int, delta: Int) {
-        if (exportState != 0 || knob > 1) return
+        if (exportState != 0 || knob > 2) return
         expAcc[knob] += delta
         if (kotlin.math.abs(expAcc[knob]) < 25) return
         val d = if (expAcc[knob] > 0) 1 else -1
         expAcc[knob] = 0
         if (knob == 0) exportSong = d > 0
+        else if (knob == 2) exportStems = d > 0
         else exportLoops = LOOPS[(LOOPS.indexOf(exportLoops) + d).coerceIn(0, LOOPS.size - 1)]
         ui.invalidate()
     }
@@ -176,6 +226,8 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         val kv = Theme.text(16f, Theme.FG, bold = true, align = Paint.Align.CENTER)
         l.drawText("WHAT", 60f, 238f, kn); l.drawText(if (exportSong) "SONG" else "LOOP", 60f, 260f, kv)
         l.drawText("LOOPS", 180f, 238f, kn); l.drawText(if (exportSong) "—" else "$exportLoops", 180f, 260f, kv)
+        l.drawText("STEMS", 300f, 238f, kn); l.drawText(if (exportStems) "GROUPS" else "OFF", 300f, 260f, kv)
+        if (exportStems) l.drawText("One file per group with notes (each solo in turn, ${if (exportState == 1) "now ${'A' + stemQueue.getOrElse(stemIdx) { 0 }}" else "the master effects on each"})", 16f, 120f, label)
         r.drawText("CANCEL", 300f, 24f, dLabel)
         r.drawText(if (exportState == 0) "START" else "…", 420f, 24f, dLabel)
         r.drawText("Saved in Download/…/Exports", 16f, 70f, label)
@@ -335,7 +387,7 @@ class FilePage(ui: Ui, private val directName: Int = 0, private val back: Page? 
         if (exporting) {
             when (name) {
                 "D7" -> if (exportState == 1) {
-                    org.openmk3.core.audio.NativeEngine.nativeRecStop(); ui.engine.transportStop(); exportState = 0; message = "Export cancelled"
+                    org.openmk3.core.audio.NativeEngine.nativeRecStop(); ui.engine.transportStop(); restoreSolo(); exportState = 0; message = "Export cancelled"
                 } else if (exportState == 0) exporting = false
                 "D8", "ENCODER PUSH" -> if (exportState == 0) startExport()
                 "FILE" -> if (exportState == 0) ui.showHome()
