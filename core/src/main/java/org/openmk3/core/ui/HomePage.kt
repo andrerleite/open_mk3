@@ -347,7 +347,7 @@ class HomePage(ui: Ui) : Page(ui) {
                 duplicate = down
                 dupSource = -1
                 if (down && shift) {  // SHIFT + DUPLICATE: double the pattern
-                    message(if (pattern.double(ui.group)) "Pattern doubled: ${pattern.length(ui.group)} steps" else "Pattern is already 4 bars")
+                    message(if (pattern.double(ui.group)) "Pattern doubled: ${pattern.length(ui.group)} steps" else "Too long to double (16 bars at most)")
                     changed()
                 }
             }

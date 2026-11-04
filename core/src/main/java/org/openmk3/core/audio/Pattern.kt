@@ -8,7 +8,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** One pattern of a group: 16 sounds x up to 64 steps (4 bars of 16ths), with notes. */
+/** One pattern of a group: 16 sounds x up to 256 steps (16 bars of 16ths), with notes. */
 class PatternData(var length: Int = 16) {
     val vel = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) }
     val note = Array(Pattern.PADS) { FloatArray(Pattern.STEPS) { Pattern.ROOT.toFloat() } }
@@ -122,7 +122,7 @@ class Pattern {
         const val GROUPS = 8
         const val PADS = 16
         const val SOUNDS = GROUPS * PADS
-        const val STEPS = 64           // longest pattern: 4 bars of 16ths
+        const val STEPS = 256          // longest pattern: 16 bars of 16ths
         const val SLOTS = 64           // patterns per group, and scenes (4 banks of 16)
         const val BANK_SLOTS = 16
         const val EXTRA = 3            // extra notes per step (chords)
@@ -424,7 +424,7 @@ class Pattern {
     /**
      * Replaces group [g]'s current pattern (a new one if there is none) with MIDI notes:
      * (pad, note, velocity 1..127, start and length in [MidiFile.TICKS_PER_STEP] ticks per step).
-     * Notes past 4 bars are left out; the length becomes the bars the notes need. Returns the notes placed.
+     * Notes past 16 bars are left out; the length becomes the bars the notes need. Returns the notes placed.
      */
     fun importMidi(g: Int, notes: List<IntArray>): Int {
         for (pad in 0 until PADS) clear(g * PADS + pad)

@@ -148,7 +148,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         if (want && repeatActive) patternChanged()
         p.poll()
         if (e.takeRecorded()) { p.pullFromEngine(); patternChanged() }
-        // auto-grow: two steps before the end, add a bar (up to 4 bars)
+        // auto-grow: two steps before the end, add a bar (up to 16 bars)
         val g = autoGrowGroup
         if (g >= 0 && want) {
             val len = p.length(g)

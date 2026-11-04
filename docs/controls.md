@@ -49,7 +49,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | PATTERN | Hold: patterns of the focused group on the pads (select, empty pad = new). K4 length (SHIFT: fine), D5 create, D6 delete. Hold + D1 pins the mode. | ✅ |
 | EVENTS | Hold (D1 pins). Pads select / deselect all notes of a sound (dim: has notes, lit: all selected), D5 all, D6 none, D7 / D8 (or ▲ ▼) previous / next sound, ERASE + pad erases. D2 EDIT / SELECT. SELECT: K1 START / K2 END select the focused sound's notes in that range (step grid), K4 EVENT picks single notes, ◀ ▶ previous / next note. EDIT: K1 POSITION (nudge grid; SHIFT fine), K2 PITCH, K3 VELOCITY, K4 LENGTH (step grid; SHIFT fine) on the selected notes only ((MULTI) when several); ◀ ▶ page. Selected notes are outlined on the right screen. SHIFT + pads act on the selected notes (none selected: the whole group): 5 / 6 quantise / 50 %, 7 / 8 nudge, 9 clear, 11 copy, 12 paste (same places, also into another pattern), 13–16 transpose; 1 / 2 undo / redo | ✅ |
 | VARIATION | Hold (D1 pins): HUMANIZE varies the focused sound's velocity (K1, K2 probability) and timing (K3); RANDOM writes new random notes (density, velocity, note range); D8 applies | ✅ |
-| SHIFT + VARIATION (Navigate) | NAVIGATE (until VARIATION again): D3 SONG, D4 MIXER, D5 BROWSER, D8 FOLLOW; pads 1 / 3 scroll and 2 / 6 zoom the pattern grid (16, 32 or 64 steps across), K5 zoom, K6 scroll. SHIFT + D2 PAGE NAV: the focused sound's parameter pages on the pads, a pad opens PLUG-IN on that page | ✅ |
+| SHIFT + VARIATION (Navigate) | NAVIGATE (until VARIATION again): D3 SONG, D4 MIXER, D5 BROWSER, D8 FOLLOW; pads 1 / 3 scroll and 2 / 6 zoom the pattern grid (16, 32, 64, 128 or 256 steps across), K5 zoom, K6 scroll. SHIFT + D2 PAGE NAV: the focused sound's parameter pages on the pads, a pad opens PLUG-IN on that page | ✅ |
 | DUPLICATE + pad | Hold, hit the source pad, then the target: duplicates a sound (pad mode), pattern or scene. SHIFT + the target pad instead swaps the two (sounds keep their notes, effects and macros; patterns and scenes keep their places in scenes and the song) | ✅ |
 | SHIFT + DUPLICATE (Double) | Double the pattern length and its content | ✅ |
 | STEP | From any page: the sequencer with the pads as steps (PAD MODE leaves it) | ✅ |
@@ -281,7 +281,7 @@ A sound switched to SYNTH or FM gets 8 voices if it had 1.
 
 ## Patterns and scenes
 
-- Every group has 64 pattern slots in 4 banks of 16 (D7 / D8 change bank in PATTERN and SCENE mode); a pattern is 1 step to 4 bars of 16ths (K1 in PATTERN mode,
+- Every group has 64 pattern slots in 4 banks of 16 (D7 / D8 change bank in PATTERN and SCENE mode); a pattern is 1 step to 16 bars of 16ths (K4 in PATTERN mode,
   16 steps at a time; hold SHIFT for single steps).
 - Choosing a pattern while playing starts it when the playing one ends (its pad blinks until
   then); stopped, it switches at once. All groups keep playing together.

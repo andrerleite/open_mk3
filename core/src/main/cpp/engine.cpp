@@ -51,7 +51,7 @@ namespace {
 constexpr int kGroups = 8;
 constexpr int kPads = 16;
 constexpr int kSounds = kGroups * kPads;  // 8 groups x 16 sounds
-constexpr int kSteps = 64;  // longest pattern: 4 bars of 16ths
+constexpr int kSteps = 256;  // longest pattern: 16 bars of 16ths
 constexpr int kMaxVoices = 64;
 constexpr int kSampleRate = 48000;
 constexpr int kRing = 256;

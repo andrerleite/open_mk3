@@ -49,8 +49,8 @@ class NavigatePage(ui: Ui, private val back: Page) : Page(ui) {
 
     private fun scroll(d: Int) { ui.follow = false; HomePage.gridPage = (HomePage.gridPage + d).coerceIn(0, gridPages() - 1) }
     private fun zoom(d: Int) {
-        val z = listOf(1, 2, 4)
-        HomePage.gridZoom = z[(z.indexOf(HomePage.gridZoom) + d).coerceIn(0, 2)]
+        val z = listOf(1, 2, 4, 8, 16)
+        HomePage.gridZoom = z[(z.indexOf(HomePage.gridZoom) + d).coerceIn(0, z.size - 1)]
         HomePage.gridPage = HomePage.gridPage.coerceIn(0, gridPages() - 1)
     }
 
