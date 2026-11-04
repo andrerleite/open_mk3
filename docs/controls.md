@@ -176,7 +176,7 @@ D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Volume | Pan | Tune | Polyphony (1–16, strict: 1 = one voice, also for chords) | Source | Trigger (one-shot / gate) | Reverse | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) |
+| VOICE | Source | Volume | Pan | Tune | Polyphony (1–16, strict: 1 = one voice, also for chords) | Trigger (one-shot / gate) | Reverse | Engine (standard / vintage A 12-bit 26 kHz / vintage B 12-bit 40 kHz) |
 | SAMPLE | Start | End | | | Loop | Loop start | Loop end | Crossfade |
 | AMP ENV | Type (one-shot / AHD / ADSR) | Attack | Hold (AHD) | Decay | Sustain (ADSR) | Release | | |
 | FILTER | Type (off / LP 12 / BP / HP / LP 24) | Cutoff | Resonance | Drive | | | | |
@@ -189,7 +189,7 @@ additive, wavetable, chords, speech, swarm, noise, particles, string, modal, dru
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 | K7 | K8 |
 |---|---|---|---|---|---|---|---|---|
-| VOICE | Volume | Pan | Tune | Polyphony | Source | Trigger | Base note (the pitch the pad plays in PAD mode, default C3 = 60; in KEYBOARD the C3 key plays it) | |
+| VOICE | Source | Volume | Pan | Tune | Polyphony | Trigger | Base note (the pitch the pad plays in PAD mode, default C3 = 60; in KEYBOARD the C3 key plays it) | |
 | SYNTH | Model | Harmonics | Timbre | Morph | Synth gate (the model's own decaying gate) | Decay | Colour | Output (main / aux) |
 | SYNTH ENV | Envelope → pitch | → timbre | → morph | | | | | |
 
@@ -200,7 +200,7 @@ the AMP ENV shapes the note (and the sound stops when the pad is released).
 
 | Page | K1 | K2 | K3 | K4 | K5 | K6 |
 |---|---|---|---|---|---|---|
-| VOICE | Volume | Pan | Tune | Polyphony | Source | |
+| VOICE | Source | Volume | Pan | Tune | Polyphony | |
 | FM | Bank (ROM 1–3 built-in, USER 1–16) | Patch (by name) | Brightness (modulator levels) | Attack | Release | Feedback (patch / 0–7) |
 
 The 96 built-in voices are the DX7-format banks that ship with Plaits. Put your own 32-voice
@@ -211,7 +211,7 @@ FM notes keep playing their release after note-off, like the original instrument
 
 | Page | Knobs |
 |---|---|
-| VOICE | K1 preset category, K2 preset (493 factory patches), K3 volume, K4 pan, K5 source, K6 tune |
+| VOICE | K1 source, K2 preset category, K3 preset (493 factory patches), K5 volume, K6 pan, K7 tune |
 | OSC | Osc 1 pitch, osc 2 pitch, osc 2 detune, pulse width, osc 1 saw / pulse, osc 2 saw / pulse |
 | OSC MOD | Sync, cross mod, brightness, osc 2 PW offset, filter env → pitch, filter env → PW, osc 2 keytrack, env → both oscs |
 | MIXER | Osc 1, osc 2, ring mod, noise, noise colour, patch volume, transpose, tune |
@@ -230,7 +230,7 @@ taken when a fifth plays). Stepped switches move one step per knob notch. Turnin
 **Trigger:** ONE-SHOT plays the whole sample; GATE plays only while the pad is held (then
 fades with RELEASE). Sequencer notes last one step.
 
-Oscilloscope (the SCOPE view of synth and effect pages; D6 or encoder push shows it over the other views): it detects the pitch actually sounding and shows its note, cents and Hz (60 = C3). D7 switches LOCKED (default: two cycles of the detected pitch that stand still; the encoder shows more cycles) and FREE (the output scrolling as it plays; the encoder sets the time window).
+Oscilloscope (the SCOPE view of synth and effect pages; D6 or encoder push shows it over the other views): it detects the pitch actually sounding and shows its note, cents and Hz (60 = C3). D7 switches LOCKED (default: two cycles of the detected pitch that stand still; SHIFT + encoder shows more cycles) and FREE (the output scrolling as it plays; SHIFT + encoder sets the time window). At sound level D8 chooses SOURCE (the instrument or sampler, before the sound's effects) or OUTPUT (the pad after its effects).
 Effect knobs glide (~20 ms) instead of jumping, so turning them while playing does not click.
 A sound switched to SYNTH or FM gets 8 voices if it had 1.
 

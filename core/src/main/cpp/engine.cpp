@@ -1473,7 +1473,7 @@ void Engine::renderPoly(int frames, float* pb, const float* fp, float* out, floa
             dst = soundBus[slot];
             if (!soundUsed[slot]) { std::memset(dst, 0, sizeof(float) * frames * 2); soundUsed[slot] = true; }
         } else dst = groupBus[slot / kPads];
-        float* tap = (sk == 2 && slot == si) ? scopeTap : nullptr;
+        float* tap = ((sk == 2 || sk == 3) && slot == si) ? scopeTap : nullptr;
         float peak = 0.f;
         for (int i = 0; i < frames; i++) {
             const float ol = l[i] * gl, orr = r[i] * gr;
@@ -1574,7 +1574,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
     const int sk = scopeKind.load(std::memory_order_relaxed);
     const int si = scopeIndex.load(std::memory_order_relaxed);
     float scopeTap[kChunk * 2];
-    if (sk == 2) std::memset(scopeTap, 0, sizeof(float) * frames * 2);
+    if (sk == 2 || sk == 3) std::memset(scopeTap, 0, sizeof(float) * frames * 2);
     uint32_t active[(kSlots + 31) / 32] = {};
     uint64_t newest[kSlots] = {};
     float newestPos[kSlots];
@@ -1644,7 +1644,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
             dst = soundBus[v.slot];
             if (!soundUsed[v.slot]) { std::memset(dst, 0, sizeof(float) * frames * 2); soundUsed[v.slot] = true; }
         } else dst = groupBus[v.slot / kPads];
-        float* tap = (sk == 2 && v.slot == si) ? scopeTap : nullptr;
+        float* tap = ((sk == 2 || sk == 3) && v.slot == si) ? scopeTap : nullptr;
         // synth source
         const bool fmv = v.fm >= 0 && fmPool[v.fm];
         const bool synth = (v.synth >= 0 && synthPool[v.synth]) || fmv;
@@ -1877,7 +1877,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         }
     }
     const int64_t tPoly = nowNanos();
-    renderPoly(frames, pb, fp, out, sk == 2 ? scopeTap : nullptr, sk, si, active);
+    renderPoly(frames, pb, fp, out, (sk == 2 || sk == 3) ? scopeTap : nullptr, sk, si, active);
     const int64_t tFx = nowNanos();
     secAcc[0] += tVoices - chunkStart;  // triggers, sequencer, swaps
     secAcc[1] += tPoly - tVoices;       // voices
@@ -1895,6 +1895,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
             if (!soundUsed[snd] && chainAsleep(snd)) continue;  // nothing playing, tails done
             if (!soundUsed[snd]) std::memset(soundBus[snd], 0, sizeof(float) * frames * 2);
             runChain(fp, snd, soundBus[snd], frames, bpm);
+            // scope on the pad's output: after its effects
+            if (sk == 3 && snd == si) std::memcpy(scopeTap, soundBus[snd], sizeof(float) * frames * 2);
             float* gb = groupBus[snd / kPads];
             for (int k = 0; k < frames * 2; k++) gb[k] += soundBus[snd][k];
         }
@@ -1963,7 +1965,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
     addClick(out, frames);
     // oscilloscope (before the master volume, so the shape is what the sound makes)
     {
-        const float* src = sk == 2 ? scopeTap : sk == 1 ? groupBus[std::clamp(si, 0, kGroups - 1)] : out;
+        const float* src = (sk == 2 || sk == 3) ? scopeTap : sk == 1 ? groupBus[std::clamp(si, 0, kGroups - 1)] : out;
         int w = scopeW.load(std::memory_order_relaxed);
         for (int k = 0; k < frames; k++) {
             scopeRing[w] = 0.5f * (src[k * 2] + src[k * 2 + 1]);

@@ -105,7 +105,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     private companion object {
         fun snd(vararg p: Int) = p.map { if (it < 0) null else Knob.Snd(it) }
         val SAMPLER = listOf(
-            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, GATE, REV, ENGINE), View.WAVE),
+            PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, GATE, REV, ENGINE), View.WAVE),
             PageDef("SAMPLE", snd(START, END, -1, -1, LOOP, LSTART, LEND, XFADE), View.WAVE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
             PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
@@ -114,7 +114,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
         val SYNTH = listOf(
-            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, GATE, SNOTE, -1), View.SCOPE),
+            PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, GATE, SNOTE, -1), View.SCOPE),
             PageDef("SYNTH", snd(SMODEL, SHARM, STIMB, SMORPH, SLPG, SDEC, SCOL, SAUX), View.SCOPE),
             PageDef("SYNTH ENV", snd(SFM, STMOD, SMMOD, -1, -1, -1, -1, -1), View.SCOPE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
@@ -124,7 +124,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             PageDef("VELOCITY", snd(VVOL, VCUT, -1, -1, -1, -1, -1, -1), View.VEL),
         )
         val FM = listOf(
-            PageDef("VOICE", snd(VOL, PAN, TUNE, POLY, SRC, -1, -1, -1), View.SCOPE),
+            PageDef("VOICE", snd(SRC, VOL, PAN, TUNE, POLY, -1, -1, -1), View.SCOPE),
             PageDef("FM", snd(SoundParams.FMBANK, SoundParams.FMPROG, SoundParams.FMBRIGHT, SoundParams.FMATT, SoundParams.FMREL, SoundParams.FMFB, -1, -1), View.SCOPE),
             PageDef("AMP ENV", snd(ENV, ATT, HOLD, DEC, SUS, REL, -1, -1), View.AMP),
             PageDef("FILTER", snd(FTYPE, CUT, RES, DRIVE, -1, -1, -1, -1), View.FILTER),
@@ -135,7 +135,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         fun ob(vararg i: Int) = i.map { if (it < 0) null else Knob.Poly(it) }
         /** POLY (OB-Xf): OB-Xf's parameter indices, grouped like its panel. */
         val POLY_PAGES = listOf(
-            PageDef("VOICE", listOf(Knob.PolyCategory, Knob.PolyPreset, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(SRC), Knob.Snd(TUNE), null, null), View.SCOPE),
+            PageDef("VOICE", listOf(Knob.Snd(SRC), Knob.PolyCategory, Knob.PolyPreset, null, Knob.Snd(VOL), Knob.Snd(PAN), Knob.Snd(TUNE), null), View.SCOPE),
             PageDef("OSC", ob(12, 14, 13, 20, 16, 17, 18, 19), View.SCOPE),
             PageDef("OSC MOD", ob(29, 28, 30, 21, 22, 25, 15, 23), View.SCOPE),
             PageDef("MIXER", ob(31, 32, 33, 34, 35, 0, 1, 2), View.SCOPE),
@@ -160,6 +160,8 @@ class SoundPage(ui: Ui) : Page(ui) {
         var scopeWindow = 1024
         /** Scope: free-running (the output as it plays) or locked to a rising zero crossing. */
         var scopeFree = false
+        /** Sound level: scope on the source (before the sound's effects) or the pad's output (after). */
+        var scopePost = false
     }
 
     private var level = SoundPageNav.openReturn.let { if (it >= 0) 3 + it else lastLevel }  // 0 master, 1 group, 2 sound, 3 / 4 returns
@@ -254,7 +256,7 @@ class SoundPage(ui: Ui) : Page(ui) {
     private fun updateScopeTap() = when (level) {
         0, 3, 4 -> ui.engine.setScopeTap(0, 0)
         1 -> ui.engine.setScopeTap(1, ui.group)
-        else -> ui.engine.setScopeTap(2, slot)
+        else -> ui.engine.setScopeTap(if (scopePost) 3 else 2, slot)
     }
 
     private fun showScope() = scopeOn || page.view == View.SCOPE
@@ -292,7 +294,8 @@ class SoundPage(ui: Ui) : Page(ui) {
             }
             "D6", "ENCODER PUSH" -> if (page.view != View.SCOPE) scopeOn = !scopeOn
             "D7" -> if (showScope()) scopeFree = !scopeFree
-            "D8" -> if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
+            "D8" -> if (showScope() && level == 2) { scopePost = !scopePost; updateScopeTap() }
+                    else if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
             "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
             "ENCODER RIGHT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(1)
             "PAGE LEFT" -> pageIdx = (pageIdx + n - 1) % n
@@ -318,7 +321,8 @@ class SoundPage(ui: Ui) : Page(ui) {
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) l.set("D5", fx.bypassed(chain, fxSlot))
         if (page.view != View.SCOPE) l.set("D6", scopeOn)
         if (showScope()) l.set("D7", !scopeFree)
-        if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
+        if (showScope() && level == 2) l.set("D8", scopePost)
+        else if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
@@ -473,8 +477,6 @@ class SoundPage(ui: Ui) : Page(ui) {
 
     private val tileFill = Theme.fill(Color.rgb(28, 28, 36))
     private val tileRing = Theme.stroke(Theme.ACCENT, 2.5f)
-    private val iconPaint = Theme.stroke(Theme.FG, 3f)
-    private val iconDim = Theme.stroke(Theme.DIM, 3f)
     private val slotTextC = Theme.text(13f, Theme.FG, bold = true, align = Paint.Align.CENTER)
     private val slotDimC = Theme.text(12f, Theme.DIM, align = Paint.Align.CENTER)
 
@@ -487,51 +489,114 @@ class SoundPage(ui: Ui) : Page(ui) {
         return if (t == FxParams.NONE) "" else FxParams.TYPES[t]
     }
 
-    /** A small line drawing per slot kind (48 x 40 around cx, cy). */
-    private fun drawSlotIcon(c: Canvas, kind: String, cx: Float, cy: Float, p: Paint) {
+    // ---- slot icons: a rounded badge in the category colour with a line glyph, the way
+    // instrument and effect slots are usually shown in music software ----
+    private val glyph = Paint().apply {
+        style = Paint.Style.STROKE; strokeWidth = 3f; isAntiAlias = true
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+    }
+    private val glyphFill = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val badge = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val dash = Paint().apply {
+        style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true; color = Theme.DIM
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 5f), 0f)
+    }
+
+    private fun kindColour(kind: String): Int = when (kind) {
+        "SAMPLER", "SYNTH", "FM", "POLY" -> Mk3Colors.rgb(ui.soundColour(slot))
+        "COMPRESSOR" -> Color.rgb(255, 150, 60)
+        "CHORUS" -> Color.rgb(175, 120, 255)
+        "DELAY" -> Color.rgb(70, 205, 230)
+        "REVERB" -> Color.rgb(100, 150, 255)
+        "FILTER" -> Color.rgb(100, 215, 125)
+        else -> Theme.DIM
+    }
+
+    /** The slot's icon centred on (cx, cy): badge 60 x 50, glyph inside. Dimmed when bypassed. */
+    private fun drawSlotIcon(c: Canvas, kind: String, cx: Float, cy: Float, dim: Boolean) {
+        val bw = 30f; val bh = 25f
+        val box = android.graphics.RectF(cx - bw, cy - bh, cx + bw, cy + bh)
+        if (kind == "") {  // empty: dashed outline and a plus
+            c.drawRoundRect(box, 10f, 10f, dash)
+            glyph.color = Theme.DIM; glyph.strokeWidth = 3f
+            c.drawLine(cx - 10f, cy, cx + 10f, cy, glyph); c.drawLine(cx, cy - 10f, cx, cy + 10f, glyph)
+            return
+        }
+        val col = kindColour(kind)
+        badge.color = col; badge.alpha = if (dim) 25 else 55
+        c.drawRoundRect(box, 10f, 10f, badge)
+        glyph.color = col; glyph.alpha = if (dim) 110 else 255; glyph.strokeWidth = 3f
+        glyphFill.color = col; glyphFill.alpha = glyph.alpha
         val path = Path()
+        val l = cx - 20f; val r = cx + 20f; val t = cy - 14f; val b = cy + 14f
         when (kind) {
-            "" -> { c.drawLine(cx - 16f, cy, cx + 16f, cy, p); c.drawLine(cx, cy - 16f, cx, cy + 16f, p) }   // +
-            "SAMPLER" -> {  // waveform
-                val h = floatArrayOf(4f, 12f, 20f, 8f, 16f, 6f, 18f, 10f, 4f)
-                for (k in h.indices) { val x = cx - 24f + k * 6f; c.drawLine(x, cy - h[k], x, cy + h[k], p) }
+            "SAMPLER" -> {  // a recorded waveform
+                val h = floatArrayOf(0.25f, 0.6f, 1f, 0.75f, 0.45f, 0.85f, 0.5f, 0.3f, 0.15f)
+                glyph.strokeWidth = 3.2f
+                for (k in h.indices) { val x = l + k * 5f; c.drawLine(x, cy - 13f * h[k], x, cy + 13f * h[k], glyph) }
             }
-            "SYNTH" -> {  // saw
-                path.moveTo(cx - 24f, cy + 14f); path.lineTo(cx - 8f, cy - 14f); path.lineTo(cx - 8f, cy + 14f)
-                path.lineTo(cx + 8f, cy - 14f); path.lineTo(cx + 8f, cy + 14f); path.lineTo(cx + 24f, cy - 14f); c.drawPath(path, p)
+            "SYNTH" -> {  // oscillator: one cycle of a sine
+                for (k in 0..40) { val x = l + k; val y = cy - 12f * kotlin.math.sin(k / 40f * 6.2831853f); if (k == 0) path.moveTo(x, y) else path.lineTo(x, y) }
+                c.drawPath(path, glyph)
             }
-            "FM" -> {  // two operators feeding each other
-                c.drawCircle(cx - 11f, cy, 10f, p); c.drawCircle(cx + 11f, cy, 10f, p)
-                c.drawLine(cx - 11f, cy - 10f, cx - 11f, cy - 18f, p); c.drawLine(cx - 11f, cy - 18f, cx + 11f, cy - 18f, p); c.drawLine(cx + 11f, cy - 18f, cx + 11f, cy - 10f, p)
+            "FM" -> {  // operator stack: modulator box feeding the carrier box
+                glyph.strokeWidth = 2.6f
+                c.drawRoundRect(android.graphics.RectF(cx - 8f, t - 2f, cx + 8f, t + 10f), 3f, 3f, glyph)
+                c.drawRoundRect(android.graphics.RectF(cx - 8f, b - 10f, cx + 8f, b + 2f), 3f, 3f, glyph)
+                c.drawLine(cx, t + 10f, cx, b - 10f, glyph)
+                c.drawLine(cx + 8f, t + 4f, cx + 14f, t + 4f, glyph); c.drawLine(cx + 14f, t + 4f, cx + 14f, t - 4f, glyph)
+                c.drawLine(cx + 14f, t - 4f, cx - 14f, t - 4f, glyph); c.drawLine(cx - 14f, t - 4f, cx - 14f, t + 4f, glyph); c.drawLine(cx - 14f, t + 4f, cx - 8f, t + 4f, glyph)
             }
-            "POLY" -> {  // keyboard
-                c.drawRect(cx - 24f, cy - 16f, cx + 24f, cy + 16f, p)
-                for (k in 1 until 4) c.drawLine(cx - 24f + k * 12f, cy - 16f, cx - 24f + k * 12f, cy + 16f, p)
-                for (k in listOf(0, 1, 3)) { val x = cx - 24f + k * 12f + 8f; c.drawLine(x, cy - 16f, x, cy, p); c.drawLine(x + 6f, cy - 16f, x + 6f, cy, p); c.drawLine(x, cy, x + 6f, cy, p) }
+            "POLY" -> {  // keyboard: white keys with filled black keys
+                glyph.strokeWidth = 2.4f
+                c.drawRoundRect(android.graphics.RectF(l, t, r, b), 3f, 3f, glyph)
+                for (k in 1 until 5) c.drawLine(l + k * 8f, t, l + k * 8f, b, glyph)
+                for (k in listOf(1, 2, 4)) c.drawRect(l + k * 8f - 2.5f, t, l + k * 8f + 2.5f, cy + 2f, glyphFill)
             }
-            "COMPRESSOR" -> {  // knee curve
-                path.moveTo(cx - 22f, cy + 18f); path.lineTo(cx, cy - 4f); path.lineTo(cx + 22f, cy - 12f); c.drawPath(path, p)
-                c.drawLine(cx - 22f, cy + 18f, cx + 22f, cy + 18f, p)
+            "COMPRESSOR" -> {  // transfer curve with a soft knee over the 1:1 line
+                glyph.strokeWidth = 2f; glyph.alpha = glyph.alpha / 3
+                c.drawLine(l, b, r, t, glyph)
+                glyph.strokeWidth = 3f; glyph.alpha = if (dim) 110 else 255
+                path.moveTo(l, b); path.lineTo(cx - 4f, cy); path.quadTo(cx + 2f, cy - 6f, r, cy - 9f)
+                c.drawPath(path, glyph)
+                c.drawLine(l, b, r, b, glyph)
             }
-            "CHORUS" -> {  // two waves
-                for (o in listOf(-6f, 6f)) {
+            "CHORUS" -> {  // two detuned waves
+                for ((o, a) in listOf(-4f to 255, 4f to 140)) {
                     val w = Path()
-                    for (k in 0..24) { val x = cx - 24f + k * 2f; val y = cy + o + 8f * kotlin.math.sin(k * 0.52f + o * 0.2f); if (k == 0) w.moveTo(x, y) else w.lineTo(x, y) }
-                    c.drawPath(w, p)
+                    for (k in 0..40) { val x = l + k; val y = cy + o - 8f * kotlin.math.sin(k / 40f * 6.2831853f * 1.5f + o * 0.15f); if (k == 0) w.moveTo(x, y) else w.lineTo(x, y) }
+                    glyph.alpha = if (dim) a / 2 else a
+                    c.drawPath(w, glyph)
                 }
             }
-            "DELAY" -> {  // echoes
-                val hs = floatArrayOf(18f, 12f, 7f, 3f)
-                for (k in hs.indices) { val x = cx - 18f + k * 12f; c.drawLine(x, cy + 16f, x, cy + 16f - hs[k] * 1.8f, p) }
+            "DELAY" -> {  // repeats fading out
+                val hs = floatArrayOf(1f, 0.7f, 0.45f, 0.25f)
+                glyph.strokeWidth = 4f
+                for (k in hs.indices) { val x = l + 4f + k * 11f; glyph.alpha = ((if (dim) 110 else 255) * (1f - k * 0.18f)).toInt(); c.drawLine(x, b, x, b - 28f * hs[k], glyph) }
             }
-            "REVERB" -> {  // spreading arcs
-                for (rr in listOf(8f, 15f, 22f)) c.drawArc(android.graphics.RectF(cx - 24f - rr, cy - rr, cx - 24f + rr, cy + rr), -60f, 120f, false, p)
+            "REVERB" -> {  // a source and its reflections spreading out
+                c.drawCircle(l + 4f, cy, 3f, glyphFill)
+                for ((k, rr) in listOf(10f, 19f, 28f).withIndex()) {
+                    glyph.alpha = ((if (dim) 110 else 255) * (1f - k * 0.25f)).toInt()
+                    c.drawArc(android.graphics.RectF(l + 4f - rr, cy - rr, l + 4f + rr, cy + rr), -50f, 100f, false, glyph)
+                }
             }
-            "FILTER" -> {  // low-pass response with a resonant bump
-                path.moveTo(cx - 24f, cy - 6f); path.lineTo(cx - 2f, cy - 6f); path.quadTo(cx + 4f, cy - 22f, cx + 8f, cy - 4f); path.lineTo(cx + 24f, cy + 18f); c.drawPath(path, p)
+            "FILTER" -> {  // low-pass response with a resonant peak
+                path.moveTo(l, cy - 4f); path.lineTo(cx - 2f, cy - 4f)
+                path.cubicTo(cx + 3f, cy - 4f, cx + 3f, t - 2f, cx + 7f, t - 2f)
+                path.cubicTo(cx + 11f, t - 2f, cx + 11f, b, r, b)
+                c.drawPath(path, glyph)
             }
-            else -> c.drawCircle(cx, cy, 14f, p)
+            else -> c.drawCircle(cx, cy, 12f, glyph)
         }
+    }
+
+    /** [t] shortened with an ellipsis so it fits [w] pixels in paint [p] (knob cells never overlap). */
+    private fun fit(t: String, p: Paint, w: Float): String {
+        if (p.measureText(t) <= w) return t
+        var n = t.length
+        while (n > 1 && p.measureText(t.substring(0, n) + "…") > w) n--
+        return t.substring(0, n) + "…"
     }
 
     private fun knobCell(c: Canvas, i: Int) {
@@ -581,8 +646,8 @@ class SoundPage(ui: Ui) : Page(ui) {
                 frac = t / (FxParams.TYPES.size - 1f)
             }
         }
-        c.drawText(name, x, 232f, kName)
-        c.drawText(value, x, 252f, if (on) kValue else kOff)
+        c.drawText(fit(name, kName, 114f), x, 232f, kName)
+        c.drawText(fit(value, if (on) kValue else kOff, 114f), x, 252f, if (on) kValue else kOff)
         c.drawRect(x - 44f, 260f, x + 44f, 265f, barBg)
         c.drawRect(x - 44f, 260f, x - 44f + 88f * frac.coerceIn(0f, 1f), 265f, barFg)
     }
@@ -599,7 +664,9 @@ class SoundPage(ui: Ui) : Page(ui) {
             r.drawText("BYPASS", 60f, 24f, if (fx.bypassed(chain, fxSlot)) tabOn else tab)
         if (page.view != View.SCOPE) r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
         if (showScope()) r.drawText(if (scopeFree) "FREE" else "LOCKED", 300f, 24f, if (scopeFree) tab else tabOn)
-        if (isSource && !isSynth && pageIdx == 1)
+        if (showScope() && level == 2)
+            r.drawText(if (scopePost) "OUTPUT" else "SOURCE", 420f, 24f, if (scopePost) tabOn else tab)
+        else if (isSource && !isSynth && pageIdx == 1)
             r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
         l.drawRect(0f, 34f, 480f, 35f, sep)
         r.drawRect(0f, 34f, 480f, 35f, sep)
@@ -625,7 +692,7 @@ class SoundPage(ui: Ui) : Page(ui) {
             val kind = slotKind(i)
             val cx = tx + tw / 2; val cy = ty + 44f
             val bypassed = !(level == 2 && i == 0) && kind != "" && fx.bypassed(chain, if (level == 2) i - 1 else i)
-            drawSlotIcon(l, kind, cx, cy, if (bypassed) iconDim else iconPaint)
+            drawSlotIcon(l, kind, cx, cy, bypassed)
             val nm = if (kind == "") "EMPTY" else slotName(i).substringBefore(" (bypassed)")
             l.drawText(ellipsize(nm, 13), cx, ty + 92f, if (kind == "") slotDimC else slotTextC)
             l.drawText(if (bypassed) "BYPASS" else "${i + 1}", cx, ty + 108f, slotDimC)
@@ -731,7 +798,7 @@ class SoundPage(ui: Ui) : Page(ui) {
         // the note actually sounding
         c.drawText(if (pitchHz > 0f) noteText(pitchHz) else "no clear pitch", x0, top + 14f, if (pitchHz > 0f) title else label)
         val ms = n * 1000f / 48000f
-        c.drawText("${if (scopeFree) "FREE" else if (locked) "LOCKED · 2 cycles" else "LOCKED"} · ${levelName()} · ${"%.1f".format(ms)} ms${if (gain > 1.01f) " · ×${"%.1f".format(gain)}" else ""}", x0, 210f, label)
+        c.drawText("${if (scopeFree) "FREE" else if (locked) "LOCKED · 2 cycles" else "LOCKED"} · ${levelName()}${if (level == 2) if (scopePost) " output" else " source" else ""} · ${"%.1f".format(ms)} ms${if (gain > 1.01f) " · ×${"%.1f".format(gain)}" else ""}", x0, 210f, label)
         // compressor: gain reduction bar
         if (!isSource && fx.type(chain, fxSlot) == FxParams.COMPRESSOR) {
             val gr = ui.engine.fxMeter(chain, fxSlot).coerceIn(0f, 24f)
