@@ -167,10 +167,14 @@ class MainActivity : Activity() {
             fitsSystemWindows = true
         }
         root.addView(TextView(this).apply {
+            textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            text = "${Edition.title}  v${Edition.version}"
+        })
+        root.addView(TextView(this).apply {
             textSize = 13f
-            text = "Plug in the MK3: everything else happens on the MK3. First run starts the " +
-                "setup wizard on the MK3 screens. Then: pads play drums, PLAY = demo beat, " +
-                "K1 volume, K2 pad sensitivity, K3/encoder tempo, SETTINGS = LED palette."
+            text = "Plug in the MK3: everything else happens on the MK3. The controls are built in " +
+                "(no setup needed); the Setup buttons below only re-learn them if something is off."
         })
         fun btn(label: String, onClick: () -> Unit) = Button(this).apply {
             text = label; isAllCaps = false; textSize = 12f

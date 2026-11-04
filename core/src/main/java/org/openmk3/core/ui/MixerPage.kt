@@ -3,6 +3,7 @@ package org.openmk3.core.ui
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.os.SystemClock
+import org.openmk3.core.audio.Pattern
 import org.openmk3.core.audio.SoundParams
 import org.openmk3.core.audio.soundLabel
 import org.openmk3.core.mk3.Mk3Colors
@@ -47,11 +48,49 @@ class MixerPage(ui: Ui) : Page(ui) {
 
     private fun changed() { if (dirtySince == 0L) dirtySince = SystemClock.uptimeMillis() }
 
+    // ---- VU meters: peak level per channel, falling ~24 dB/s, with a 1.5 s peak hold ----
+    private val raw = FloatArray(Pattern.SOUNDS + Pattern.GROUPS)
+    private val level = FloatArray(Pattern.SOUNDS + Pattern.GROUPS) { -60f }
+    private val hold = FloatArray(Pattern.SOUNDS + Pattern.GROUPS) { -60f }
+    private val holdAt = LongArray(Pattern.SOUNDS + Pattern.GROUPS)
+    private var masterLevel = -60f
+    private var lastMeter = 0L
+
+    private fun meterIndex(ch: Int) = if (groupsLevel) Pattern.SOUNDS + ch else ch
+
     override fun tick(now: Long): Boolean {
         if (dirtySince != 0L && now - dirtySince > 1500) {
             p.save(ui.ctx); params.save(ui.ctx); ui.checkpoint(); dirtySince = 0L
         }
-        return false
+        val dt = if (lastMeter == 0L) 0.033f else ((now - lastMeter) / 1000f).coerceIn(0f, 0.2f)
+        lastMeter = now
+        ui.engine.meters(raw)
+        for (i in raw.indices) {
+            val db = if (raw[i] > 1e-5f) (20f * kotlin.math.log10(raw[i])) else -60f
+            level[i] = if (db > level[i]) db else (level[i] - 24f * dt).coerceAtLeast(-60f)
+            if (db >= hold[i] || now - holdAt[i] > 1500) { hold[i] = maxOf(db, level[i]); holdAt[i] = now }
+        }
+        val m = ui.engine.meter.let { if (it > 1e-5f) 20f * kotlin.math.log10(it) else -60f }
+        masterLevel = if (m > masterLevel) m else (masterLevel - 24f * dt).coerceAtLeast(-60f)
+        return true  // meters move
+    }
+
+    private val meterBg = Theme.fill(android.graphics.Color.rgb(24, 24, 30))
+    private val meterGreen = Theme.fill(android.graphics.Color.rgb(60, 200, 90))
+    private val meterYellow = Theme.fill(android.graphics.Color.rgb(230, 200, 60))
+    private val meterRed = Theme.fill(android.graphics.Color.rgb(235, 70, 60))
+    private val meterHold = Theme.fill(Theme.FG)
+
+    /** Vertical meter, -48..+6 dB over [top, bot]; green to -12 dB, yellow to 0 dB, red above. */
+    private fun drawMeter(c: Canvas, x0: Float, x1: Float, top: Float, bot: Float, db: Float, peak: Float) {
+        c.drawRect(x0, top, x1, bot, meterBg)
+        fun y(d: Float) = bot - (bot - top) * ((d + 48f) / 54f).coerceIn(0f, 1f)
+        val yl = y(db)
+        val yg = y(-12f); val yy = y(0f)
+        if (yl < bot) c.drawRect(x0, maxOf(yl, yg), x1, bot, meterGreen)
+        if (yl < yg) c.drawRect(x0, maxOf(yl, yy), x1, yg, meterYellow)
+        if (yl < yy) c.drawRect(x0, yl, x1, yy, meterRed)
+        if (peak > -47f) { val yp = y(peak); c.drawRect(x0, yp - 1f, x1, yp + 1f, if (peak > 0f) meterRed else meterHold) }
     }
 
     override fun onExit() {
@@ -145,6 +184,16 @@ class MixerPage(ui: Ui) : Page(ui) {
         r.drawText("PAN", 180f, 24f, if (panMode && sendMode < 0) dOn else dLabel)
         r.drawText("SEND A", 300f, 24f, if (sendMode == 0) dOn else dLabel)
         r.drawText("SEND B", 420f, 24f, if (sendMode == 1) dOn else dLabel)
+        // master meter (after the master volume), horizontal
+        run {
+            val x0 = 8f; val x1 = 472f; val y0 = 40f; val y1 = 48f
+            r.drawRect(x0, y0, x1, y1, meterBg)
+            fun x(d: Float) = x0 + (x1 - x0) * ((d + 48f) / 54f).coerceIn(0f, 1f)
+            val xl = x(masterLevel); val xg = x(-12f); val xy = x(0f)
+            r.drawRect(x0, y0, minOf(xl, xg), y1, meterGreen)
+            if (xl > xg) r.drawRect(xg, y0, minOf(xl, xy), y1, meterYellow)
+            if (xl > xy) r.drawRect(xy, y0, xl, y1, meterRed)
+        }
         val master = "MASTER ${"%.0f".format(ui.engine.masterGain * 100)}% (encoder)"
         l.drawText(if (groupsLevel) "Groups · $master" else "Group ${ui.groupLetter} sounds ${soundPage * 8 + 1}–${soundPage * 8 + 8} · $master", 8f, 52f, title)
         for (i in 0 until 8) {
@@ -169,8 +218,10 @@ class MixerPage(ui: Ui) : Page(ui) {
             c.drawRect(x - 50f, 64f, x + 50f, 70f, Theme.fill(Mk3Colors.rgb(colour)))
             c.drawText(label, x, 90f, if (audible) name else nameDim)
             if (!groupsLevel) c.drawText(ui.engine.kit[ch].name.take(12).ifEmpty { "—" }, x, 108f, nameDim)
-            // volume bar (0 dB at 5/6 of the height) and pan marker
+            // volume bar (0 dB at 5/6 of the height) and pan marker, VU meter beside it
             val top = 118f; val bot = 222f
+            val mi = meterIndex(ch)
+            drawMeter(c, x + 14f, x + 24f, top, bot, level[mi], hold[mi])
             c.drawRect(x - 8f, top, x + 8f, bot, barBg)
             val frac = ((vol + 60f) / 72f).coerceIn(0f, 1f)
             c.drawRect(x - 8f, bot - (bot - top) * frac, x + 8f, bot, Theme.fill(Mk3Colors.rgb(colour)))

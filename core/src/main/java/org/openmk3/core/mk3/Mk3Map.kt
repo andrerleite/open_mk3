@@ -60,6 +60,8 @@ class Mk3Map {
     fun rebuildIndex() {
         bitToName.clear()
         for ((k, v) in buttonBits) bitToName[v] = k
+        // the encoder's tilt-up shows on bit 0 or bit 2 depending on how it is pushed
+        for ((bit, name) in ALIASES) if (bit !in bitToName && bit !in touchBits) bitToName[bit] = name
     }
 
     val buttonsMapped get() = buttonBits.size >= 10
@@ -97,6 +99,8 @@ class Mk3Map {
 
     companion object {
         private fun file(ctx: Context) = File(ctx.filesDir, "mk3map.json")
+        /** Extra HID bits that mean a named control (both are seen for the same tilt). */
+        private val ALIASES = mapOf(2 to "ENCODER UP", 0 to "ENCODER UP")
 
         /**
          * The standard MK3 layout (identical on every unit), so a fresh install works without
@@ -106,7 +110,7 @@ class Mk3Map {
  "buttonBits":{"CHANNEL":56,"PLUG-IN":53,"ARRANGER":57,"MIXER":52,"BROWSER":58,"SAMPLING":51,"FILE":60,"SETTINGS":49,
   "AUTO":61,"MACRO":48,"PAGE LEFT":59,"PAGE RIGHT":50,"D1":64,"D2":65,"D3":66,"D4":67,"D5":68,"D6":69,"D7":70,"D8":7,
   "VOLUME":17,"SWING":18,"TEMPO":19,"NOTE REPEAT":20,"LOCK":21,"PITCH":38,"MOD":39,"PERFORM":40,"NOTES":16,
-  "ENCODER PUSH":71,"ENCODER UP":2,"ENCODER DOWN":4,"ENCODER LEFT":5,"ENCODER RIGHT":3,
+  "ENCODER PUSH":71,"ENCODER UP":0,"ENCODER DOWN":4,"ENCODER LEFT":5,"ENCODER RIGHT":3,
   "RESTART":41,"ERASE":42,"TAP":43,"FOLLOW":44,"PLAY":45,"REC":46,"STOP":47,"SHIFT":6,
   "GROUP A":8,"GROUP B":9,"GROUP C":10,"GROUP D":11,"GROUP E":12,"GROUP F":13,"GROUP G":14,"GROUP H":15,
   "FIXED VEL":28,"PAD MODE":24,"KEYBOARD":25,"CHORDS":26,"STEP":27,"SCENE":29,"PATTERN":30,"EVENTS":31,

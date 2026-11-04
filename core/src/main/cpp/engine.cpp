@@ -283,6 +283,9 @@ public:
     // ---- set from Kotlin ----
     std::atomic<float> masterGain{0.7f};
     std::atomic<float> cpuPeak{0.f};
+    // VU meters: peak since the last read, per sound (voices, before its effects) and per group
+    std::atomic<float> meterSound[kSounds] = {};
+    std::atomic<float> meterGroup[kGroups] = {};
     // time per section in the current callback, and the breakdown of the slowest one (us)
     int64_t secAcc[4] = {};
     std::atomic<int> slowest[4] = {};
@@ -1479,6 +1482,8 @@ void Engine::renderPoly(int frames, float* pb, const float* fp, float* out, floa
             if (tap) { tap[i * 2] += ol; tap[i * 2 + 1] += orr; }
             peak = std::max(peak, std::max(std::fabs(l[i]), std::fabs(r[i])));
         }
+        const float vu = peak * std::max(gl, gr);
+        if (vu > meterSound[slot].load(std::memory_order_relaxed)) meterSound[slot].store(vu, std::memory_order_relaxed);
         if (pi.notes > 0 || peak > 1e-4f) { pi.quietChunks = 0; active[slot / 32] |= 1u << (slot % 32); }
         else pi.quietChunks++;
     }
@@ -1691,6 +1696,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
         int i = v.startOffset;
         v.startOffset = 0;
         bool done = false;
+        float vPeak = 0.f;
         while (i < frames && !done) {
             // ---- control-rate values for this block ----
             float lfo;
@@ -1833,6 +1839,7 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 const float ol = xs[0] * env * gl, orr = xs[1] * env * gr;
                 dst[i * 2] += ol;
                 dst[i * 2 + 1] += orr;
+                vPeak = std::max(vPeak, std::max(std::fabs(ol), std::fabs(orr)));
                 if (tap) { tap[i * 2] += ol; tap[i * 2 + 1] += orr; }
                 if (!synth) v.pos += step;
             }
@@ -1859,6 +1866,8 @@ void Engine::renderChunk(float* out, int32_t frames) {
                 v.lfoHeld = float(v.rnd & 0xFFFF) / 32767.5f - 1.f;
             }
         }
+        if (v.slot < kSounds && vPeak > meterSound[v.slot].load(std::memory_order_relaxed))
+            meterSound[v.slot].store(vPeak, std::memory_order_relaxed);
         if (done) {
             v.sample = nullptr;
             freeSynth(v);
@@ -1922,10 +1931,14 @@ void Engine::renderChunk(float* out, int32_t frames) {
                     gb[k * 2 + c] = filt < 0.f ? v2 : x - fk * v1 - v2;
                 }
         }
+        float gPeak = 0.f;
         for (int k = 0; k < frames; k++) {
-            out[k * 2] += gb[k * 2] * gl;
-            out[k * 2 + 1] += gb[k * 2 + 1] * gr;
+            const float a = gb[k * 2] * gl, b = gb[k * 2 + 1] * gr;
+            out[k * 2] += a;
+            out[k * 2 + 1] += b;
+            gPeak = std::max(gPeak, std::max(std::fabs(a), std::fabs(b)));
         }
+        if (gPeak > meterGroup[g].load(std::memory_order_relaxed)) meterGroup[g].store(gPeak, std::memory_order_relaxed);
         // sends (after the group fader) to the return chains
         if (pp2)
             for (int a = 0; a < 2; a++) {
@@ -2561,6 +2574,14 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetTrigBuffer)(JNIEnv* env, jobject, jobject
 JNIEXPORT void JNICALL JNI_FN(nativeTrigger)(JNIEnv*, jobject, jint slot, jfloat vel) {
     if (slot < 0 || slot >= kSlots) return;
     gEngine.pushTrigger(slot, vel);
+}
+
+/** VU meters: [sound 0..127, group 0..7] peaks since the last call (then reset). */
+JNIEXPORT void JNICALL JNI_FN(nativeMeters)(JNIEnv* env, jobject, jfloatArray out) {
+    float v[kSounds + kGroups];
+    for (int i = 0; i < kSounds; i++) v[i] = gEngine.meterSound[i].exchange(0.f, std::memory_order_relaxed);
+    for (int g = 0; g < kGroups; g++) v[kSounds + g] = gEngine.meterGroup[g].exchange(0.f, std::memory_order_relaxed);
+    env->SetFloatArrayRegion(out, 0, std::min(int(env->GetArrayLength(out)), kSounds + kGroups), v);
 }
 
 /** Performance hint: makes the session for the audio thread if needed; returns its state

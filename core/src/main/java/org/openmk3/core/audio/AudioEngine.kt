@@ -64,6 +64,7 @@ object NativeEngine {
     external fun nativeFmPatchName(bank: Int, program: Int): String
     external fun nativePolySet(slot: Int, index: Int, value: Float)
     external fun nativeCpuLoad(): FloatArray
+    external fun nativeMeters(out: FloatArray)
     external fun nativeHintPoll(): Int
     external fun nativeSetZone(slot: Int, zone: Int, data: FloatArray?, channels: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativeZoneMap(slot: Int, zone: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
@@ -173,6 +174,9 @@ class AudioEngine(private val ctx: Context) {
     val phase: Double get() = n.nativePhase()
     val meter: Float get() = n.nativeMeter()
     val bufferFrames: Int get() = n.nativeBufferFrames()
+    /** VU meters: peak levels since the last call, sounds 0..127 then groups 0..7. */
+    fun meters(out: FloatArray) = n.nativeMeters(out)
+
     private var hintState = -1
     /** Asks Android for a performance hint session for the audio thread (logged once per change). */
     fun pollHint() {
