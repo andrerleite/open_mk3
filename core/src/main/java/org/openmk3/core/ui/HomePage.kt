@@ -36,14 +36,14 @@ class HomePage(ui: Ui) : Page(ui) {
         set(v) { stepMode = v == Mode.STEP }
     @Volatile private var shift = false
     companion object {
-        private var replace = false
         @Volatile var stepMode = false
     }
     @Volatile private var erase = false
     @Volatile private var select = false
     @Volatile private var mute = false
     @Volatile private var solo = false
-    private var rec = false
+    private val rec get() = ui.rec
+    private val replace get() = ui.replace
     /** Pad LEDs flash on every trigger. SHIFT + PAD MODE toggles it (to test LED-related audio noise). */
     private var flash = true
     /** Shared with the browser, so it opens on the pad you were working on. */
@@ -95,6 +95,9 @@ class HomePage(ui: Ui) : Page(ui) {
 
     /** Pads only make sound in pad mode with no modifier held. Read from the input thread. */
     override val customPads = true
+
+    /** Plain pad hits in PAD mode are recorded (not with SHIFT, ERASE, MUTE, SOLO, DUPLICATE or in STEP). */
+    override fun recordsPads() = mode == Mode.PAD && !shift && !erase && !mute && !solo && !duplicate && !select
 
     /** MUTE / SOLO + group button mutes / solos the whole group; otherwise focuses it. */
     override fun onGroup(g: Int) {
@@ -162,21 +165,15 @@ class HomePage(ui: Ui) : Page(ui) {
         dirtySince = 0L
     }
 
-    private var engineRec = false
 
     override fun tick(now: Long): Boolean {
         var redraw = false
-        val wantRec = rec && ui.engine.playing
-        if (wantRec != engineRec) { engineRec = wantRec; ui.engine.setRecording(wantRec) }
-        if (wantRec && ui.repeatActive) changed()  // engine writes repeat hits: autosave
         if (dirtySince != 0L && now - dirtySince > 1500) save()
         if (now - powerAt > 5000) {
             power = PowerMonitor.sample(ui.ctx)
             powerAt = now
             redraw = true
         }
-        pattern.poll()
-        if (ui.engine.takeRecorded()) { pattern.pullFromEngine(); changed() }
         val st = pattern.stepOf(ui.group) + 1000 * viewPage
         if (st != lastStep) { lastStep = st; redraw = true }
         val m = (ui.engine.meter * 20).toInt()
@@ -235,14 +232,12 @@ class HomePage(ui: Ui) : Page(ui) {
     override fun lights(l: Lights) {
         val e = ui.engine
         l.set("PLAY", e.playing)
-        l.set("REC", rec)
         l.set("STOP", "RESTART", "SETTINGS", "PAGE LEFT", "PAGE RIGHT", "BROWSER", "SAMPLING")
         l.set("STEP", mode == Mode.STEP)
         l.set("PAD MODE", mode == Mode.PAD && ui.padMode == Ui.PadMode.PAD)
         l.set("KEYBOARD", mode == Mode.PAD && ui.padMode == Ui.PadMode.KEYBOARD)
         l.set("CHORDS", mode == Mode.PAD && ui.padMode == Ui.PadMode.CHORDS)
         if (ui.padParams && ui.padMode == Ui.PadMode.PAD && mode == Mode.PAD) l.set("D5", "D6", "D7", "D8")  // base key
-        l.set("ERASE", erase || (replace && (System.currentTimeMillis() / 500) % 2 == 0L))
         l.set("SELECT", select)
         l.set("MUTE", mute)
         l.set("SOLO", solo)
@@ -278,11 +273,7 @@ class HomePage(ui: Ui) : Page(ui) {
             }
             mode == Mode.PAD -> {
                 if (ui.padMode == Ui.PadMode.PAD) selected = slot
-                // NOTE REPEAT / ARP hits are recorded by the engine itself
-                if (rec && ui.engine.playing && !ui.repeatActive) {
-                    val v = ui.padVelocity(slot, pressure)
-                    for ((snd, note) in ui.notesForPad(slot)) record(snd, v, note, slot)
-                }
+                // live recording happens in Ui (on every page)
             }
             else -> { // STEP mode (pads = steps of the step grid)
                 val pos = padPos(slot)
@@ -305,35 +296,7 @@ class HomePage(ui: Ui) : Page(ui) {
         }
     }
 
-    /** Quantise a live hit to the nearest step of what the player actually heard. */
-    /** Notes being recorded per pad: sound, step and when they started (for their length). */
-    private val recHeld = Array(16) { mutableListOf<Triple<Int, Int, Double>>() }
-
-    /** Records a live hit where it was heard (off-grid; SHIFT + pad 5 quantises). */
-    private fun record(slot: Int, velocity: Float, note: Int = Pattern.ROOT, pad: Int = -1) {
-        val e = ui.engine
-        val heard = e.phase - e.outputLatencySteps()
-        if (heard < 0) return  // counting in
-        val len = pattern.length(slot / Pattern.PADS)
-        val whole = kotlin.math.floor(heard)
-        val step = ((whole.toLong() % len + len) % len).toInt()
-        val p = pattern
-        if (replace) {
-            // the first hit of this sound in this pass of the loop clears its old notes
-            val pass = kotlin.math.floor(heard / len).toLong()
-            if (replacePass[slot] != pass) {
-                replacePass[slot] = pass
-                p.clear(slot)
-                for (r in recHeld) r.removeAll { it.first == slot }
-            }
-        }
-        p.recordNote(slot, step, note, velocity, (heard - whole).toFloat(), 1f)
-        if (pad >= 0) recHeld[pad].add(Triple(slot, step, heard))
-        changed()
-    }
-
     private val stepRemove = IntArray(16) { -1 }
-    private val replacePass = HashMap<Int, Long>()
 
     override fun onPadRelease(slot: Int, hid: Int) {
         val rm = stepRemove[slot]
@@ -341,27 +304,12 @@ class HomePage(ui: Ui) : Page(ui) {
             stepRemove[slot] = -1
             if (!stepEdited) { pattern.clearStep(sd(selected), rm); changed() }
         }
-        // a recorded note lasts as long as the pad was held
-        val held = recHeld[slot]
-        if (held.isEmpty()) return
-        val e = ui.engine
-        val now = e.phase - e.outputLatencySteps()
-        for ((snd, step, start) in held) pattern.setNoteLength(snd, step, (now - start).toFloat().coerceAtLeast(0.1f))
-        held.clear()
-        changed()
     }
 
     override fun onButton(name: String?, bit: Int, down: Boolean) {
         when (name) {
             "SHIFT" -> shift = down
-            "ERASE" -> {
-                erase = down
-                if (down && shift) {
-                    replace = !replace
-                    replacePass.clear()
-                    message(if (replace) "Replace on: new takes replace a sound's notes" else "Replace off")
-                }
-            }
+            "ERASE" -> erase = down && !shift
             "SELECT" -> select = down
             "DUPLICATE" -> {
                 duplicate = down
@@ -378,14 +326,8 @@ class HomePage(ui: Ui) : Page(ui) {
         val e = ui.engine
         when (name) {
             "PLAY" -> if (e.playing) e.transportStop() else e.transportPlay()
-            "STOP" -> { e.stopPressed(); rec = false }
+            "STOP" -> e.stopPressed()
             "RESTART" -> e.transportRestart()
-            "REC" -> if (shift) {
-                // SHIFT + REC: record after a one-bar count-in
-                pattern.requestCountIn()
-                rec = true
-                if (e.playing) e.transportRestart() else e.transportPlay()
-            } else { rec = !rec; if (rec && !e.playing) e.transportPlay() }
             // SHIFT + VOLUME = velocity, SHIFT + SWING = position of the focused sound's notes
             "VOLUME" -> encMode = if (shift) (if (encMode == Enc.VELOCITY) Enc.TEMPO else Enc.VELOCITY) else if (encMode == Enc.VOLUME) Enc.TEMPO else Enc.VOLUME
             "SWING" -> encMode = if (shift) (if (encMode == Enc.POSITION) Enc.TEMPO else Enc.POSITION) else if (encMode == Enc.SWING) Enc.TEMPO else Enc.SWING

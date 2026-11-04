@@ -11,6 +11,7 @@ import org.openmk3.core.mk3.Mk3Colors
  *  D4 STEP: what one STEP pad is (1/4 … 1/64, triplets)
  *  D5 NUDGE: how far EVENTS K1 moves notes
  *  Pads choose the value of the selected grid.
+ *  K5 INPUT QUANTIZE: live recorded notes land on the step grid
  */
 class GridPage(ui: Ui, private val back: Page) : Page(ui) {
 
@@ -60,6 +61,16 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
         }
     }
 
+    private var qAcc = 0
+    override fun onKnob(knob: Int, delta: Int) {
+        if (knob != 4) return
+        qAcc += delta
+        if (kotlin.math.abs(qAcc) < 25) return
+        qAcc = 0
+        ui.inputQuant = !ui.inputQuant
+        ui.invalidate()
+    }
+
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
         val v = list().getOrNull(slot)?.second ?: return
         when (which) {
@@ -93,6 +104,9 @@ class GridPage(ui: Ui, private val back: Page) : Page(ui) {
             Which.NUDGE -> "EVENTS position moves by $name"
         }, 16f, 94f, label)
         l.drawText("Pads choose · FOLLOW: back", 16f, 116f, label)
+        l.drawText("INPUT QUANTIZE", 60f, 238f, Theme.text(13f, Theme.DIM, align = Paint.Align.CENTER))
+        l.drawText(if (ui.inputQuant) "ON" else "OFF", 60f, 260f, Theme.text(16f, if (ui.inputQuant) Theme.ACCENT else Theme.FG, bold = true, align = Paint.Align.CENTER))
+        l.drawText("(K5: recorded notes land on the STEP grid)", 130f, 258f, label)
         val w = 112f; val h = 44f
         for (i in 0 until 16) {
             val col = i % 4; val row = 3 - i / 4

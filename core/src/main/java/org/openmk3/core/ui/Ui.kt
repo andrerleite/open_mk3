@@ -62,6 +62,102 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     /** The pad being edited / loaded into (slot, 0 = bottom-left), within the focused group. */
     @Volatile var selectedSound = 0
 
+    // ---- recording (global: REC works on every page whose pads play sounds) ----
+    @Volatile var rec = false
+        private set
+    /** SHIFT + ERASE: while recording, a sound's first hit in each loop pass clears its old notes. */
+    @Volatile var replace = false
+    /** Input quantize (grid page K5): live hits land on the step grid. */
+    var inputQuant: Boolean
+        get() = ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).getBoolean("inputQuant", false)
+        set(v) { ctx.getSharedPreferences("openmk3", Context.MODE_PRIVATE).edit().putBoolean("inputQuant", v).apply() }
+    private val recHeld = Array(16) { mutableListOf<Triple<Int, Int, Double>>() }
+    private val replacePass = HashMap<Int, Long>()
+    private var engineRec = false
+    private var patDirtyAt = 0L
+    /** Group whose pattern grows bar by bar while recording (it was empty, no length chosen). */
+    private var autoGrowGroup = -1
+    // record prepare: hold REC (while not recording) to choose the new pattern's length first
+    private var recDownAt = 0L
+    @Volatile var recPrepare = false
+        private set
+    /** Record prepare length in steps (0 = AUTO: grows while recording). */
+    var prepareLen = 0
+
+    fun patternChanged() { if (patDirtyAt == 0L) patDirtyAt = SystemClock.uptimeMillis() }
+
+    fun setRec(on: Boolean, startPlay: Boolean = true) {
+        if (on == rec) return
+        rec = on
+        if (on) {
+            replacePass.clear()
+            // an empty pattern grows while recording (unless a length was chosen)
+            val g = group
+            autoGrowGroup = if (engine.pattern.groupEmpty(g) && prepareLen == 0 && engine.pattern.length(g) == 16) g else -1
+            if (startPlay && !engine.playing) engine.transportPlay()
+        } else finishRecording()
+        AppLog.i("Record ${if (on) "on" else "off"}")
+        dirty = true
+    }
+
+    /** Recording ends: a grown pattern is trimmed to its last bar with notes; note lengths close. */
+    private fun finishRecording() {
+        val g = autoGrowGroup
+        autoGrowGroup = -1
+        if (g >= 0) {
+            val p = engine.pattern
+            var last = -1
+            for (k in 0 until 16) for (st in p.stepsOf(g * 16 + k)) if (st > last) last = st
+            val bars = if (last < 0) 1 else last / 16 + 1
+            p.setLength(g, bars * 16)
+            AppLog.i("Pattern grown while recording: ${bars} bar${if (bars > 1) "s" else ""}")
+        }
+        for (h in recHeld) h.clear()
+        patternChanged()
+    }
+
+    /** Records a live hit of [sound] where it was heard (input quantize: on the step grid). */
+    fun recordHit(sound: Int, velocity: Float, note: Int, pad: Int) {
+        val e = engine
+        var heard = e.phase - e.outputLatencySteps()
+        if (heard < 0) return  // counting in
+        val p = e.pattern
+        val len = p.length(sound / 16)
+        if (inputQuant) heard = kotlin.math.round(heard / stepGrid) * stepGrid
+        val whole = kotlin.math.floor(heard)
+        val step = ((whole.toLong() % len + len) % len).toInt()
+        if (replace) {
+            val pass = kotlin.math.floor(heard / len).toLong()
+            if (replacePass[sound] != pass) {
+                replacePass[sound] = pass
+                p.clear(sound)
+                for (r in recHeld) r.removeAll { it.first == sound }
+            }
+        }
+        p.recordNote(sound, step, note, velocity, (heard - whole).toFloat(), 1f)
+        if (pad >= 0) recHeld[pad].add(Triple(sound, step, e.phase - e.outputLatencySteps()))
+        patternChanged()
+    }
+
+    /** Per frame: engine record flag, repeat-recorded notes, queued patterns, auto-grow, autosave. */
+    private fun recordTick(now: Long) {
+        val e = engine
+        val p = e.pattern
+        val want = rec && e.playing
+        if (want != engineRec) { engineRec = want; e.setRecording(want) }
+        if (want && repeatActive) patternChanged()
+        p.poll()
+        if (e.takeRecorded()) { p.pullFromEngine(); patternChanged() }
+        // auto-grow: two steps before the end, add a bar (up to 4 bars)
+        val g = autoGrowGroup
+        if (g >= 0 && want) {
+            val len = p.length(g)
+            if (len < org.openmk3.core.audio.Pattern.STEPS && p.stepOf(g) >= len - 2) p.setLength(g, len + 16)
+        }
+        if (recDownAt != 0L && !recPrepare && !rec && now - recDownAt > 600) { recPrepare = true; dirty = true }
+        if (patDirtyAt != 0L && now - patDirtyAt > 1500) { patDirtyAt = 0L; p.save(ctx); checkpoint() }
+    }
+
     // ---- multiple selection (SELECT mode): edits of the focused sound go to all selected ----
     /** Selected sounds (indices 0..127); the focused sound is always part of it. */
     private val selection = java.util.Collections.synchronizedSet(HashSet<Int>())
@@ -568,6 +664,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (lock.tick(now)) dirty = true
             engine.pattern.songTick(engine.playing)
             engine.pollHeld(selectedIndex)
+            recordTick(now)
             if (!page.customLeds) applyLights()
             if (!page.customPads) applyPadLights(now)
             else if (selectActive && page !is WizardPage) applySelectPads()
@@ -579,6 +676,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             dirty = false
             page.draw(left.canvas, right.canvas, now)
             if (repeatHeld) drawRepeatOverlay(left.canvas, right.canvas)
+            if (recPrepare) drawPrepareOverlay(left.canvas, right.canvas)
             if (selectActive && !page.customPads && page !is WizardPage) drawSelectOverlay(left.canvas, right.canvas)
             val a = left.flush(dev)
             val b = right.flush(dev)
@@ -632,9 +730,13 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             heldAsRepeat[slot] = repeat
         }
         AppLog.i("Pad ${padLabel(slot)} hit (pressure $pressure, vel ${"%.2f".format(vel)})")
+        val recNotes = if (page.playsPads) heldNotes[slot] else null
         post {
             padPressure[slot] = pressure
             padFlash[slot] = SystemClock.uptimeMillis()
+            // live recording, from every page whose pads play (NOTE REPEAT / ARP: the engine records)
+            if (rec && engine.playing && !repeatActive && recNotes != null && page.recordsPads())
+                for ((snd, note) in recNotes) recordHit(snd, vel, note, slot)
             page.onPadHit(slot, pad, vel, pressure)
             dirty = true
         }
@@ -660,7 +762,19 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             if (heldAsRepeat[slot] && arpHold) arpHeldNotes.add(snd to note)  // HOLD keeps them
             else if (heldAsRepeat[slot]) engine.repeatHold(snd, note, 0f, 1, 4) else engine.noteOff(snd, note)
         }
-        post { padPressure[slot] = 0; page.onPadRelease(slot, pad); dirty = true }
+        post {
+            padPressure[slot] = 0
+            // a recorded note lasts as long as its pad was held
+            val held = recHeld[slot]
+            if (held.isNotEmpty()) {
+                val nowPos = engine.phase - engine.outputLatencySteps()
+                for ((snd, step, start) in held) engine.pattern.setNoteLength(snd, step, (nowPos - start).toFloat().coerceAtLeast(0.1f))
+                held.clear()
+                patternChanged()
+            }
+            page.onPadRelease(slot, pad)
+            dirty = true
+        }
     }
 
     override fun onButton(bit: Int, down: Boolean) = post {
@@ -673,6 +787,54 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
             selectHeld = down
             if (down && selectPinned && !shiftHeld) selectPinned = false  // pressing SELECT again unpins
             dirty = true
+        }
+        // REC (every page): press toggles recording (starting playback); hold while not recording
+        // = record prepare (choose the new pattern's length, D2 metronome), release arms REC
+        if (name == "REC" && !page.customLeds && page !is WizardPage && page !is SamplingPage) {
+            if (down) {
+                if (shiftHeld) {  // SHIFT + REC: record after the count-in
+                    engine.pattern.requestCountIn()
+                    prepareLen = 0
+                    setRec(true, startPlay = false)
+                    if (engine.playing) engine.transportRestart() else engine.transportPlay()
+                } else if (rec) setRec(false)
+                else recDownAt = SystemClock.uptimeMillis()
+            } else if (recDownAt != 0L) {
+                recDownAt = 0L
+                if (recPrepare) {
+                    recPrepare = false
+                    if (prepareLen > 0) engine.pattern.setLength(group, prepareLen)
+                    setRec(true, startPlay = false)  // armed: PLAY (or already playing) records
+                    prepareLen = 0
+                } else { prepareLen = 0; setRec(true) }
+            }
+            dirty = true
+            return@post
+        }
+        if (recPrepare && down && name != null) {
+            when (name) {
+                "D2" -> engine.pattern.metronome = !engine.pattern.metronome
+                "D5" -> prepareLen = 16
+                "D6" -> prepareLen = 32
+                "D7" -> prepareLen = 64
+                "D8" -> prepareLen = 0
+            }
+            dirty = true
+            return@post
+        }
+        if (name == "STOP" && down) setRec(false)
+        // SHIFT + ERASE: replace mode on / off (ERASE blinks)
+        if (name == "ERASE" && down && shiftHeld && !page.customLeds) {
+            replace = !replace
+            replacePass.clear()
+            AppLog.i(if (replace) "Replace on: new takes replace a sound's notes" else "Replace off")
+            dirty = true
+            return@post
+        }
+        // SHIFT + MUTE: choke all notes (every voice stops at once; nothing changes state)
+        if (name == "MUTE" && down && shiftHeld && !page.customLeds) {
+            engine.killAll()
+            return@post
         }
         // SELECT mode: D1 pin · D5 all · D6 none · D8 multiple selection
         if (selectActive && down && !shiftHeld && !page.customLeds && page !is WizardPage &&
@@ -909,7 +1071,16 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
     }
 
     override fun onKnob(knob: Int, delta: Int, value: Int) = post {
-        if (repeatHeld) repeatKnob(knob, delta) else page.onKnob(knob, delta)
+        if (recPrepare) {
+            if (knob == 3) {  // K4 LENGTH: AUTO, 1, 2, 4 bars
+                prepAcc += delta
+                if (kotlin.math.abs(prepAcc) >= 25) {
+                    val opts = listOf(0, 16, 32, 64)
+                    prepareLen = opts[(opts.indexOf(prepareLen) + if (prepAcc > 0) 1 else -1).coerceIn(0, 3)]
+                    prepAcc = 0
+                }
+            }
+        } else if (repeatHeld) repeatKnob(knob, delta) else page.onKnob(knob, delta)
         dirty = true
     }
 
@@ -933,6 +1104,7 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
         pushRepeat()
     }
+    private var prepAcc = 0
     override fun onKnobTouch(knob: Int, touched: Boolean) = post { page.onKnobTouch(knob, touched); dirty = true }
     override fun onEncoder(delta: Int) = post { page.onEncoder(delta); dirty = true }
     override fun onTouchStrip(position: Int, counter: Int) = post {
@@ -976,6 +1148,8 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         lights.set("EVENTS", page is EventsPage)
         lights.set("VARIATION", page is VariationPage)
         lights.set("SELECT", selectActive)
+        lights.set("REC", rec || (recPrepare && (System.currentTimeMillis() / 300) % 2 == 0L))
+        lights.set("ERASE", eraseHeld || (replace && (System.currentTimeMillis() / 500) % 2 == 0L))
         lights.set("SHIFT", shiftHeld)
         lights.set("DUPLICATE", dupHeld)
         lights.set("ERASE", eraseHeld)
@@ -997,6 +1171,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
         if (selectActive) {
             lights.set("D1", selectPinned); lights.set("D5"); lights.set("D6"); lights.set("D8", selectMulti)
+        }
+        if (recPrepare) {
+            lights.set("D2", engine.pattern.metronome)
+            lights.set("D5", prepareLen == 16); lights.set("D6", prepareLen == 32); lights.set("D7", prepareLen == 64); lights.set("D8", prepareLen == 0)
         }
         if (modeHeld == "PATTERN" || modeHeld == "SCENE" || modeHeld == "VARIATION" || modeHeld == "EVENTS") lights.set("D1", modeHeld in pinned)
         lights.set("LOCK", lock.quick != null || page is LockPage)
@@ -1131,6 +1309,17 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
         }
     }
 
+    /** Record prepare (REC held): the new pattern's length and the metronome. */
+    private fun drawPrepareOverlay(l: Canvas, r: Canvas) {
+        for (c in arrayOf(l, r)) { c.drawRect(0f, 0f, 480f, 36f, ovBg); c.drawRect(0f, 200f, 480f, 272f, ovBg) }
+        l.drawText("METRO", 180f, 24f, if (engine.pattern.metronome) ovOn else ovTab)
+        listOf("1 BAR" to 16, "2 BARS" to 32, "4 BARS" to 64, "AUTO" to 0).forEachIndexed { i, (t, v) -> r.drawText(t, 60f + i * 120f, 24f, if (prepareLen == v) ovOn else ovTab) }
+        l.drawText("RECORD PREPARE · release REC to arm", 8f, 222f, ovTitle)
+        l.drawText("LENGTH", 420f, 238f, ovName)
+        l.drawText(if (prepareLen == 0) "AUTO" else "${prepareLen / 16} BAR${if (prepareLen > 16) "S" else ""}", 420f, 260f, ovVal)
+        r.drawText("AUTO: the pattern grows while you record", 8f, 222f, ovTitle)
+    }
+
     /** While NOTE REPEAT is held: pin, (arp) hold, gate reset, rate presets, knob settings. */
     private fun drawRepeatOverlay(l: Canvas, r: Canvas) {
         for (c in arrayOf(l, r)) {
@@ -1214,6 +1403,8 @@ abstract class Page(val ui: Ui) {
     open fun onGroup(g: Int) { ui.selectGroup(g) }
     /** If true, pad hits play sounds directly from the input thread. */
     open val playsPads = false
+    /** While recording, are this page's pad hits recorded? (pages using pads for something else say no) */
+    open fun recordsPads(): Boolean = playsPads
     open fun onEnter() {}
     open fun onExit() {}
     abstract fun draw(l: Canvas, r: Canvas, now: Long)

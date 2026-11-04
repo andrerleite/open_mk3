@@ -17,7 +17,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | Control | Function | Status |
 |---|---|---|
 | PLAY | Start / stop playback | ✅ |
-| REC | Toggle recording while playing (starts playback if stopped) | ✅ |
+| REC | Toggle recording (starts playback if stopped), on every page whose pads play. Hold REC while not recording: RECORD PREPARE (D5 1 bar, D6 2 bars, D7 4 bars, D8 AUTO or K4 LENGTH; D2 metronome); releasing arms REC and PLAY starts the take. AUTO: an empty 1-bar pattern grows a bar at a time while recording, and is trimmed to its last bar with notes when recording stops | ✅ |
 | SHIFT + REC (Count-in) | Record with a one-bar count-in (clicks) | ✅ |
 | STOP | Stop. Pressed again while stopped: every sound fades out (stops long samples and tails). | ✅ |
 | RESTART | Restart playback from the beginning of the loop (song mode: from section 1) | ✅ |
@@ -27,7 +27,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | TAP | Tap tempo | ✅ |
 | SHIFT + TAP (Metro) | Metronome on / off | ✅ |
 | FOLLOW | Step pages follow the playhead | ✅ |
-| SHIFT + FOLLOW (Grid) | Grids: D3 arrange (pattern length steps), D4 step (what a STEP pad is: 1/4 … 1/64, triplets), D5 nudge (EVENTS position); pads choose; FOLLOW: back | ✅ |
+| SHIFT + FOLLOW (Grid) | Grids: D3 arrange (pattern length steps), D4 step (what a STEP pad is: 1/4 … 1/64, triplets), D5 nudge (EVENTS position); pads choose; K5 INPUT QUANTIZE (live recorded notes land on the STEP grid); FOLLOW: back | ✅ |
 
 ## Pad modes (buttons above the pads)
 
@@ -56,7 +56,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | SELECT + pad | SELECT mode (hold SELECT; SELECT + D1 pins it, SELECT again unpins). A pad focuses its sound without playing it. MULTI off (D8): a pad outside the selection selects only that sound, a pad inside it only moves the focus. MULTI on: pads add sounds to the selection or take them out (the focused one stays). D5 ALL selects the group's 16 sounds, D6 NONE keeps only the focused one. Pads: focused brightest, selected bright (empty ones white), loaded dim; the right screen shows the group with the selection outlined. Every edit of the focused sound then applies to all selected sounds: sound parameters (PLUG-IN, CHANNEL volume / pan, choke and link groups), the same effect in the same slot, an effect chosen in a slot, POLY parameters. Knob-type values move by the same amount, switch-type values (reverse, loop, choke group, …) are copied. Focusing a sound outside the selection moves the selection to it | ✅ |
 | SOLO + pad | Solo a sound within its group (or a group with group buttons) | ✅ |
 | MUTE + pad | Mute a sound (or a group with group buttons); while held, audible pads are fully lit and muted ones half lit | ✅ |
-| SHIFT + MUTE (Choke) | Choke groups setup | 🟡 (choke and link groups on the PAD MODE page) |
+| SHIFT + MUTE (Choke) | Choke all notes: every sound stops at once (nothing is muted; the next notes play normally). Choke / link groups are on the PAD MODE page | ✅ |
 
 ## Groups
 

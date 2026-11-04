@@ -812,6 +812,9 @@ class Pattern {
     }
 
     fun updateSolo() {}
+    /** No notes in group [g]'s current pattern (or no pattern yet). */
+    fun groupEmpty(g: Int) = cur(g)?.isEmpty() ?: true
+
     fun isEmpty(sound: Int) = cur(sound / PADS)?.let { d -> (0 until d.length).none { d.has(sound % PADS, it) } } ?: true
     fun groupIsEmpty(g: Int) = cur(g)?.isEmpty() ?: true
 
