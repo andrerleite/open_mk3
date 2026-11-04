@@ -18,6 +18,7 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
     private companion object { var bank = 0 }
     private val lock = ui.lock
     private var erase = false
+    private var deleting = false  // D6: the next pad deletes its snapshot
     private var acc = 0
     private var message = ""
 
@@ -37,17 +38,18 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
     override fun lights(l: Lights) {
         l.set("LOCK", true)
         l.set("ERASE", erase)
-        l.set("D5"); l.set("D7", bank > 0); l.set("D8", bank < 3)
+        l.set("D5"); l.set("D6", deleting); l.set("D7", bank > 0); l.set("D8", bank < 3)
     }
 
     override fun onPadHit(pad: Int, hid: Int, velocity: Float, pressure: Int) {
         val slot = bank * 16 + pad
         val s = lock.slots[slot]
         when {
-            erase -> if (s != null) { lock.slots[slot] = null; message = "Snapshot ${slot + 1} deleted" }
+            erase || deleting -> if (s != null) { lock.slots[slot] = null; message = "Snapshot ${slot + 1} deleted" }
             s == null -> { lock.slots[slot] = lock.take(); lock.selected = slot; message = "Snapshot ${slot + 1} stored" }
             else -> { lock.selected = slot; lock.recall(s); message = "Snapshot ${slot + 1}" + if (lock.morph) " (morphing)" else "" }
         }
+        deleting = false
         AppLog.i("Lock: $message")
     }
 
@@ -57,6 +59,7 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         when (name) {
             "D5" -> if (lock.selected >= 0) { lock.slots[lock.selected] = lock.take(); message = "Snapshot ${lock.selected + 1} updated" }
             "LOCK" -> back()
+            "D6" -> { deleting = !deleting; message = if (deleting) "DELETE: press the snapshot to delete" else "" }
             "D7" -> bank = (bank - 1).coerceAtLeast(0)
             "D8" -> bank = (bank + 1).coerceAtMost(3)
         }
@@ -70,6 +73,7 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         when (knob) {
             0 -> lock.morph = d > 0
             1 -> lock.morphBars = (lock.morphBars + d).coerceIn(1, 16)
+            2 -> lock.target = d > 0
         }
     }
 
@@ -86,6 +90,7 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         l.drawColor(Theme.BG)
         r.drawColor(Theme.BG)
         r.drawText("UPDATE", 60f, 24f, dLabel)
+        r.drawText("DELETE", 180f, 24f, if (deleting) Theme.text(15f, Theme.ACCENT, bold = true, align = Paint.Align.CENTER) else dLabel)
         r.drawText("◀ BANK", 300f, 24f, dLabel)
         r.drawText("BANK ▶", 420f, 24f, dLabel)
         l.drawText("BANK ${bank + 1} / 4", 330f, 56f, label)
@@ -95,7 +100,9 @@ class LockPage(ui: Ui, private val back: Page) : Page(ui) {
         if (message.isNotEmpty()) l.drawText(message, 16f, 150f, ok)
         l.drawText("MORPH", 60f, 238f, kName)
         l.drawText(if (lock.morph) "ON" else "OFF", 60f, 260f, kValue)
-        l.drawText("TIME", 180f, 238f, kName)
+        l.drawText("MODE", 300f, 238f, kName)
+        l.drawText(if (lock.target) "TARGET" else "TRAVEL", 300f, 260f, kValue)
+        l.drawText(if (lock.target) "GRID" else "TIME", 180f, 238f, kName)
         l.drawText("${lock.morphBars} bar${if (lock.morphBars > 1) "s" else ""}", 180f, 260f, kValue)
         val w = 112f
         val h = 44f

@@ -14,8 +14,12 @@ class Lock(private val e: AudioEngine) {
     var quick: Snapshot? = null
     var selected = -1
     var morph = false
-    /** Morph time in bars. */
+    /** Morph time in bars (TRAVEL), or the grid it lands on (TARGET). */
     var morphBars = 1
+    /** TARGET: the morph ends exactly on the next downbeat of the [morphBars] grid (while playing). */
+    var target = false
+    private var startPhase = 0.0
+    private var endPhase = 0.0
 
     // a running morph
     private var from: Snapshot? = null
@@ -82,13 +86,19 @@ class Lock(private val e: AudioEngine) {
         to = s
         morphStart = android.os.SystemClock.uptimeMillis()
         morphMs = (morphBars * 4 * 60000.0 / e.bpm).toLong().coerceAtLeast(50)
+        if (target && e.playing) {
+            val grid = morphBars * 16.0
+            startPhase = e.phase
+            endPhase = (kotlin.math.floor(startPhase / grid) + 1) * grid
+        } else endPhase = 0.0
     }
 
     /** Advances a running morph; returns true while one runs. Call from the UI thread. */
     fun tick(now: Long): Boolean {
         val a = from ?: return false
         val b = to ?: return false
-        val t = ((now - morphStart).toFloat() / morphMs).coerceIn(0f, 1f)
+        val t = if (endPhase > 0.0 && e.playing) ((e.phase - startPhase) / (endPhase - startPhase)).toFloat().coerceIn(0f, 1f)
+            else ((now - morphStart).toFloat() / morphMs).coerceIn(0f, 1f)
         apply(a, b, t)
         if (t >= 1f) { from = null; to = null }
         return true
