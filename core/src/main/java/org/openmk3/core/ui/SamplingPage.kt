@@ -37,10 +37,11 @@ import kotlin.math.roundToInt
  *          D8 APPLY…: the focused sound (slices on its keys, pads switch to KEYBOARD) or the
  *          whole group (slices on pads 1–16) · D8 OK
  *
- *  EDIT / SLICE: ENCODER turn = zoom · ENCODER left / right = scroll · D4 = zero-crossing snap
+ *  D4 ZONE: the focused sound's zones (each with its own range, loop, tune, level, envelope)
+ *  EDIT / SLICE: ENCODER turn = zoom · ENCODER left / right = scroll · D5 (first page) = zero-crossing snap
  *  ENCODER push = start / stop recording · SHIFT = fine knob steps · SAMPLING = back
  */
-class SamplingPage(ui: Ui) : Page(ui) {
+class SamplingPage(ui: Ui, startTab: Int = -1) : Page(ui) {
 
     override val handlesTransport = true
 
@@ -92,7 +93,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     private val n = NativeEngine
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "sampling-io") }
 
-    private var tab = lastTab
+    private var tab = if (startTab in 0..2) Tab.values()[startTab] else lastTab
     private var state = IDLE
     private var meterIn = 0f
     private var meterPhone = 0f
@@ -766,6 +767,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
             "D1" -> tab = Tab.RECORD
             "D2" -> { tab = Tab.EDIT; if (take == null) loadFromPad(ui.selectedSound) }
             "D3" -> { tab = Tab.SLICE; if (take == null) loadFromPad(ui.selectedSound); computeSlices() }
+            "D4" -> { lastTab = tab; ui.show(ZonePage(ui)); return }
             "ENCODER PUSH" -> startStop()
             "ENCODER LEFT" -> if (tab != Tab.RECORD) wave.scroll(-1)
             "ENCODER RIGHT" -> if (tab != Tab.RECORD) wave.scroll(1)
@@ -790,9 +792,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
             Tab.EDIT -> when (name) {
                 "PAGE LEFT" -> editPage = 0
                 "PAGE RIGHT" -> editPage = 1
-                "D4" -> toggleSnap()
                 "D7" -> if (editPage == 0) previewToggle() else previewSel()
-                "D5" -> if (editPage == 1) fnIdx = (fnIdx - 1 + FNS) % FNS
+                "D5" -> if (editPage == 1) fnIdx = (fnIdx - 1 + FNS) % FNS else toggleSnap()
                 "D6" -> if (editPage == 1) fnIdx = (fnIdx + 1) % FNS
                 "D8" -> if (editPage == 0) save() else if (shift) undoFn() else applyFn()
             }
@@ -807,7 +808,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 shift && name == "D8" -> sliceBank = min(max(0, (slices.size - 1) / 16), sliceBank + 1)
                 name == "PAGE LEFT" -> slicePage = max(0, slicePage - 1)
                 name == "PAGE RIGHT" -> slicePage = min(2, slicePage + 1)
-                name == "D4" -> toggleSnap()
+                name == "D5" && slicePage == 0 -> toggleSnap()
                 name == "D8" -> { ensureSlices(force = true); if (slices.isEmpty()) message = "No slices" else applying = true }
                 slicePage == 1 -> when (name) {
                     "D5" -> {  // SPLIT: at the playhead while the sample plays, else the selected slice in half
@@ -846,6 +847,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         l.set("D1", tab == Tab.RECORD)
         l.set("D2", tab == Tab.EDIT)
         l.set("D3", tab == Tab.SLICE)
+        l.set("D4")
         when (tab) {
             Tab.RECORD -> {
                 l.set("D5", source == SRC_PHONE)
@@ -853,19 +855,18 @@ class SamplingPage(ui: Ui) : Page(ui) {
                 l.set("D8", state != IDLE)
             }
             Tab.EDIT -> {
-                l.set("D4", ui.zeroSnap)
                 l.set("PAGE LEFT", editPage == 1)
+                if (editPage == 0) l.set("D5", ui.zeroSnap)
                 l.set("PAGE RIGHT", editPage == 0)
                 if (editPage == 1) l.set("D5", "D6")
                 l.set("D7", "D8")
             }
             Tab.SLICE -> {
-                l.set("D4", ui.zeroSnap)
                 l.set("PAGE LEFT", slicePage > 0)
                 l.set("PAGE RIGHT", slicePage < 2)
                 if (applying) { l.set("D5", !applyGroup); l.set("D6", applyGroup); l.set("D7"); l.set("D8", true) }
                 else {
-                    if (slicePage == 1) l.set("D5", "D6")
+                    if (slicePage == 1) l.set("D5", "D6") else if (slicePage == 0) l.set("D5", ui.zeroSnap)
                     l.set("D7", "D8")
                 }
             }
@@ -1055,6 +1056,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
         r.drawColor(Theme.BG)
         // tabs on D1–D3
         for ((i, t) in Tab.values().withIndex()) l.drawText(t.name, 60f + i * 120f, 26f, if (t == tab) tabOn else tabText)
+        l.drawText("ZONE", 420f, 26f, tabText)
         l.drawRect(0f, 42f, 480f, 43f, sep)
         r.drawRect(0f, 42f, 480f, 43f, sep)
         l.drawRect(0f, 232f, 480f, 233f, sep)
@@ -1096,8 +1098,8 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     private fun drawEdit(l: Canvas, r: Canvas) {
-        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
         if (editPage == 1) { drawFunctions(l, r); return }
+        dButton(r, 4, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
         dButton(r, 6, "PREVIEW", "PLAY")
         dButton(r, 7, "SAVE TO", ui.padLabel())
         l.drawText("EDIT · PLAY RANGE", 16f, 72f, title)
@@ -1140,7 +1142,7 @@ class SamplingPage(ui: Ui) : Page(ui) {
     }
 
     private fun drawSlice(l: Canvas, r: Canvas) {
-        dButton(l, 3, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
+        if (slicePage == 0 && !applying) dButton(r, 4, "SNAP", if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", ui.zeroSnap)
         val g = ui.groupLetter
         val n = slices.size
         val bankTxt = if (n > 16) " · bank ${sliceBank + 1}/${(n - 1) / 16 + 1} (SHIFT+D7/D8)" else ""

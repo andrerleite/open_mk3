@@ -100,7 +100,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 | MIXER | Mixer: volume / pan of 8 channels on the knobs (groups or sounds), master on the encoder. VU meters beside each channel (green to -12 dB, yellow to 0 dB, red above, with a peak hold) and a master meter across the top of the right screen. D7 / D8: the groups' sends to RETURN A / B (post-fader); SHIFT + D7 / D8 opens that return's effects. Returns start as a reverb (A) and a delay (B), fully wet | ✅ |
 | BROWSER | Browse samples and presets, load onto the focused sound | ✅ (samples) |
 | SHIFT + BROWSER (+Plug-in) | Instrument browser: POLY factory patches by category, FM banks and patches, SYNTH models; loading switches the focused sound's source and plays a note | ✅ (full app) |
-| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice; SHIFT + SAMPLING: zones | ✅ |
+| SAMPLING | Record a sample (controller inputs or phone playback), edit, slice, zones (D4; also SHIFT + SAMPLING) | ✅ |
 | ◀ ▶ | Page through parameter pages on the screens | 🟡 (pages on the PLUG-IN page; steps through sounds on the home page) |
 | FILE (Save) | Projects: save, save as new, new, load. SHIFT + FILE quick-saves. | ✅ |
 | SETTINGS | Metronome on / level, count-in length (D8: LED check) | ✅ |
@@ -140,28 +140,33 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 ## Sampling page (SAMPLING)
 
-D1–D3 choose the tab. Hold SHIFT for fine knob steps. In EDIT and SLICE: encoder turn zooms
-the waveform around the marker you moved last, tilting the encoder left / right scrolls, D4
-toggles zero-crossing snap (start, end and slice points), and a playhead follows playback.
+D1–D4 choose the tab (RECORD, EDIT, SLICE, ZONE). Hold SHIFT for fine knob steps. In EDIT and
+SLICE: encoder turn zooms the waveform around the marker you moved last, tilting the encoder
+left / right scrolls, D5 on the first page toggles zero-crossing snap (start, end and slice
+points), and a playhead follows playback.
 
 | Tab | Controls |
 |---|---|
 | RECORD | D5 source (controller INPUT / PHONE playback) · D6 start: MANUAL, THRESHOLD (starts when the level crosses K1) or SYNC (starts exactly on the next bar the sequencer plays, compensating for the audio latency; press PLAY if stopped) · D8 or encoder push start/stop · K1 threshold · K2 max length (up to 30 s; SYNC: 1, 2, 4, 8 or 16 bars at the song tempo, or FREE until stopped) · pads choose the target pad. When recording stops the take is saved as a WAV in Recordings, loaded onto the target pad and opened in EDIT |
 | EDIT, page 1 PLAY RANGE | The new take, or the focused pad's sample (pads choose which) · K1 start · K2 end (the pad plays this range at once; the file is unchanged) · K5 trigger of the pad (one-shot / gate) · D7 preview (press again to stop; with gate, only while held) · D8 save the range as a new WAV in `Download/<app folder>/Recordings` and load it onto the focused pad · ▶ page 2 |
 | EDIT, page 2 FUNCTIONS | K1 / K2 selection start / end · K3 or D5 / D6 choose the function: TRUNCATE (keep the selection), NORMALIZE, REVERSE, FADE IN, FADE OUT (equal-power), DC FIX, SILENCE, CUT, COPY, PASTE (inserts at the selection start), DUPLICATE (repeats the selection after itself), STRETCH (K4: 25–400 % length, same pitch) · D7 preview the selection · D8 apply · SHIFT + D8 undo (4 steps). On a pad's sample every change is written to "<name> edit.wav" in Recordings and loaded on the pad; the original file is kept |
-| SLICE, page 1 SLICER | K1 mode: SPLIT (K2: 4/8/16/32 equal slices), GRID (K2: 1/4–1/32 note values at the sample's tempo), DETECT (K2 sensitivity; D4 snaps to zero crossings), MANUAL (K2 auto-snap: live slice points move to the nearest hit) · K3 tempo AUTO (from the sample's length) / MANUAL · K4 adjust: detected, half or double / the BPM · pads play the slices (selected: fully lit); more than 16: SHIFT + D7 / D8 previous / next bank · D7 preview · D8 APPLY… |
+| SLICE, page 1 SLICER | K1 mode: SPLIT (K2: 4/8/16/32 equal slices), GRID (K2: 1/4–1/32 note values at the sample's tempo), DETECT (K2 sensitivity; D5 snaps to zero crossings), MANUAL (K2 auto-snap: live slice points move to the nearest hit) · K3 tempo AUTO (from the sample's length) / MANUAL · K4 adjust: detected, half or double / the BPM · pads play the slices (selected: fully lit); more than 16: SHIFT + D7 / D8 previous / next bank · D7 preview · D8 APPLY… |
 | SLICE, page 2 EDIT | K1 slice (or press its pad) · K3 start (a joined previous slice's end moves with it) · K4 end (on its own: gaps and overlaps are allowed) · D5 split (the selected slice in half, or at the playhead while the sample plays) · D6 remove (join with the previous slice) · D7 delete all · editing switches the mode to MANUAL |
 | SLICE, live slicing | MANUAL with no slices: pad 1 flashes; press it to play the sample, then press each next flashing pad where a new slice should start |
 | SLICE, page 3 APPLY | K1 MONO (applied to a group: one voice per pad and all pads in choke group 1) · K2 PATTERN: REPLACE writes notes for the slices into the pattern so it plays the loop back at the song tempo, NONE leaves it |
 | SLICE, APPLY… | D5 to the SOUND (focused pad: the slices go on its keys as zones, each on the key its pad plays in KEYBOARD mode so pad 1 = slice 1; pads switch to KEYBOARD) · D6 to the GROUP (slices 1–16 on pads 1–16; group buttons choose the group) · pads choose the sound · D7 cancel · D8 OK. Slices are saved as WAVs in `Recordings/<name> slices` |
 
-**Zones (SHIFT + SAMPLING)**: up to 16 extra samples per sound, each played for a key range
-(transposed from its root key) and a velocity range; other notes play the pad's own sample.
-Add zones in the BROWSER: D7 adds the selected WAV to the target pad, D8 adds every WAV in the
-folder and maps them (root keys are read from file names such as `Piano C3` or `Bass_F#1`,
-60 = C3). On the ZONES page: encoder / ◀ ▶ select, K1 root, K2 / K3 lowest / highest key,
-K4 / K5 lowest / highest velocity, D5 auto-map (ranges halfway between roots), D6 delete,
-D7 delete all. Play them from KEYBOARD mode. Zones are saved with the kit and in projects.
+**ZONE tab (SAMPLING D4, or SHIFT + SAMPLING)**: up to 16 extra samples per sound, each played
+for a key range (transposed from its root key) and a velocity range; other notes play the pad's
+own sample. Add zones with D8 / the BROWSER: D7 adds the selected WAV to the target pad, D8 adds
+every WAV in the folder and maps them (root keys are read from file names such as `Piano C3` or
+`Bass_F#1`, 60 = C3); SLICE → APPLY to a sound also makes zones. Encoder: select a zone ·
+◀ ▶ pages: MAP (K1 root, K2 / K3 lowest / highest key, K4 / K5 lowest / highest velocity) ·
+PLAY RANGE (K1 start, K2 end of the zone's sample) · LOOP (K1 as the sound / off / on, K2 loop
+start, K3 loop end, K4 crossfade) · TUNE / MIX (K1 tune, K2 level, K3 pan) · ENVELOPE (K1 attack,
+K2 decay: as the sound, or the zone's own) · D1–D3 other tabs · D5 auto-map (ranges halfway
+between roots) · D6 delete · D7 delete all · D8 add. Play them from KEYBOARD mode. Zones and
+their settings are saved with the kit and in projects.
 
 ## PLUG-IN (full app)
 

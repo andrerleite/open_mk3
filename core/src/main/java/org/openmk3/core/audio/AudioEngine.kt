@@ -68,6 +68,8 @@ object NativeEngine {
     external fun nativeHintPoll(): Int
     external fun nativeSetZone(slot: Int, zone: Int, data: FloatArray?, channels: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
     external fun nativeZoneMap(slot: Int, zone: Int, root: Int, lo: Int, hi: Int, vlo: Int, vhi: Int)
+    /** start, end, tune, gain dB, pan, loop (-1 as the sound / 0 / 1), loop start, end, crossfade, attack, decay (-1 = as the sound) */
+    external fun nativeZoneParams(slot: Int, zone: Int, v: FloatArray)
     external fun nativePolyParamCount(): Int
     external fun nativePolyParamName(i: Int): String
     external fun nativePolyParamGroup(i: Int): String

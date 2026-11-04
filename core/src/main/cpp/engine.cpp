@@ -275,7 +275,10 @@ struct Voice {
     int pinst = -1;       // POLY source: instance playing this note (the voice only times it)
     int quietBlocks = 0;
     int ageBlocks = 0;
-    float zoneShift = 0.f;  // semitones: the zone's root key relative to 60
+    float zoneShift = 0.f;  // semitones: the zone's root key relative to 60 (less its tune)
+    int8_t zone = -1;       // the zone playing (its settings), -1 = the sound's own sample
+    float zGain = 1.f;      // the zone's level
+    float zPan = 0.f;       // the zone's pan
 };
 
 // Synth voices have no sample: they point here so "voice in use" checks stay uniform.
@@ -311,7 +314,13 @@ struct Held {
 };
 constexpr int kMaxHeld = 32;
 
-static void recOnBar(int delay);  // the sample recorder's SYNC start (defined after it)
+static void recOnBar(int delay);
+
+/** A zone's mapping and settings before anything is set: full sample, as the sound. */
+static void zoneDefaults(float* m) {
+    const float d[16] = {60, 0, 127, 1, 127, 0, 1, 0, 0, 0, -1, 0, 1, 0, -1, -1};
+    for (int i = 0; i < 16; i++) m[i] = d[i];
+}  // the sample recorder's SYNC start (defined after it)
 
 class Engine {
 public:
@@ -376,7 +385,10 @@ public:
     std::atomic<bool> zClear[kSounds][kZones];
     std::atomic<bool> zDirty{false};
     /** Zone mapping: root key, lowest / highest key, lowest / highest velocity (1..127). */
-    float zMap[kSounds][kZones][5];
+    // per zone: root, key lo, hi, vel lo, hi, start, end (0..1), tune (st), gain (dB), pan,
+    // loop (-1 = as the sound, 0 off, 1 on), loop start, loop end, crossfade, attack, decay (s, -1 = as the sound)
+    static constexpr int kZoneFields = 16;
+    float zMap[kSounds][kZones][kZoneFields];
 
     AAudioStream* stream = nullptr;
     int32_t deviceId = 0;
@@ -394,7 +406,7 @@ public:
         for (int i = 0; i < kSounds; i++)
             for (int z = 0; z < kZones; z++) {
                 zCur[i][z] = nullptr; zPending[i][z] = nullptr; zRetired[i][z] = nullptr; zClear[i][z] = false;
-                zMap[i][z][0] = 60; zMap[i][z][1] = 0; zMap[i][z][2] = 127; zMap[i][z][3] = 1; zMap[i][z][4] = 127;
+                zoneDefaults(zMap[i][z]);
             }
         for (int c = 0; c < kChains; c++)
             for (int k = 0; k < kFxSlots; k++) { fxPending[c][k] = nullptr; fxRetired[c][k] = nullptr; }
@@ -884,6 +896,7 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     const SampleData* s = isSynth ? &gSynthDummy : current[slot].load(std::memory_order_acquire);
     // zones: the first zone whose key and velocity ranges hold this note replaces the sample
     float zoneShift = 0.f;
+    int zoneIdx = -1;
     if (!isSynth && slot < kSounds) {
         const int nn = std::clamp(note, 0, 127), vv = std::clamp(int(vel * 127.f + 0.5f), 1, 127);
         for (int z = 0; z < kZones; z++) {
@@ -892,7 +905,8 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
             const float* m = zMap[slot][z];
             if (nn < m[1] || nn > m[2] || vv < m[3] || vv > m[4]) continue;
             s = zs;
-            zoneShift = m[0] - float(kRootNote);
+            zoneShift = m[0] - float(kRootNote) - m[7];
+            zoneIdx = z;
             break;
         }
     }
@@ -978,8 +992,9 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
             o->sample = nullptr;
         }
     }
-    float a = std::clamp(P[P_START], 0.f, 1.f);
-    float b = std::clamp(P[P_END], 0.f, 1.f);
+    // a zone plays its own range (the sound's START / END belong to the sound's sample)
+    float a = zoneIdx >= 0 ? std::clamp(zMap[slot][zoneIdx][5], 0.f, 1.f) : std::clamp(P[P_START], 0.f, 1.f);
+    float b = zoneIdx >= 0 ? std::clamp(zMap[slot][zoneIdx][6], 0.f, 1.f) : std::clamp(P[P_END], 0.f, 1.f);
     // velocity and mod wheel move the start point (positive: later; negative velocity amount:
     // later when played softer), within the play range
     {
@@ -1012,6 +1027,13 @@ void Engine::startVoice(int slot, float vel, int offset, int gate, bool fromSeq,
     v.envLevel = (v.envType == 0 || P[P_ATT] <= 0.0005f) ? 1.f : 0.f;
     v.rnd = uint32_t(voiceAge * 2654435761u) | 1u;
     v.zoneShift = zoneShift;
+    v.zone = int8_t(zoneIdx);
+    if (zoneIdx >= 0) {
+        const float* zm = zMap[slot][zoneIdx];
+        v.zGain = std::pow(10.f, std::clamp(zm[8], -60.f, 12.f) / 20.f);
+        v.zPan = std::clamp(zm[9], -1.f, 1.f);
+        if (zm[14] >= 0.f) v.envLevel = (v.envType == 0 || zm[14] <= 0.0005f) ? 1.f : 0.f;
+    }
     // LFO start phase; LOCK follows the song position instead (set while rendering)
     v.lfoPhase = std::clamp(P[P_LPHASE], -0.5f, 0.5f);
     if (v.lfoPhase < 0.f) v.lfoPhase += 1.f;
@@ -1706,10 +1728,11 @@ void Engine::renderChunk(float* out, int32_t frames) {
         }
         // ---- parameters read every callback (knob moves affect playing notes) ----
         const float volDb = std::clamp(P[P_VOL], -60.f, 12.f);
-        const float vol = volDb <= -59.9f ? 0.f : std::pow(10.f, volDb / 20.f);
+        const float vol = (volDb <= -59.9f ? 0.f : std::pow(10.f, volDb / 20.f)) * v.zGain;
+        const float* zm = (v.zone >= 0 && v.slot < kSounds) ? zMap[v.slot][v.zone] : nullptr;
         const float vv = std::clamp(P[P_VVOL], 0.f, 1.f);
         const float velGain = 1.f - vv + vv * v.vel * v.vel;
-        const float basePan = std::clamp(P[P_PAN], -1.f, 1.f);
+        const float basePan = std::clamp(P[P_PAN] + v.zPan, -1.f, 1.f);
         const float tune = std::clamp(P[P_TUNE], -48.f, 48.f);
         int ftype = int(P[P_FTYPE] + 0.5f);
         if (ftype < 1 || ftype > 5) ftype = 0;
@@ -1747,10 +1770,10 @@ void Engine::renderChunk(float* out, int32_t frames) {
         // legato glide: semitones left fall to 0 over the GLIDE time
         const float glideCoef = std::exp(-float(kBlock) / (std::max(0.002f, P[P_GLIDE]) * kSr * 0.25f));
         // envelopes (frames / per-sample coefficients)
-        const int attF = int(std::max(0.f, P[P_ATT]) * kSr);
+        const int attF = int(std::max(0.f, zm && zm[14] >= 0.f ? zm[14] : P[P_ATT]) * kSr);
         const int holdF = int(std::max(0.f, P[P_HOLD]) * kSr);
         // velocity -> decay: up to 4x longer / shorter
-        const float decSec = std::max(0.005f, P[P_DEC]) * std::exp2(std::clamp(P[P_VDEC], -1.f, 1.f) * 4.f * (v.vel - 0.5f));
+        const float decSec = std::max(0.005f, zm && zm[15] >= 0.f ? zm[15] : P[P_DEC]) * std::exp2(std::clamp(P[P_VDEC], -1.f, 1.f) * 4.f * (v.vel - 0.5f));
         const float decCoef = float(std::exp(std::log(1e-4) / (decSec * kSr)));
         const float sus = std::clamp(P[P_SUS], 0.f, 1.f);
         const float relCoef = float(std::exp(std::log(1e-4) / (std::max(0.005f, P[P_REL]) * kSr)));
@@ -1808,12 +1831,14 @@ void Engine::renderChunk(float* out, int32_t frames) {
         const bool gateMode = P[P_GATE] > 0.5f || (synth && !fmv);  // FM voices release with their own envelopes
         // loop (only with a releasing envelope, so a looped sound always ends)
         const int n = s->frames;
-        const bool loop = !synth && v.envType != 0 && P[P_LOOP] > 0.5f;
+        // a zone with its own loop setting uses its loop points, else the sound's
+        const bool zLoop = zm && zm[10] >= 0.f;
+        const bool loop = !synth && v.envType != 0 && (zLoop ? zm[10] > 0.5f : P[P_LOOP] > 0.5f);
         int ls = 0, le = 0, xf = 0;
         if (loop) {
-            ls = std::clamp(int(std::clamp(P[P_LSTART], 0.f, 1.f) * n), v.startF, v.endF - 1);
-            le = std::clamp(int(std::clamp(P[P_LEND], 0.f, 1.f) * n), ls + 1, v.endF);
-            xf = std::min(int(std::clamp(P[P_XFADE], 0.f, 1.f) * float(le - ls)), ls);  // needs audio before ls
+            ls = std::clamp(int(std::clamp(zLoop ? zm[11] : P[P_LSTART], 0.f, 1.f) * n), v.startF, v.endF - 1);
+            le = std::clamp(int(std::clamp(zLoop ? zm[12] : P[P_LEND], 0.f, 1.f) * n), ls + 1, v.endF);
+            xf = std::min(int(std::clamp(zLoop ? zm[13] : P[P_XFADE], 0.f, 1.f) * float(le - ls)), ls);  // needs audio before ls
         }
         const double loopLen = double(le - ls);
 
@@ -2710,6 +2735,7 @@ JNIEXPORT void JNICALL JNI_FN(nativeSetZone)(JNIEnv* env, jobject, jint slot, ji
     m[2] = float(std::clamp(int(hi), 0, 127));
     m[3] = float(std::clamp(int(vlo), 1, 127));
     m[4] = float(std::clamp(int(vhi), 1, 127));
+    { float t[16]; zoneDefaults(t); for (int i = 5; i < Engine::kZoneFields; i++) m[i] = t[i]; }
     if (!data) {
         delete gEngine.zPending[slot][zone].exchange(nullptr, std::memory_order_acq_rel);
         gEngine.zClear[slot][zone].store(true, std::memory_order_release);
@@ -2735,6 +2761,16 @@ JNIEXPORT void JNICALL JNI_FN(nativeZoneMap)(JNIEnv*, jobject, jint slot, jint z
     m[2] = float(std::clamp(int(hi), 0, 127));
     m[3] = float(std::clamp(int(vlo), 1, 127));
     m[4] = float(std::clamp(int(vhi), 1, 127));
+}
+
+/** A zone's settings: start, end, tune, gain dB, pan, loop (-1/0/1), loop start, end, crossfade, attack, decay. */
+JNIEXPORT void JNICALL JNI_FN(nativeZoneParams)(JNIEnv* env, jobject, jint slot, jint zone, jfloatArray v) {
+    if (slot < 0 || slot >= kSounds || zone < 0 || zone >= Engine::kZones || !v) return;
+    float t[11];
+    const jsize n = std::min<jsize>(11, env->GetArrayLength(v));
+    env->GetFloatArrayRegion(v, 0, n, t);
+    float* m = gEngine.zMap[slot][zone];
+    for (int i = 0; i < n; i++) m[5 + i] = t[i];
 }
 
 JNIEXPORT void JNICALL JNI_FN(nativeSetPatternBuffer)(JNIEnv* env, jobject, jobject buf) {
