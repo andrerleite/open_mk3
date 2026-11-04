@@ -297,8 +297,8 @@ class SoundPage(ui: Ui) : Page(ui) {
             }
             "D6", "ENCODER PUSH" -> if (page.view != View.SCOPE) scopeOn = !scopeOn
             "D7" -> if (showScope()) scopeFree = !scopeFree
-            "D8" -> if (showScope() && level == 2) { scopePost = !scopePost; updateScopeTap() }
-                    else if (isSource && !isSynth && pageIdx == 1) { ui.zeroSnap = !ui.zeroSnap; rawMarker.clear() }
+            "D8" -> if (zeroXPage()) toggleZeroX()
+                    else if (showScope() && level == 2) { scopePost = !scopePost; updateScopeTap() }
             "ENCODER LEFT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(-1)
             "ENCODER RIGHT" -> if (page.view == View.WAVE && !scopeOn) waveView.scroll(1)
             "PAGE LEFT" -> pageIdx = (pageIdx + n - 1) % n
@@ -324,8 +324,8 @@ class SoundPage(ui: Ui) : Page(ui) {
         if (!isSource && fx.type(chain, fxSlot) != FxParams.NONE) l.set("D5", fx.bypassed(chain, fxSlot))
         if (page.view != View.SCOPE) l.set("D6", scopeOn)
         if (showScope()) l.set("D7", !scopeFree)
-        if (showScope() && level == 2) l.set("D8", scopePost)
-        else if (isSource && !isSynth && pageIdx == 1) l.set("D8", ui.zeroSnap)
+        if (zeroXPage()) l.set("D8", ui.zeroSnap)
+        else if (showScope() && level == 2) l.set("D8", scopePost)
     }
 
     override fun onPadHit(slot: Int, hid: Int, velocity: Float, pressure: Int) {
@@ -413,6 +413,25 @@ class SoundPage(ui: Ui) : Page(ui) {
         ui.engine.setFx(chain, fxSlot, t)
         if (level == 2) ui.mirrorFxType(fxSlot)
         org.openmk3.core.AppLog.i("FX ${levelName()} slot ${slotIdx + 1}: ${FxParams.TYPES[t]}")
+    }
+
+    /** The sampler's SAMPLE page: D8 is zero-crossing snap for start, end, loop start and loop end. */
+    private fun zeroXPage() = isSource && !isSynth && pageIdx == 1
+
+    /** Turning snap on moves the four markers of the selected sounds to their nearest zero crossings. */
+    private fun toggleZeroX() {
+        ui.zeroSnap = !ui.zeroSnap
+        rawMarker.clear()
+        if (ui.zeroSnap) for (s in ui.selectedSounds()) {
+            val smp = ui.engine.kit[s]
+            if (smp.frames < 2) continue
+            for (p in listOf(START, END, LSTART, LEND)) {
+                val f = (params[s, p] * smp.frames).toInt()
+                if (f in 1 until smp.frames) params[s, p] = WaveView.zeroCross(smp.data, smp.channels, f).toFloat() / smp.frames
+                params.nudge(s, p, 0, false)
+            }
+        }
+        changed()
     }
 
     private fun soundKnob(p: Int, delta: Int) {
@@ -679,10 +698,10 @@ class SoundPage(ui: Ui) : Page(ui) {
             r.drawText("BYPASS", 60f, 24f, if (fx.bypassed(chain, fxSlot)) tabOn else tab)
         if (page.view != View.SCOPE) r.drawText("SCOPE", 180f, 24f, if (scopeOn) tabOn else tab)
         if (showScope()) r.drawText(if (scopeFree) "FREE" else "LOCKED", 300f, 24f, if (scopeFree) tab else tabOn)
-        if (showScope() && level == 2)
+        if (zeroXPage())
+            r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X OFF", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
+        else if (showScope() && level == 2)
             r.drawText(if (scopePost) "OUTPUT" else "SOURCE", 420f, 24f, if (scopePost) tabOn else tab)
-        else if (isSource && !isSynth && pageIdx == 1)
-            r.drawText(if (ui.zeroSnap) "ZERO-X ON" else "ZERO-X", 420f, 24f, if (ui.zeroSnap) tabOn else tab)
         l.drawRect(0f, 34f, 480f, 35f, sep)
         r.drawRect(0f, 34f, 480f, 35f, sep)
         // page strip (◀ ▶)

@@ -12,6 +12,8 @@ import android.graphics.Paint
  */
 class SettingsPage(ui: Ui) : Page(ui) {
 
+    override val playsPads = true
+
     private val p = ui.engine.pattern
     private val e = ui.engine
     private var acc = 0

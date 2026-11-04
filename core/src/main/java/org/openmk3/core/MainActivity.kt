@@ -109,10 +109,12 @@ class MainActivity : Activity() {
         super.onResume()
         AppLog.addListener(logListener)
         refreshLog()
+        handler.post(statusTick)
     }
 
     override fun onPause() {
         AppLog.removeListener(logListener)
+        handler.removeCallbacks(statusTick)
         super.onPause()
     }
 
@@ -159,83 +161,180 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---- the screen: status at a glance, the few actions still needed, logs on request ----
+
+    private val bg = android.graphics.Color.rgb(14, 14, 18)
+    private val card = android.graphics.Color.rgb(28, 28, 36)
+    private val accent = android.graphics.Color.rgb(255, 140, 40)
+    private val fg = android.graphics.Color.rgb(236, 236, 240)
+    private val dim = android.graphics.Color.rgb(140, 140, 152)
+    private val ok = android.graphics.Color.rgb(90, 200, 120)
+    private val off = android.graphics.Color.rgb(90, 90, 100)
+
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
+    private lateinit var statusSub: TextView
+    private lateinit var infoRows: LinearLayout
+    private lateinit var connectBtn: TextView
+    private lateinit var captureBtn: TextView
+    private lateinit var logBox: View
+    private lateinit var advanced: View
+    private var dp = 1f
+
+    private fun rounded(color: Int, radius: Float, stroke: Int = 0) = android.graphics.drawable.GradientDrawable().apply {
+        setColor(color); cornerRadius = radius * dp
+        if (stroke != 0) setStroke((1 * dp).toInt(), stroke)
+    }
+
+    private fun text(size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        textSize = size; setTextColor(color)
+        if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+
+    /** A pill-shaped button: filled (main action) or outlined. */
+    private fun pill(label: String, filled: Boolean, onClick: () -> Unit) = text(15f, if (filled) bg else fg, bold = true).apply {
+        text = label
+        gravity = android.view.Gravity.CENTER
+        setPadding((18 * dp).toInt(), (14 * dp).toInt(), (18 * dp).toInt(), (14 * dp).toInt())
+        background = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(android.graphics.Color.argb(60, 255, 255, 255)),
+            rounded(if (filled) accent else card, 28f, if (filled) 0 else android.graphics.Color.rgb(60, 60, 72)), null)
+        isClickable = true
+        setOnClickListener { onClick() }
+    }
+
     private fun buildUi() {
-        val dp = resources.displayMetrics.density
-        val root = LinearLayout(this).apply {
+        dp = resources.displayMetrics.density
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        val pad = (20 * dp).toInt()
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding((8 * dp).toInt(), (8 * dp).toInt(), (8 * dp).toInt(), (8 * dp).toInt())
-            fitsSystemWindows = true
+            setPadding(pad, pad, pad, pad)
         }
-        root.addView(TextView(this).apply {
-            textSize = 20f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            text = "${Edition.title}  v${Edition.version}"
-        })
-        root.addView(TextView(this).apply {
-            textSize = 13f
-            text = "Plug in the MK3: everything else happens on the MK3. The controls are built in " +
-                "(no setup needed); the Setup buttons below only re-learn them if something is off."
-        })
-        fun btn(label: String, onClick: () -> Unit) = Button(this).apply {
-            text = label; isAllCaps = false; textSize = 12f
-            setOnClickListener { onClick() }
-        }
-        fun row(vararg views: View) {
-            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            for (v in views) r.addView(v, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            root.addView(r, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        }
-        fun wizard(mode: String) = Mk3Service.command(this, Mk3Service.ACTION_WIZARD, mode)
+        val lp = { top: Int -> LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = (top * dp).toInt() } }
 
-        row(btn("Connect") { connect() }, btn("Stop") { Mk3Service.command(this, Mk3Service.ACTION_STOP) },
-            btn("Home") { Mk3Service.command(this, Mk3Service.ACTION_HOME) })
-        row(btn("Setup: all") { wizard("ALL") }, btn("Setup: pads") { wizard("PADS") },
-            btn("Setup: buttons") { wizard("BUTTONS") }, btn("Setup: encoder") { wizard("ENCODER") })
-        row(btn("Setup: button lights") { wizard("BUTTON_LEDS") }, btn("Setup: pad lights") { wizard("PAD_LEDS") },
-            btn("LED palette") { Mk3Service.command(this, Mk3Service.ACTION_PALETTE) })
-        row(btn("Power") { AppLog.i(PowerMonitor.sample(this).line()) }, btn("Save log") { exportLog(false) },
-            btn("Share log") { exportLog(true) })
-        row(btn("Copy log") {
-            val t = AppLog.tail(3000)
-            getSystemService(ClipboardManager::class.java)!!.setPrimaryClip(ClipData.newPlainText("log", t))
-            Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
-        }, btn("Clear view") { AppLog.clearView() })
-        val audioBtn = btn("") {}
-        fun label() = "Audio path: " + if (Mk3Service.directAudioEnabled(this)) "direct USB" else "Android (AAudio)"
-        audioBtn.text = label()
-        audioBtn.setOnClickListener {
-            Mk3Service.setDirectAudio(this, !Mk3Service.directAudioEnabled(this))
-            audioBtn.text = label()
-            AppLog.i("${label()} (takes effect on the next connect: tap Stop, then Connect)")
+        // header
+        col.addView(text(28f, fg, bold = true).apply { text = Edition.title })
+        col.addView(text(13f, dim).apply { text = "v${Edition.version} · the controller is the instrument" })
+
+        // status card
+        val status = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(card, 18f)
+            setPadding(pad, pad, pad, pad)
         }
-        val queueBtn = btn("") {}
-        fun qLabel() = "USB buffer: ${Mk3Service.usbQueueMs(this)} ms"
-        queueBtn.text = qLabel()
-        queueBtn.setOnClickListener {
-            val c = Mk3Service.QUEUE_CHOICES
-            val next = c[(c.indexOf(Mk3Service.usbQueueMs(this)) + 1).mod(c.size)]
-            Mk3Service.setUsbQueueMs(this, next)
-            queueBtn.text = qLabel()
-            AppLog.i("${qLabel()} (takes effect on the next connect: tap Stop, then Connect)")
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        statusDot = View(this).apply { background = rounded(off, 6f) }
+        head.addView(statusDot, LinearLayout.LayoutParams((12 * dp).toInt(), (12 * dp).toInt()).apply { rightMargin = (12 * dp).toInt() })
+        statusText = text(20f, fg, bold = true)
+        head.addView(statusText)
+        status.addView(head)
+        statusSub = text(13f, dim)
+        status.addView(statusSub, lp(6))
+        infoRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        status.addView(infoRows, lp(12))
+        col.addView(status, lp(24))
+
+        // actions
+        connectBtn = pill("Connect MK3", true) {
+            if (Mk3Service.instance?.ui != null) Mk3Service.command(this, Mk3Service.ACTION_STOP) else connect()
+            handler.postDelayed({ refreshStatus() }, 600)
         }
-        row(audioBtn, queueBtn)
-        row(btn("Allow phone audio (sampling)") {
-            if (Mk3Service.instance?.ui == null) {
-                AppLog.i("Phone capture: connect the MK3 first")
-            } else if (Mk3Service.instance?.phoneCaptureActive == true) {
-                AppLog.i("Phone capture: already on")
-            } else {
+        col.addView(connectBtn, lp(20))
+        captureBtn = pill("Allow phone audio for sampling", false) {
+            if (Mk3Service.instance?.ui != null && Mk3Service.instance?.phoneCaptureActive != true)
                 handleIntent(Intent(Mk3Service.ACTION_REQUEST_CAPTURE))
-            }
-        })
+        }
+        col.addView(captureBtn, lp(12))
 
-        logView = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 10f; setTextIsSelectable(true) }
-        logScroll = ScrollView(this).apply { addView(logView) }
-        root.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        setContentView(root)
+        // logs and advanced, folded away
+        val links = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun link(label: String, onClick: () -> Unit) = text(14f, accent, bold = true).apply {
+            text = label; setPadding(0, (8 * dp).toInt(), (24 * dp).toInt(), (8 * dp).toInt()); setOnClickListener { onClick() }
+        }
+        links.addView(link("Share log") { exportLog(true) })
+        links.addView(link("Advanced") { advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE })
+        links.addView(link("Show log") {
+            logBox.visibility = if (logBox.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (logBox.visibility == View.VISIBLE) refreshLog()
+        })
+        col.addView(links, lp(28))
+
+        val adv = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(card, 18f)
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+        }
+        adv.addView(text(13f, dim).apply { text = "The controls are built in. Re-learn them only if a button or pad acts as another one." })
+        adv.addView(pill("Re-learn controls (on the MK3)", false) { Mk3Service.command(this, Mk3Service.ACTION_WIZARD, "ALL") }, lp(12))
+        val driver = pill("", false) {}
+        fun dLabel() = "Audio driver: " + if (Mk3Service.directAudioEnabled(this)) "direct USB (recommended)" else "Android"
+        driver.text = dLabel()
+        driver.setOnClickListener {
+            Mk3Service.setDirectAudio(this, !Mk3Service.directAudioEnabled(this))
+            driver.text = dLabel()
+            AppLog.i("${dLabel()}: takes effect on the next connect")
+        }
+        adv.addView(driver, lp(10))
+        advanced = adv
+        col.addView(adv, lp(8))
+
+        logView = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 10f; setTextColor(dim); setTextIsSelectable(true) }
+        logScroll = ScrollView(this).apply {
+            addView(logView)
+            background = rounded(android.graphics.Color.rgb(8, 8, 10), 14f)
+            setPadding((12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt())
+            visibility = View.GONE
+        }
+        logBox = logScroll
+        col.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, (360 * dp).toInt()).apply { topMargin = (8 * dp).toInt() })
+
+        val outer = ScrollView(this).apply {
+            setBackgroundColor(bg)
+            fitsSystemWindows = true
+            isFillViewport = true
+            addView(col)
+        }
+        setContentView(outer)
+        refreshStatus()
+    }
+
+    private val statusTick = object : Runnable {
+        override fun run() { refreshStatus(); handler.postDelayed(this, 1000) }
+    }
+
+    /** Fills the status card from the running session (or the hint to plug in). */
+    private fun refreshStatus() {
+        val svc = Mk3Service.instance
+        val ui = svc?.ui
+        val on = ui != null
+        statusDot.background = rounded(if (on) ok else off, 6f)
+        statusText.text = if (on) "MK3 connected" else "MK3 not connected"
+        statusSub.text = if (on) "Turn the phone screen off: everything happens on the controller."
+            else "Plug in the MK3 (with power). It connects by itself; if not, tap Connect."
+        infoRows.removeAllViews()
+        if (ui != null) {
+            val e = ui.engine
+            fun row(k: String, v: String, vColor: Int = fg) {
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, (5 * dp).toInt(), 0, (5 * dp).toInt()) }
+                r.addView(text(14f, dim).apply { text = k }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                r.addView(text(14f, vColor, bold = true).apply { text = v })
+                infoRows.addView(r)
+            }
+            row("Output", if (e.outputPhone) "Phone" else "MK3")
+            row("Tempo", "%.1f BPM".format(e.bpm))
+            row("Transport", if (e.playing) "Playing" else "Stopped", if (e.playing) ok else fg)
+            row("Audio", if (e.direct) "Direct USB" else "Android")
+            row("Phone audio sampling", if (svc.phoneCaptureActive) "Allowed" else "Not allowed", if (svc.phoneCaptureActive) ok else dim)
+        }
+        connectBtn.text = if (on) "Disconnect" else "Connect MK3"
+        captureBtn.visibility = if (on && svc?.phoneCaptureActive != true) View.VISIBLE else View.GONE
     }
 
     private fun refreshLog() {
+        if (logBox.visibility != View.VISIBLE) return
         logView.text = AppLog.tail(400)
         handler.post { logScroll.fullScroll(View.FOCUS_DOWN) }
     }

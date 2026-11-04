@@ -33,7 +33,7 @@ Status: ✅ done · 🟡 partial / temporary behaviour · ⬜ planned
 
 | Control | Function | Status |
 |---|---|---|
-| PAD MODE | Pads play the group's 16 sounds. Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound); press again: hide them | ✅ |
+| PAD MODE | Pads play the group's 16 sounds. From any other page it goes to the pad screen (SHIFT + PAD MODE / KEYBOARD / CHORDS switch the pads without leaving the page). Press: settings on the screens (D5–D8 base key, K1 choke group and K2 link group of the focused sound); press again: hide them | ✅ |
 | KEYBOARD | Pads play the focused sound as notes. Press: switch and show the settings; press again: hide them (pads stay); SHIFT + KEYBOARD: switch without settings. PAD MODE returns to sounds. | ✅ |
 | CHORDS | Pads play chords of the focused sound: built from the scale (harmonizer) or from a chord set | ✅ |
 | STEP | Pads become the 16 steps of the focused sound | ✅ |
@@ -178,7 +178,7 @@ their settings are saved with the kit and in projects.
 | D6 or encoder push | Oscilloscope over the other views (the selected sound, group or master) |
 | ◀ ▶ | Parameter pages of the selected slot |
 | Knobs | Parameters. SHIFT: fine steps. SHIFT + touching a knob: default. On an effect slot, K1 on the first page chooses the effect. |
-| D8 | Zero-crossing snap (sampler SAMPLE page) |
+| D8 | Sampler SAMPLE page: ZERO-X snap for start, end, loop start and loop end (turning it on also moves the current markers to the nearest zero crossings) |
 | Encoder / tilt | Zoom / scroll the waveform (sampler VOICE and SAMPLE pages) |
 | Pads | Focus and play a sound |
 

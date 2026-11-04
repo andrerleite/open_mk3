@@ -550,6 +550,17 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
 
     fun showHome() = show(org.openmk3.core.Edition.homePage(this))
 
+    /**
+     * PAD MODE / KEYBOARD / CHORDS from another page go to the pad screen (as on the hardware),
+     * so the mode is shown and the pads play; SHIFT + the button switches without leaving.
+     */
+    private fun leaveForPadMode(): Boolean {
+        if (shiftHeld || page is HomePage || page is WizardPage || page.customPads) return false
+        HomePage.stepMode = false
+        showHome()
+        return true
+    }
+
     private fun frame() {
         try {
             val now = SystemClock.uptimeMillis()
@@ -861,9 +872,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                 // button switches without showing them.
                 "KEYBOARD", "CHORDS" -> {
                     val m = if (name == "KEYBOARD") PadMode.KEYBOARD else PadMode.CHORDS
-                    padParams = if (shiftHeld) false else if (padMode == m) !padParams else true
+                    padParams = if (shiftHeld) false else if (padMode == m && page is HomePage) !padParams else true
                     setPadMode(m)
                     pushRepeat()
+                    if (leaveForPadMode()) return@post
                 }
                 // STEP from any page: the sequencer with the pads as steps
                 "STEP" -> if (page !is HomePage) {
@@ -872,9 +884,10 @@ class Ui(val ctx: Context, val dev: Mk3Device, val engine: AudioEngine) : Mk3Lis
                     return@post
                 }
                 "PAD MODE" -> {
-                    padParams = if (shiftHeld) false else if (padMode == PadMode.PAD) !padParams else true
+                    padParams = if (shiftHeld) false else if (padMode == PadMode.PAD && page is HomePage) !padParams else true
                     setPadMode(PadMode.PAD)
                     pushRepeat()
+                    if (leaveForPadMode()) return@post
                 }
             }
             if (name == "FIXED VEL" && !page.handlesFixedVel) {
